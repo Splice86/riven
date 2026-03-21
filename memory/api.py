@@ -23,6 +23,8 @@ class SearchRequest(BaseModel):
     """Request to search memories."""
     query: str
     limit: int = 5
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 @app.on_event("startup")
@@ -75,11 +77,17 @@ async def get_memory(memory_id: int) -> dict:
 
 
 @app.get("/memories")
-async def get_memories(limit: int = 50) -> dict:
-    """Get recent memories.
+async def get_memories(
+    limit: int = 50,
+    start_date: str | None = None,
+    end_date: str | None = None
+) -> dict:
+    """Get recent memories with optional date filtering.
     
     Args:
         limit: Maximum number of memories to return
+        start_date: Filter memories created on or after this date (ISO format)
+        end_date: Filter memories created on or before this date (ISO format)
         
     Returns:
         List of recent memories
@@ -87,16 +95,23 @@ async def get_memories(limit: int = 50) -> dict:
     if not db:
         raise HTTPException(status_code=500, detail="Database not initialized")
     
-    return {"memories": db.get_recent(limit)}
+    return {"memories": db.search_dated(limit=limit, start_date=start_date, end_date=end_date)}
 
 
 @app.get("/memories/search/keyword/{keyword}")
-async def search_by_keyword(keyword: str, limit: int = 10) -> dict:
-    """Search memories by keyword.
+async def search_by_keyword(
+    keyword: str,
+    limit: int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None
+) -> dict:
+    """Search memories by keyword with optional date filtering.
     
     Args:
         keyword: Keyword to search for
         limit: Maximum number of results
+        start_date: Filter memories created on or after this date (ISO format)
+        end_date: Filter memories created on or before this date (ISO format)
         
     Returns:
         List of matching memories
@@ -104,12 +119,17 @@ async def search_by_keyword(keyword: str, limit: int = 10) -> dict:
     if not db:
         raise HTTPException(status_code=500, detail="Database not initialized")
     
-    return {"memories": db.search_by_keyword(keyword, limit)}
+    return {"memories": db.search_dated(keywords=keyword, limit=limit, start_date=start_date, end_date=end_date)}
 
 
 @app.get("/memories/search/similar-keywords/{keyword}")
-async def search_similar_keywords(keyword: str, limit: int = 10) -> dict:
-    """Search memories by similar keywords.
+async def search_similar_keywords(
+    keyword: str,
+    limit: int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None
+) -> dict:
+    """Search memories by similar keywords with optional date filtering.
     
     Finds keywords similar to the given keyword and returns memories
     containing those keywords.
@@ -117,6 +137,8 @@ async def search_similar_keywords(keyword: str, limit: int = 10) -> dict:
     Args:
         keyword: Keyword to search for similar matches
         limit: Maximum number of results
+        start_date: Filter memories created on or after this date (ISO format)
+        end_date: Filter memories created on or before this date (ISO format)
         
     Returns:
         List of matching memories with similarity scores
@@ -124,15 +146,30 @@ async def search_similar_keywords(keyword: str, limit: int = 10) -> dict:
     if not db:
         raise HTTPException(status_code=500, detail="Database not initialized")
     
-    return {"memories": db.search_similar_keywords(keyword, limit)}
+    # First get similar keyword results
+    memories = db.search_similar_keywords(keyword, limit)
+    
+    # Filter by date if needed
+    if start_date or end_date:
+        filtered = []
+        for mem in memories:
+            created = mem["created_at"]
+            if start_date and created < start_date:
+                continue
+            if end_date and created > end_date:
+                continue
+            filtered.append(mem)
+        memories = filtered
+    
+    return {"memories": memories}
 
 
 @app.post("/memories/search/similar")
 async def search_similar(request: SearchRequest) -> dict:
-    """Search memories by semantic similarity.
+    """Search memories by semantic similarity with optional date filtering.
     
     Args:
-        request: Query and limit
+        request: Query, limit, and optional date range
         
     Returns:
         List of similar memories with scores
@@ -140,7 +177,21 @@ async def search_similar(request: SearchRequest) -> dict:
     if not db:
         raise HTTPException(status_code=500, detail="Database not initialized")
     
-    return {"memories": db.search_similar(request.query, request.limit)}
+    memories = db.search_similar(request.query, request.limit)
+    
+    # Filter by date if needed
+    if request.start_date or request.end_date:
+        filtered = []
+        for mem in memories:
+            created = mem["created_at"]
+            if request.start_date and created < request.start_date:
+                continue
+            if request.end_date and created > request.end_date:
+                continue
+            filtered.append(mem)
+        memories = filtered
+    
+    return {"memories": memories}
 
 
 @app.delete("/memories/{memory_id}")

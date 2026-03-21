@@ -341,12 +341,81 @@ class MemoryDB:
         Returns:
             List of recent memories
         """
+        return self.search_dated(limit=limit)
+    
+    def search_dated(
+        self,
+        keywords: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 50
+    ) -> list[dict]:
+        """Search memories with optional keyword and date filtering.
+        
+        Args:
+            keywords: Single keyword or list of keywords to search for
+            start_date: Filter memories created on or after this date (ISO format)
+            end_date: Filter memories created on or before this date (ISO format)
+            limit: Maximum number of results
+            
+        Returns:
+            List of matching memories
+        """
+        # Normalize keywords
+        keyword_list = []
+        if keywords:
+            if isinstance(keywords, str):
+                keyword_list = [keywords.lower().strip()]
+            else:
+                keyword_list = [k.lower().strip() for k in keywords if k]
+        
+        # Validate dates
+        if start_date:
+            try:
+                datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            except ValueError:
+                raise ValueError(f"Invalid start_date: {start_date}")
+        
+        if end_date:
+            try:
+                datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            except ValueError:
+                raise ValueError(f"Invalid end_date: {end_date}")
+        
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM memories ORDER BY created_at DESC LIMIT ?",
-                (limit,)
-            ).fetchall()
+            
+            # Build query
+            select_parts = ["SELECT DISTINCT m.*"]
+            from_parts = ["FROM memories m"]
+            where_parts = []
+            params = []
+            
+            # Keyword join
+            if keyword_list:
+                from_parts.append("JOIN memory_keywords mk ON mk.memory_id = m.id")
+                from_parts.append("JOIN keywords k ON k.id = mk.keyword_id")
+                placeholders = ",".join("?" for _ in keyword_list)
+                where_parts.append(f"k.name IN ({placeholders})")
+                params.extend(keyword_list)
+            
+            # Date filters
+            if start_date:
+                where_parts.append("m.created_at >= ?")
+                params.append(start_date)
+            
+            if end_date:
+                where_parts.append("m.created_at <= ?")
+                params.append(end_date)
+            
+            # Build and execute
+            query = " ".join(select_parts + from_parts)
+            if where_parts:
+                query += " WHERE " + " AND ".join(where_parts)
+            query += " ORDER BY m.created_at DESC LIMIT ?"
+            params.append(limit)
+            
+            rows = conn.execute(query, params).fetchall()
             
             results = []
             for row in rows:
