@@ -37,11 +37,12 @@ class MemoryDB:
                 )
             """)
             
-            # Keywords table
+            # Keywords table (with embeddings for similarity search)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS keywords (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL,
+                    embedding BLOB,
                     created_at TEXT NOT NULL
                 )
             """)
@@ -88,21 +89,36 @@ class MemoryDB:
             )
             memory_id = cursor.lastrowid
             
-            # Add keywords
+            # Add keywords (with embeddings)
             if keywords:
                 for kw in keywords:
                     normalized = kw.lower().strip()
                     if not normalized:
                         continue
                     
-                    conn.execute(
-                        "INSERT OR IGNORE INTO keywords (name, created_at) VALUES (?, ?)",
-                        (normalized, now)
-                    )
-                    
+                    # Check if keyword exists
                     kw_row = conn.execute(
-                        "SELECT id FROM keywords WHERE name = ?", (normalized,)
+                        "SELECT id, embedding FROM keywords WHERE name = ?", (normalized,)
                     ).fetchone()
+                    
+                    if kw_row:
+                        # If exists but no embedding, generate one
+                        if kw_row[1] is None:
+                            kw_embedding = self.embedding.get(normalized)
+                            conn.execute(
+                                "UPDATE keywords SET embedding = ? WHERE id = ?",
+                                (kw_embedding.tobytes(), kw_row[0])
+                            )
+                    else:
+                        # Insert new keyword with embedding
+                        kw_embedding = self.embedding.get(normalized)
+                        conn.execute(
+                            "INSERT INTO keywords (name, embedding, created_at) VALUES (?, ?, ?)",
+                            (normalized, kw_embedding.tobytes(), now)
+                        )
+                        kw_row = conn.execute(
+                            "SELECT id FROM keywords WHERE name = ?", (normalized,)
+                        ).fetchone()
                     
                     if kw_row:
                         conn.execute(
@@ -229,6 +245,92 @@ class MemoryDB:
             
             results.sort(key=lambda x: x["similarity"], reverse=True)
             return results[:limit]
+    
+    def search_similar_keywords(self, keyword: str, limit: int = 10) -> list[dict]:
+        """Search memories by similar keywords.
+        
+        Finds keywords similar to the given keyword using embeddings,
+        then returns memories containing those keywords.
+        
+        Args:
+            keyword: Keyword to search for similar matches
+            limit: Maximum number of results
+            
+        Returns:
+            List of memories with similarity scores based on keyword match
+        """
+        normalized = keyword.lower().strip()
+        query_embedding = self.embedding.get(normalized)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            # Get all keywords with embeddings
+            kw_rows = conn.execute(
+                "SELECT * FROM keywords WHERE embedding IS NOT NULL"
+            ).fetchall()
+            
+            # Find similar keywords
+            similar_keywords = []
+            for kw_row in kw_rows:
+                stored = np.frombuffer(kw_row["embedding"], dtype=np.float32)
+                similarity = self._cosine_similarity(query_embedding, stored)
+                similar_keywords.append({
+                    "id": kw_row["id"],
+                    "name": kw_row["name"],
+                    "similarity": float(similarity)
+                })
+            
+            similar_keywords.sort(key=lambda x: x["similarity"], reverse=True)
+            
+            # Get keyword IDs to search for
+            keyword_ids = [k["id"] for k in similar_keywords[:limit]]
+            
+            if not keyword_ids:
+                return []
+            
+            # Get memories with those keywords
+            placeholders = ",".join("?" for _ in keyword_ids)
+            memory_rows = conn.execute(
+                f"""SELECT DISTINCT m.* FROM memories m
+                   JOIN memory_keywords mk ON mk.memory_id = m.id
+                   WHERE mk.keyword_id IN ({placeholders})
+                   ORDER BY m.created_at DESC
+                   LIMIT ?""",
+                (*keyword_ids, limit)
+            ).fetchall()
+            
+            results = []
+            for row in memory_rows:
+                # Get keywords for this memory
+                keywords = conn.execute(
+                    """SELECT k.name FROM keywords k
+                       JOIN memory_keywords mk ON mk.keyword_id = k.id
+                       WHERE mk.memory_id = ?""",
+                    (row["id"],)
+                ).fetchall()
+                
+                # Calculate best keyword similarity for this memory
+                mem_kw_ids = conn.execute(
+                    "SELECT keyword_id FROM memory_keywords WHERE memory_id = ?",
+                    (row["id"],)
+                ).fetchall()
+                mem_kw_ids = [m[0] for m in mem_kw_ids]
+                best_sim = max(
+                    (k["similarity"] for k in similar_keywords if k["id"] in mem_kw_ids),
+                    default=0.0
+                )
+                
+                results.append({
+                    "id": row["id"],
+                    "content": row["content"],
+                    "role": row["role"],
+                    "keywords": [k["name"] for k in keywords],
+                    "created_at": row["created_at"],
+                    "similarity": best_sim
+                })
+            
+            return results
     
     def get_recent(self, limit: int = 50) -> list[dict]:
         """Get recent memories.

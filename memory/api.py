@@ -107,6 +107,26 @@ async def search_by_keyword(keyword: str, limit: int = 10) -> dict:
     return {"memories": db.search_by_keyword(keyword, limit)}
 
 
+@app.get("/memories/search/similar-keywords/{keyword}")
+async def search_similar_keywords(keyword: str, limit: int = 10) -> dict:
+    """Search memories by similar keywords.
+    
+    Finds keywords similar to the given keyword and returns memories
+    containing those keywords.
+    
+    Args:
+        keyword: Keyword to search for similar matches
+        limit: Maximum number of results
+        
+    Returns:
+        List of matching memories with similarity scores
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    
+    return {"memories": db.search_similar_keywords(keyword, limit)}
+
+
 @app.post("/memories/search/similar")
 async def search_similar(request: SearchRequest) -> dict:
     """Search memories by semantic similarity.
@@ -158,4 +178,4 @@ async def get_stats() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="192.168.1.11", port=8030)
+    uvicorn.run(app, host="0.0.0.0", port=8030)
