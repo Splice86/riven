@@ -15,11 +15,31 @@ class EmbeddingModel:
     def __init__(
         self,
         model_path: str = DEFAULT_MODEL,
-        cache_db: str = DEFAULT_CACHE_DB
+        cache_db: str = DEFAULT_CACHE_DB,
+        device: str | None = None
     ):
         self.model_path = model_path
         self.cache_db = cache_db
-        self.model = SentenceTransformer(model_path, device="cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Determine device: explicit > auto-cuda > auto-cpu
+        if device is not None:
+            self.device = device
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
+        
+        # Try to load model, fall back to CPU if CUDA fails (OOM)
+        try:
+            self.model = SentenceTransformer(model_path, device=self.device)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                print(f"Warning: CUDA failed ({e}), falling back to CPU")
+                self.device = "cpu"
+                self.model = SentenceTransformer(model_path, device="cpu")
+            else:
+                raise
+        
         self._init_cache()
     
     def _init_cache(self):
