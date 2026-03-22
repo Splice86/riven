@@ -628,46 +628,29 @@ class SearchParser:
     def _build_if_then_else_query(self, node: SearchNode) -> tuple[str, list]:
         """Build SQL for IF-THEN-ELSE node.
         
-        Evaluates the condition at query time to determine which branch to use.
-        For now, we evaluate the condition first and return that branch's query.
+        Uses a simpler approach: evaluate the condition first, then choose the branch
+        based on whether any memories match the condition.
         """
-        # Build the condition SQL to check if it matches
-        # If condition matches, use THEN branch; otherwise use ELSE branch
-        # We'll evaluate the condition first to see if we have any matches
-        
-        # Actually, for a simple approach, let's just build a CASE WHEN structure
-        # But since we need to evaluate different sub-queries, let's do this in two steps:
-        # 1. First check if condition matches (using a subquery)
-        # 2. If matches, use then_branch; else use else_branch
-        
-        # For simplicity, we'll check the condition and pick one branch
-        # This requires knowing if there are memories matching the condition
-        # 
-        # Alternative: Use UNION with the condition as a filter
-        # SELECT ... WHERE (condition AND then_branch) OR (NOT condition AND else_branch)
-        
         if node.condition and node.then_branch and node.else_branch:
             # Build condition query
             cond_sql, cond_params = self.build_query(node.condition)
             
-            # Build then branch
-            then_sql, then_params = self.build_query(node.then_branch)
+            # Check if condition has any matches in the database
+            check_sql = f"SELECT COUNT(*) as cnt FROM memories m WHERE {cond_sql}"
+            try:
+                import sqlite3
+                with sqlite3.connect(self.searcher.db_path) as conn:
+                    cursor = conn.execute(check_sql, cond_params)
+                    count = cursor.fetchone()[0]
+            except:
+                count = 0  # Default to else branch if check fails
             
-            # Build else branch
-            else_sql, else_params = self.build_query(node.else_branch)
-            
-            # Combine: (condition AND then_branch) OR (NOT condition AND else_branch)
-            # Using: (then_branch) OR (else_branch) but with condition as a filter
-            
-            # Actually, let's do: (condition AND then_branch) OR (NOT condition AND else_branch)
-            sql = f"""(
-                ({cond_sql} AND {then_sql})
-                OR
-                (NOT ({cond_sql}) AND {else_sql})
-            )"""
-            params = cond_params + then_params + cond_params + else_params
-            
-            return (sql, params)
+            if count > 0:
+                # Condition matches, use then branch
+                return self.build_query(node.then_branch)
+            else:
+                # Condition doesn't match, use else branch
+                return self.build_query(node.else_branch)
         elif node.then_branch:
             # Only then branch
             return self.build_query(node.then_branch)
@@ -777,18 +760,25 @@ class SearchParser:
                     # This is complex - we'd need to first get IDs, then query links
                     # For now, let's do a simpler approach: just match all and let caller handle
                     # Actually, let's do it in two steps in the searcher
+                    # Fix: inner query should check m_inner.id (the target), not m.id (the source)
+                    # Also need to adjust the inner_sql params
+                    # The inner_sql references 'm.id' but we need it to reference 'm_inner.id'
+                    # We can fix this by replacing 'm.id' in inner_sql with 'm_inner.id'
+                    adjusted_inner_sql = inner_sql.replace('m.id', 'm_inner.id')
                     sql = f"""EXISTS (
                         SELECT 1 FROM memory_links ml
                         JOIN memories m_inner ON ml.target_id = m_inner.id
                         WHERE ml.source_id = m.id
                         AND ml.link_type = ?
-                        AND ({inner_sql})
+                        AND ({adjusted_inner_sql})
                     )"""
                     params = [link_type] + inner_params
                 else:
                     # Direct target ID
                     try:
                         target_id = int(target)
+                        # Find memories that are the SOURCE of links TO target_id
+                        # i.e., find summaries that point TO memory target_id
                         sql = " EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id = m.id AND ml.target_id = ? AND ml.link_type = ?)"
                         params = [target_id, link_type]
                     except ValueError:
