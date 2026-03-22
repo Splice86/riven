@@ -18,17 +18,17 @@ def setup():
         os.remove(TEST_DB)
     
     from database import init_db
-    init_db(TEST_DB, enable_vector=True)
+    init_db(TEST_DB)
     print("✓ Database setup complete with vector support")
 
 
 def add_test_data():
     """Add test memories with embeddings."""
     from database import MemoryDB
-    from memory_vector import MemoryVector
+    from embedding import EmbeddingModel
     
     # Initialize vector model
-    vector = MemoryVector()
+    vector = EmbeddingModel()
     db = MemoryDB(TEST_DB, embedding_model=vector)
     now = datetime.now(timezone.utc)
     
@@ -67,9 +67,9 @@ def add_test_data():
 def test_vector_similarity():
     """Test vector-based similarity search."""
     from database import MemoryDB
-    from memory_vector import MemoryVector
+    from embedding import EmbeddingModel
     
-    vector = MemoryVector()
+    vector = EmbeddingModel()
     db = MemoryDB(TEST_DB, embedding_model=vector)
     ids = add_test_data()
     
@@ -148,9 +148,9 @@ def test_vector_similarity():
 def test_semantic_search():
     """Test semantic search with natural language queries."""
     from database import MemoryDB
-    from memory_vector import MemoryVector
+    from embedding import EmbeddingModel
     
-    vector = MemoryVector()
+    vector = EmbeddingModel()
     db = MemoryDB(TEST_DB, embedding_model=vector)
     
     print("\n" + "=" * 60)
@@ -177,9 +177,9 @@ def test_semantic_search():
 def test_mixed_search():
     """Test combining vector search with other filters."""
     from database import MemoryDB
-    from memory_vector import MemoryVector
+    from embedding import EmbeddingModel
     
-    vector = MemoryVector()
+    vector = EmbeddingModel()
     db = MemoryDB(TEST_DB, embedding_model=vector)
     
     print("\n" + "=" * 60)
