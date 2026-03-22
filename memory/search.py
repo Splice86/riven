@@ -18,11 +18,13 @@ from enum import Enum
 #   q:<text>   - query (semantic text search against memory content)
 #   d:<date>    - date filter
 #   p:<key=value> - property filter
+#   l:<link_type:target> - link traversal (find memories linked to target)
 #
 # Operators:
 #   AND - both conditions must match
 #   OR  - either condition must match
 #   NOT - negate condition
+#   IF <cond> THEN <true_expr> ELSE <false_expr> - conditional search
 #
 # Grouping:
 #   ( ) - parentheses for grouping
@@ -40,6 +42,17 @@ from enum import Enum
 #   Append @threshold to s: or q: queries (e.g., "s:python@0.8")
 #   Default threshold is 0.5. Higher = stricter, Lower = looser.
 #
+# Link traversal:
+#   l:summary_of:123           - find memories summarizing memory 123
+#   l:related_to:456           - find related memories
+#   l:summary_of:(k:python)   - find summaries of memories with keyword python
+#   l:summary_of:(k:python OR k:java) - multiple inner conditions
+#
+# Conditional search (IF-THEN-ELSE):
+#   IF d:last 3 days THEN k:python ELSE k:python AND p:is_summary=true
+#   - If memory is from last 3 days: match keyword python
+#   - Else: must have keyword python AND be a summary
+#
 # Examples:
 #   "k:python"                           - keyword = python
 #   "k:python AND k:coding"            - both keywords
@@ -54,6 +67,9 @@ from enum import Enum
 #   "d:last 30 days"                  - last 30 days
 #   "d:2025-01-01 to 2025-01-31"      - date range
 #   "(k:python OR s:javascript) AND NOT k:deprecated"
+#   "l:summary_of:123"                 - find summaries of memory 123
+#   "l:summary_of:(k:python)"        - find summaries of python memories
+#   "IF d:last 3 days THEN k:python ELSE k:python AND p:is_summary=true"
 #
 # =============================================================================
 
@@ -65,6 +81,7 @@ class SearchType(Enum):
     QUERY = "q"        # Text query (semantic)
     DATE = "d"           # Date filter
     PROPERTY = "p"       # Property filter
+    LINK = "l"           # Link traversal (e.g., l:summary_of:123)
 
 
 class Operator(Enum):
@@ -72,6 +89,7 @@ class Operator(Enum):
     AND = "AND"
     OR = "OR"
     NOT = "NOT"
+    IF = "IF"  # IF condition THEN true_expr ELSE false_expr
 
 
 @dataclass
@@ -90,8 +108,9 @@ class SearchNode:
     # - "condition": A single condition (search_type + value)
     # - "binary": AND/OR operation with left and right children
     # - "unary": NOT operation with child
+    # - "if_then_else": IF condition THEN true_expr ELSE false_expr
     
-    node_type: str  # "condition", "binary", "unary"
+    node_type: str  # "condition", "binary", "unary", "if_then_else"
     operator: Optional[Operator] = None  # For binary/unary nodes
     search_type: Optional[SearchType] = None  # For condition nodes
     value: Optional[str] = None  # For condition nodes
@@ -100,6 +119,10 @@ class SearchNode:
     left: Optional["SearchNode"] = None  # For binary nodes
     right: Optional["SearchNode"] = None  # For binary nodes
     child: Optional["SearchNode"] = None  # For unary nodes
+    # For IF-THEN-ELSE
+    condition: Optional["SearchNode"] = None  # The IF condition
+    then_branch: Optional["SearchNode"] = None  # THEN branch
+    else_branch: Optional["SearchNode"] = None  # ELSE branch
 
 
 class SearchParser:
@@ -152,7 +175,7 @@ class SearchParser:
                 i += 1
                 continue
             
-            # Check for operators (AND, OR, NOT) - must have whitespace before
+            # Check for operators (AND, OR, NOT, IF, THEN, ELSE) - must have whitespace before
             # (or be at start) and either whitespace after or end of query
             if query[i:i+3].upper() == 'AND':
                 if (i == 0 or query[i-1].isspace()) and (i + 3 >= len(query) or query[i+3].isspace()):
@@ -172,8 +195,27 @@ class SearchParser:
                     i += 3
                     continue
             
-            # Check for prefix (k, s, q, d, p)
-            if query[i] in 'ksqdpKSQDP':
+            # Check for IF, THEN, ELSE
+            if query[i:i+2].upper() == 'IF':
+                if (i == 0 or query[i-1].isspace()) and (i + 2 >= len(query) or query[i+2].isspace()):
+                    tokens.append(('OPERATOR', 'IF'))
+                    i += 2
+                    continue
+            
+            if query[i:i+4].upper() == 'THEN':
+                if (i == 0 or query[i-1].isspace()) and (i + 4 >= len(query) or query[i+4].isspace()):
+                    tokens.append(('OPERATOR', 'THEN'))
+                    i += 4
+                    continue
+            
+            if query[i:i+4].upper() == 'ELSE':
+                if (i == 0 or query[i-1].isspace()) and (i + 4 >= len(query) or query[i+4].isspace()):
+                    tokens.append(('OPERATOR', 'ELSE'))
+                    i += 4
+                    continue
+            
+            # Check for prefix (k, s, q, d, p, l)
+            if query[i] in 'ksqdplKSQDPL':
                 prefix = query[i].lower()
                 tokens.append(('PREFIX', prefix))
                 i += 1
@@ -184,25 +226,49 @@ class SearchParser:
                     i += 1
                 
                 # Get the value (everything until next operator, paren, or end)
+                # Track parenthesis depth to handle nested queries like "l:summary_of:(k:python OR k:java)"
                 value_start = i
+                paren_depth = 0
                 while i < len(query):
-                    # Stop at closing paren
+                    # Track opening parens inside the value
+                    if query[i] == '(':
+                        paren_depth += 1
+                    
+                    # Stop at closing paren only if we're not nested
                     if query[i] == ')':
-                        break
-                    # Stop at space followed by operator or paren
-                    if query[i].isspace():
+                        if paren_depth > 0:
+                            paren_depth -= 1
+                        else:
+                            # This is the matching close paren for the prefix value
+                            break
+                    
+                    # Stop at space followed by operator or paren - but only if not nested
+                    if query[i].isspace() and paren_depth == 0:
                         # Check if next non-space is operator or paren
                         j = i + 1
                         while j < len(query) and query[j].isspace():
                             j += 1
-                        if j < len(query) and (query[j] in '()' or query[j:j+3].upper() in ('AND', 'NOT') or query[j:j+2].upper() == 'OR'):
+                        if j < len(query) and (query[j] in '()' or query[j:j+3].upper() in ('AND', 'NOT', 'IF', 'THEN', 'ELSE') or query[j:j+2].upper() == 'OR'):
                             break
-                    # Check for operators - only if preceded by whitespace
-                    if i > 0 and query[i-1].isspace():
+                        # Also check for THEN/ELSE specifically
+                        if j + 4 <= len(query) and query[j:j+4].upper() in ('THEN', 'ELSE'):
+                            break
+                    
+                    # Check for operators - only if preceded by whitespace and not nested
+                    if i > 0 and query[i-1].isspace() and paren_depth == 0:
                         if i + 2 <= len(query) and query[i:i+2].upper() == 'OR':
                             break
-                        if i + 3 <= len(query) and query[i:i+3].upper() in ('AND', 'NOT'):
+                        if i + 3 <= len(query) and query[i:i+3].upper() in ('AND', 'NOT', 'IF'):
                             break
+                        if i + 4 <= len(query) and query[i:i+4].upper() in ('THEN', 'ELSE'):
+                            break
+                    
+                    # Also check for keywords like THEN/ELSE that might appear mid-word
+                    # (e.g., after a number in dates)
+                    if i > 0 and query[i-1].isdigit() and i + 4 <= len(query):
+                        if query[i:i+4].upper() == 'THEN' or query[i:i+4].upper() == 'ELSE':
+                            break
+                    
                     i += 1
                 
                 value = query[value_start:i].strip()
@@ -231,9 +297,13 @@ class SearchParser:
         
         Grammar:
             expression  -> term (AND term | OR term)*
-            term         -> NOT term | PRIMARY
+            term         -> NOT term | IF expression THEN expression ELSE expression | PRIMARY
             PRIMARY      -> condition | LPAREN expression RPAREN
-            condition    -> (NOT)? (k|s|q|d|p):value
+            condition    -> (NOT)? (k|s|q|d|p|l):value
+        
+        IF-THEN-ELSE:
+            IF <condition> THEN <true_expression> ELSE <false_expression>
+            Example: IF d:last 3 days THEN k:python ELSE k:python AND p:is_summary=true
         
         Returns:
             Root AST node
@@ -264,7 +334,7 @@ class SearchParser:
         return left
     
     def parse_term(self) -> SearchNode:
-        """Parse term -> NOT term | PRIMARY"""
+        """Parse term -> NOT term | IF expression THEN expression ELSE expression | PRIMARY"""
         if self.pos >= len(self.tokens):
             return None
         
@@ -279,7 +349,57 @@ class SearchParser:
                 child=child
             )
         
+        if token_type == 'OPERATOR' and token_val == 'IF':
+            return self.parse_if_then_else()
+        
         return self.parse_primary()
+    
+    def parse_if_then_else(self) -> SearchNode:
+        """Parse IF condition THEN true_expr ELSE false_expr
+        
+        Returns:
+            SearchNode with node_type='if_then_else'
+        """
+        # Consume IF
+        self.pos += 1
+        
+        # Parse condition (the IF part)
+        condition = self.parse_expression()
+        
+        # Expect THEN
+        if self.pos < len(self.tokens) and self.tokens[self.pos][1] == 'THEN':
+            self.pos += 1
+        else:
+            return SearchNode(
+                node_type='if_then_else',
+                condition=condition,
+                then_branch=None,
+                else_branch=None
+            )
+        
+        # Parse THEN branch (true expression)
+        then_branch = self.parse_expression()
+        
+        # Expect ELSE
+        if self.pos < len(self.tokens) and self.tokens[self.pos][1] == 'ELSE':
+            self.pos += 1
+        else:
+            return SearchNode(
+                node_type='if_then_else',
+                condition=condition,
+                then_branch=then_branch,
+                else_branch=None
+            )
+        
+        # Parse ELSE branch (false expression)
+        else_branch = self.parse_expression()
+        
+        return SearchNode(
+            node_type='if_then_else',
+            condition=condition,
+            then_branch=then_branch,
+            else_branch=else_branch
+        )
     
     def parse_primary(self) -> SearchNode:
         """Parse PRIMARY -> condition | LPAREN expression RPAREN"""
@@ -351,6 +471,7 @@ class SearchParser:
             'q': SearchType.QUERY,
             'd': SearchType.DATE,
             'p': SearchType.PROPERTY,
+            'l': SearchType.LINK,
         }
         
         search_type = type_map.get(prefix, SearchType.QUERY)
@@ -499,7 +620,62 @@ class SearchParser:
         if node.node_type == 'unary':
             return self._build_unary_query(node)
         
+        if node.node_type == 'if_then_else':
+            return self._build_if_then_else_query(node)
+        
         return ("1=1", [])
+    
+    def _build_if_then_else_query(self, node: SearchNode) -> tuple[str, list]:
+        """Build SQL for IF-THEN-ELSE node.
+        
+        Evaluates the condition at query time to determine which branch to use.
+        For now, we evaluate the condition first and return that branch's query.
+        """
+        # Build the condition SQL to check if it matches
+        # If condition matches, use THEN branch; otherwise use ELSE branch
+        # We'll evaluate the condition first to see if we have any matches
+        
+        # Actually, for a simple approach, let's just build a CASE WHEN structure
+        # But since we need to evaluate different sub-queries, let's do this in two steps:
+        # 1. First check if condition matches (using a subquery)
+        # 2. If matches, use then_branch; else use else_branch
+        
+        # For simplicity, we'll check the condition and pick one branch
+        # This requires knowing if there are memories matching the condition
+        # 
+        # Alternative: Use UNION with the condition as a filter
+        # SELECT ... WHERE (condition AND then_branch) OR (NOT condition AND else_branch)
+        
+        if node.condition and node.then_branch and node.else_branch:
+            # Build condition query
+            cond_sql, cond_params = self.build_query(node.condition)
+            
+            # Build then branch
+            then_sql, then_params = self.build_query(node.then_branch)
+            
+            # Build else branch
+            else_sql, else_params = self.build_query(node.else_branch)
+            
+            # Combine: (condition AND then_branch) OR (NOT condition AND else_branch)
+            # Using: (then_branch) OR (else_branch) but with condition as a filter
+            
+            # Actually, let's do: (condition AND then_branch) OR (NOT condition AND else_branch)
+            sql = f"""(
+                ({cond_sql} AND {then_sql})
+                OR
+                (NOT ({cond_sql}) AND {else_sql})
+            )"""
+            params = cond_params + then_params + cond_params + else_params
+            
+            return (sql, params)
+        elif node.then_branch:
+            # Only then branch
+            return self.build_query(node.then_branch)
+        elif node.else_branch:
+            # Only else branch
+            return self.build_query(node.else_branch)
+        else:
+            return ("1=1", [])
     
     def _build_condition_query(self, node: SearchNode) -> tuple[str, list]:
         """Build SQL for a single condition."""
@@ -580,6 +756,49 @@ class SearchParser:
             else:
                 sql = " 1=1"
                 params = []
+        
+        elif search_type == SearchType.LINK:
+            # Link traversal - format: link_type:target_id or link_type:(query)
+            # Examples: l:summary_of:123, l:related_to:(k:python)
+            if ':' in value:
+                link_type, target = value.split(':', 1)
+                
+                # Check if target is a sub-query in parentheses
+                if target.startswith('(') and target.endswith(')'):
+                    # Sub-query: find memories matching the query, then find links to those
+                    inner_query = target[1:-1]  # Remove parens
+                    # Execute inner query to get memory IDs
+                    inner_parser = SearchParser(inner_query, searcher=self.searcher)
+                    inner_parser.tokenize()
+                    inner_ast = inner_parser.parse()
+                    inner_sql, inner_params = inner_parser.build_query(inner_ast)
+                    
+                    # Find memories that link to any of the inner results
+                    # This is complex - we'd need to first get IDs, then query links
+                    # For now, let's do a simpler approach: just match all and let caller handle
+                    # Actually, let's do it in two steps in the searcher
+                    sql = f"""EXISTS (
+                        SELECT 1 FROM memory_links ml
+                        JOIN memories m_inner ON ml.target_id = m_inner.id
+                        WHERE ml.source_id = m.id
+                        AND ml.link_type = ?
+                        AND ({inner_sql})
+                    )"""
+                    params = [link_type] + inner_params
+                else:
+                    # Direct target ID
+                    try:
+                        target_id = int(target)
+                        sql = " EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id = m.id AND ml.target_id = ? AND ml.link_type = ?)"
+                        params = [target_id, link_type]
+                    except ValueError:
+                        # Invalid target, just check link_type
+                        sql = " EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id = m.id AND ml.link_type = ?)"
+                        params = [link_type]
+            else:
+                # Just link_type, no target - match any with this link_type
+                sql = " EXISTS (SELECT 1 FROM memory_links ml WHERE ml.source_id = m.id AND ml.link_type = ?)"
+                params = [value]
         else:
             sql = " 1=1"
             params = []
