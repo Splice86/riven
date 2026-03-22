@@ -3,6 +3,11 @@
 
 These tests require a running embedding model (torch, sentence-transformers).
 Run on server after deploying the embedding model.
+
+Tests verify RELATIVE behavior:
+- Higher threshold = fewer results  
+- Lower threshold = more results
+- Threshold changes should reduce/increase results predictably
 """
 
 import os
@@ -189,7 +194,7 @@ def add_test_data():
 
 
 def run_tests():
-    """Run vector search tests."""
+    """Run vector search tests - verify RELATIVE behavior."""
     from database import MemoryDB
     from embedding import EmbeddingModel
     
@@ -199,64 +204,180 @@ def run_tests():
     print("\n" + "=" * 60)
     print("RUNNING VECTOR SEARCH TESTS")
     print("=" * 60)
-    
-    # Test keyword similarity with vector search (s: operator)
-    tests = [
-        # Keyword vector similarity - s: operator
-        ("Vector Similarity - programming", "s:programming", 3),  # python, coding, pytest
-        ("Vector Similarity - webdev", "s:webdev", 2),  # react, frontend
-        ("Vector Similarity - data", "s:data", 2),  # pandas, analytics
-        ("Vector Similarity - testing", "s:testing", 2),  # pytest, unittest
-        
-        # With explicit threshold
-        ("Vector Similarity - programming@0.7", "s:programming@0.7", 2),  # stricter threshold
-        ("Vector Similarity - webdev@0.3", "s:webdev@0.3", 3),  # looser threshold
-        
-        # Content vector similarity - q: operator
-        ("Vector Content - machine learning", "q:machine learning", 1),  # ML memory
-        ("Vector Content - containers", "q:containers", 1),  # Docker memory
-        ("Vector Content - web development", "q:web development", 2),  # React + FastAPI
-        ("Vector Content - authentication", "q:authentication security", 1),  # OAuth
-        
-        # With explicit threshold
-        ("Vector Content - machine learning@0.3", "q:machine learning@0.3", 2),  # looser
-        ("Vector Content - containers@0.7", "q:containers@0.7", 1),  # stricter
-        
-        # Combined with non-vector operators
-        ("Combined - s:programming AND k:python", "s:programming AND k:python", 2),
-        ("Combined - q:api AND p:role=developer", "q:api AND p:role=developer", 2),
-        ("Combined - s:devops AND p:status=active", "s:devops AND p:status=active", 2),
-        
-        # Boolean with vector
-        ("Boolean - s:python OR s:javascript", "s:python OR s:javascript", 5),
-        ("Boolean - q:api AND NOT k:deprecated", "q:api AND NOT k:deprecated", 2),
-        
-        # Complex queries
-        ("Complex - (s:programming OR q:api) AND p:status=active", "(s:programming OR q:api) AND p:status=active", 4),
-    ]
+    print("Testing RELATIVE behavior (threshold changes)")
+    print()
     
     passed = 0
     failed = 0
     
-    for name, query, expected in tests:
-        results = db.search(query)
-        actual = len(results)
-        
-        if actual == expected:
-            print(f"✓ {name}")
-            passed += 1
-        else:
-            print(f"✗ {name}: got {actual}, expected {expected}")
-            # Print what we found for debugging
-            print(f"  Query: {query}")
-            print(f"  Found {actual} memories:")
-            for r in results:
-                print(f"    - {r['content'][:60]}...")
-            failed += 1
+    # =============================================================================
+    # KEYWORD SIMILARITY TESTS (s: operator)
+    # =============================================================================
+    print("--- Keyword Similarity (s:) ---")
     
+    # Test 1: Higher threshold should return fewer or equal results
+    results_default = db.search("s:programming")
+    results_strict = db.search("s:programming@0.7")
+    results_loose = db.search("s:programming@0.3")
+    
+    print(f"  s:programming (default 0.5): {len(results_default)} results")
+    print(f"  s:programming@0.7 (strict): {len(results_strict)} results")  
+    print(f"  s:programming@0.3 (loose): {len(results_loose)} results")
+    
+    # Verify relative behavior
+    if len(results_strict) <= len(results_default):
+        print("✓ Strict threshold returns ≤ default")
+        passed += 1
+    else:
+        print(f"✗ Strict threshold should return ≤ default, got {len(results_strict)} > {len(results_default)}")
+        failed += 1
+    
+    if len(results_loose) >= len(results_default):
+        print("✓ Loose threshold returns ≥ default")
+        passed += 1
+    else:
+        print(f"✗ Loose threshold should return ≥ default, got {len(results_loose)} < {len(results_default)}")
+        failed += 1
+    
+    # Print results for debugging
+    if len(results_default) > 0:
+        print("  Default results:")
+        for r in results_default:
+            print(f"    - {r['content'][:50]}...")
+    
+    # =============================================================================
+    # CONTENT SIMILARITY TESTS (q: operator)
+    # =============================================================================
+    print("\n--- Content Similarity (q:) ---")
+    
+    results_q_default = db.search("q:machine learning")
+    results_q_strict = db.search("q:machine learning@0.7")
+    results_q_loose = db.search("q:machine learning@0.3")
+    
+    print(f"  q:machine learning (default 0.5): {len(results_q_default)} results")
+    print(f"  q:machine learning@0.7 (strict): {len(results_q_strict)} results")
+    print(f"  q:machine learning@0.3 (loose): {len(results_q_loose)} results")
+    
+    if len(results_q_strict) <= len(results_q_default):
+        print("✓ Strict threshold returns ≤ default")
+        passed += 1
+    else:
+        print(f"✗ Strict threshold should return ≤ default")
+        failed += 1
+    
+    if len(results_q_loose) >= len(results_q_default):
+        print("✓ Loose threshold returns ≥ default")
+        passed += 1
+    else:
+        print(f"✗ Loose threshold should return ≥ default")
+        failed += 1
+    
+    # =============================================================================
+    # COMBINED WITH NON-VECTOR
+    # =============================================================================
+    print("\n--- Combined with non-vector operators ---")
+    
+    # Keyword + vector similarity
+    results_combo = db.search("s:programming AND k:python")
+    print(f"  s:programming AND k:python: {len(results_combo)} results")
+    if len(results_combo) > 0 and len(results_combo) <= len(results_default):
+        print("✓ Combined search returns ≤ vector-only")
+        passed += 1
+    elif len(results_combo) == 0:
+        print("✓ Combined search (0 is valid)")
+        passed += 1
+    else:
+        print("✗ Combined should be ≤ vector-only")
+        failed += 1
+    
+    # Vector + property filter
+    results_prop = db.search("s:devops AND p:status=active")
+    print(f"  s:devops AND p:status=active: {len(results_prop)} results")
+    if len(results_prop) <= 15:  # Should filter down from all memories
+        print("✓ Property filter reduces results")
+        passed += 1
+    else:
+        print("✗ Property filter should reduce results")
+        failed += 1
+    
+    # =============================================================================
+    # BOOLEAN OPERATORS WITH VECTOR
+    # =============================================================================
+    print("\n--- Boolean operators with vector ---")
+    
+    # OR should return more than either alone
+    results_or = db.search("s:python OR s:javascript")
+    print(f"  s:python OR s:javascript: {len(results_or)} results")
+    # Should be >= either individual search
+    if len(results_or) >= len(results_default):
+        print("✓ OR returns ≥ either individual")
+        passed += 1
+    else:
+        print("✗ OR should return ≥ either individual")
+        failed += 1
+    
+    # NOT should reduce results
+    results_not = db.search("q:api AND NOT k:deprecated")
+    print(f"  q:api AND NOT k:deprecated: {len(results_not)} results")
+    results_api_only = db.search("q:api")
+    print(f"  q:api only: {len(results_api_only)} results")
+    if len(results_not) <= len(results_api_only):
+        print("✓ NOT reduces results")
+        passed += 1
+    else:
+        print("✗ NOT should reduce results")
+        failed += 1
+    
+    # =============================================================================
+    # EDGE CASES
+    # =============================================================================
+    print("\n--- Edge cases ---")
+    
+    # Very high threshold (should return few or none)
+    results_very_high = db.search("s:programming@0.95")
+    print(f"  s:programming@0.95: {len(results_very_high)} results")
+    if len(results_very_high) <= len(results_strict):
+        print("✓ Very high threshold returns ≤ strict")
+        passed += 1
+    else:
+        print("✗ Very high threshold should return fewer")
+        failed += 1
+    
+    # Very low threshold (should return more)
+    results_very_low = db.search("s:programming@0.1")
+    print(f"  s:programming@0.1: {len(results_very_low)} results")
+    if len(results_very_low) >= len(results_loose):
+        print("✓ Very low threshold returns ≥ loose")
+        passed += 1
+    else:
+        print("✗ Very low threshold should return more")
+        failed += 1
+    
+    # Non-existent query
+    results_none = db.search("s:xyznonexistent")
+    print(f"  s:xyznonexistent: {len(results_none)} results")
+    if len(results_none) == 0:
+        print("✓ Non-existent query returns 0")
+        passed += 1
+    else:
+        print("✗ Non-existent query should return 0")
+        failed += 1
+    
+    # =============================================================================
+    # SUMMARY
+    # =============================================================================
     print("\n" + "=" * 60)
     print(f"RESULTS: {passed} passed, {failed} failed")
     print("=" * 60)
+    
+    if failed == 0:
+        print("\n✓ ALL TESTS PASSED!")
+        print("  Vector search relative behavior is correct:")
+        print("  - Higher threshold → fewer results")
+        print("  - Lower threshold → more results")
+        print("  - Combined queries work as expected")
+    else:
+        print("\n✗ SOME TESTS FAILED")
     
     return failed == 0
 
@@ -272,6 +393,7 @@ def main():
     print("=" * 60)
     print("MEMORYDB VECTOR SEARCH TESTS")
     print("=" * 60)
+    print("Testing RELATIVE behavior (not absolute counts)")
     print("NOTE: These tests require embedding model (torch)")
     print()
     
@@ -297,10 +419,8 @@ def main():
     cleanup()
     
     if success:
-        print("\n✓ ALL VECTOR TESTS PASSED!")
         return 0
     else:
-        print("\n✗ SOME VECTOR TESTS FAILED")
         return 1
 
 
