@@ -36,13 +36,19 @@ from enum import Enum
 #   last N days          - relative (e.g., "last 7 days")
 #   last N hours          - relative (e.g., "last 24 hours")
 #
+# Similarity threshold (optional):
+#   Append @threshold to s: or q: queries (e.g., "s:python@0.8")
+#   Default threshold is 0.5. Higher = stricter, Lower = looser.
+#
 # Examples:
 #   "k:python"                           - keyword = python
 #   "k:python AND k:coding"            - both keywords
 #   "k:python OR k:javascript"          - either keyword
 #   "NOT k:old"                       - exclude keyword
-#   "s:python"                        - similar to python
-#   "q:machine learning"             - semantic text search
+#   "s:python"                        - similar to python (threshold 0.5)
+#   "s:python@0.8"                     - similar to python with 0.8 threshold
+#   "q:machine learning"             - semantic text search (threshold 0.5)
+#   "q:machine learning@0.3"           - semantic text with looser threshold
 #   "p:role=user"                      - property = user
 #   "p:role=user AND importance=high" - multiple properties
 #   "d:last 30 days"                  - last 30 days
@@ -74,6 +80,7 @@ class SearchCondition:
     search_type: SearchType
     value: str
     negated: bool = False
+    threshold: float = None  # Similarity threshold (e.g., 0.8 for "s:python@0.8")
 
 
 @dataclass
@@ -89,6 +96,7 @@ class SearchNode:
     search_type: Optional[SearchType] = None  # For condition nodes
     value: Optional[str] = None  # For condition nodes
     negated: bool = False  # For condition nodes
+    threshold: Optional[float] = None  # For similarity threshold (e.g., 0.8)
     left: Optional["SearchNode"] = None  # For binary nodes
     right: Optional["SearchNode"] = None  # For binary nodes
     child: Optional["SearchNode"] = None  # For unary nodes
@@ -318,10 +326,21 @@ class SearchParser:
         if self.pos < len(self.tokens) and self.tokens[self.pos][0] == 'COLON':
             self.pos += 1
         
-        # Get VALUE
+        # Get VALUE - check for threshold syntax like "programming@0.8"
+        threshold = None
         if self.pos < len(self.tokens) and self.tokens[self.pos][0] == 'VALUE':
-            value = self.tokens[self.pos][1]
+            raw_value = self.tokens[self.pos][1]
             self.pos += 1
+            
+            # Parse threshold from value (e.g., "programming@0.8")
+            if '@' in raw_value:
+                value, threshold_str = raw_value.split('@', 1)
+                try:
+                    threshold = float(threshold_str)
+                except ValueError:
+                    threshold = None
+            else:
+                value = raw_value
         else:
             value = ""
         
@@ -336,11 +355,17 @@ class SearchParser:
         
         search_type = type_map.get(prefix, SearchType.QUERY)
         
+        # Store threshold in a hidden way - we'll pass it through via the searcher
+        # For now, embed it in the value as a special marker
+        # Actually, let's just use the value and we'll handle it in build_query
+        
         return SearchNode(
             node_type='condition',
             search_type=search_type,
             value=value,
             negated=negated,
+            # We'll pass threshold via a custom attribute
+            threshold=threshold,
             left=None,
             right=None,
             child=None,
@@ -497,7 +522,9 @@ class SearchParser:
                 use_vector = test_emb is not None and np.linalg.norm(test_emb) > 0
             
             if use_vector:
-                matching_kw_ids = self.searcher._get_similar_keywords(value)
+                # Use threshold from query (e.g., "s:python@0.8") or default
+                threshold = node.threshold
+                matching_kw_ids = self.searcher._get_similar_keywords(value, threshold=threshold)
                 if matching_kw_ids:
                     placeholders = ",".join("?" * len(matching_kw_ids))
                     sql = f" EXISTS (SELECT 1 FROM memory_keywords mk WHERE mk.memory_id = m.id AND mk.keyword_id IN ({placeholders}))"
@@ -519,7 +546,9 @@ class SearchParser:
                 use_vector = test_emb is not None and np.linalg.norm(test_emb) > 0
             
             if use_vector:
-                matching_memory_ids = self.searcher._get_similar_memories(value)
+                # Use threshold from query (e.g., "q:machine learning@0.3") or default
+                threshold = node.threshold
+                matching_memory_ids = self.searcher._get_similar_memories(value, threshold=threshold)
                 if matching_memory_ids:
                     placeholders = ",".join("?" * len(matching_memory_ids))
                     sql = f" m.id IN ({placeholders})"
@@ -585,17 +614,19 @@ class SearchParser:
 class MemorySearcher:
     """Handles searching memories using the query DSL."""
     
-    SIMILARITY_THRESHOLD = 0.5  # Cosine similarity threshold
+    DEFAULT_SIMILARITY_THRESHOLD = 0.5  # Cosine similarity threshold
     
-    def __init__(self, db_path: str, embedding_model=None):
+    def __init__(self, db_path: str, embedding_model=None, default_threshold: float = None):
         self.db_path = db_path
         self.embedding = embedding_model
+        self.default_threshold = default_threshold or self.DEFAULT_SIMILARITY_THRESHOLD
     
-    def _get_similar_keywords(self, query: str, limit: int = 100) -> list[int]:
+    def _get_similar_keywords(self, query: str, threshold: float = None, limit: int = 100) -> list[int]:
         """Find keywords with similar embeddings to the query.
         
         Args:
             query: Search query text
+            threshold: Similarity threshold (default from self.default_threshold)
             limit: Max keywords to consider
             
         Returns:
@@ -606,6 +637,8 @@ class MemorySearcher:
         
         if not self.embedding:
             return []
+        
+        threshold = threshold or self.default_threshold
         
         # Get embedding for query
         query_embedding = self.embedding.get(query)
@@ -629,16 +662,17 @@ class MemorySearcher:
                 # Cosine similarity (already normalized, so just dot product)
                 similarity = np.dot(query_embedding, kw_embedding)
                 
-                if similarity >= self.SIMILARITY_THRESHOLD:
+                if similarity >= threshold:
                     matching_ids.append(kw_id)
         
         return matching_ids
     
-    def _get_similar_memories(self, query: str, limit: int = 100) -> list[int]:
+    def _get_similar_memories(self, query: str, threshold: float = None, limit: int = 100) -> list[int]:
         """Find memories with similar content embeddings to the query.
         
         Args:
             query: Search query text
+            threshold: Similarity threshold (default from self.default_threshold)
             limit: Max memories to consider
             
         Returns:
@@ -649,6 +683,8 @@ class MemorySearcher:
         
         if not self.embedding:
             return []
+        
+        threshold = threshold or self.default_threshold
         
         # Get embedding for query
         query_embedding = self.embedding.get(query)
@@ -672,7 +708,7 @@ class MemorySearcher:
                 # Cosine similarity
                 similarity = np.dot(query_embedding, mem_embedding)
                 
-                if similarity >= self.SIMILARITY_THRESHOLD:
+                if similarity >= threshold:
                     matching_ids.append(mem_id)
         
         return matching_ids

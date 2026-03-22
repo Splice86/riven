@@ -208,11 +208,11 @@ if __name__ == "__main__":
     class MockEmbeddingModel:
         def __init__(self):
             self.dimension = 384  # Common embedding dimension
-        
+
         def get(self, text: str) -> np.ndarray:
             """Return a zero vector for testing."""
             return np.zeros(self.dimension, dtype=np.float32)
-    
+
     # Create temp database
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
