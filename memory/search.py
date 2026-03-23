@@ -4,6 +4,9 @@ import re
 import sqlite3
 import numpy as np
 from datetime import datetime, timedelta, timezone
+
+
+EMBEDDING_TEST_KEY = "test"  # Key used to verify embedding model is working
 from typing import Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -630,7 +633,7 @@ class SearchParser:
         """Check if embedding model is available and working."""
         if not self.searcher or not self.searcher.embedding:
             return False
-        test_emb = self.searcher.embedding.get("test")
+        test_emb = self.searcher.embedding.get(EMBEDDING_TEST_KEY)
         return test_emb is not None and np.linalg.norm(test_emb) > 0
     
     def _build_if_then_else_query(self, node: SearchNode) -> tuple[str, list]:
