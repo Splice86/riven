@@ -1,6 +1,7 @@
 """Search parser for memory database query DSL."""
 
 import re
+import sqlite3
 import numpy as np
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -860,7 +861,6 @@ class MemorySearcher:
             List of matching IDs
         """
         import sqlite3
-        import numpy as np
         
         if not self.embedding:
             return []
