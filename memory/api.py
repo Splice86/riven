@@ -194,7 +194,7 @@ async def get_memory(memory_id: int) -> dict:
     if not memory:
         raise HTTPException(status_code=404, detail="Memory not found")
     
-    return results[0]
+    return memory
 
 
 @app.delete("/memories/{memory_id}")
