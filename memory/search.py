@@ -853,15 +853,15 @@ class SearchParser:
             if direction == 'source':
                 # Find memories that the specified ID links TO (targets of links where source_id = ID)
                 direction_check = "ml.target_id = m.id"
-                source_id_param = "ml.source_id"
+                id_column = "source_id"
             elif direction == 'target':
                 # Find memories that link TO the specified ID (sources of links where target_id = ID)
                 direction_check = "ml.source_id = m.id"
-                source_id_param = "ml.target_id"
+                id_column = "target_id"
             else:
                 # Both directions (default) - find memories that have any link
                 direction_check = "(ml.source_id = m.id OR ml.target_id = m.id)"
-                source_id_param = None
+                id_column = None
             
             # Handle target (sub-query or direct ID)
             if target and target.startswith('(') and target.endswith(')'):
@@ -900,7 +900,7 @@ class SearchParser:
                             SELECT 1 FROM memory_links ml
                             WHERE {direction_check}
                             AND ml.link_type = ?
-                            AND ml.{source_id_param} = ?
+                            AND ml.{id_column} = ?
                         )"""
                         params = [link_type, target_id]
                     else:
@@ -908,7 +908,7 @@ class SearchParser:
                         sql = f"""EXISTS (
                             SELECT 1 FROM memory_links ml
                             WHERE {direction_check}
-                            AND ml.{source_id_param} = ?
+                            AND ml.{id_column} = ?
                         )"""
                         params = [target_id]
                 except ValueError:
