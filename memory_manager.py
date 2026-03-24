@@ -465,8 +465,8 @@ def create_test_memories(manager: MemoryManager) -> dict:
     now = datetime.now(timezone.utc)
     created_ids = {}
     
-    # Group 1: Pets (memories from 2 hours ago)
-    pets_base = now - timedelta(hours=2)
+    # Group 1: Pets (memories from 3 hours ago)
+    pets_base = now - timedelta(hours=3)
     pets = [
         ("My dog Max loves to chase squirrels in the backyard every morning.", ["pets", "dog", "max"]),
         ("I adopted a rescue cat named Luna last month. She's very shy but warming up.", ["pets", "cat", "luna"]),
@@ -478,8 +478,8 @@ def create_test_memories(manager: MemoryManager) -> dict:
         pets_ids.append(m.id)
     created_ids["pets"] = pets_ids
     
-    # Group 2: Gig work (memories from 1.5 hours ago)
-    gig_base = now - timedelta(hours=1.5)
+    # Group 2: Gig work (memories from 2 hours ago)
+    gig_base = now - timedelta(hours=2)
     gig_work = [
         ("Did 5 Uber rides today. Made about $85 after expenses.", ["gig", "uber", "rides"]),
         ("Delivered groceries for Instacart. Tips were good this week, $120 total.", ["gig", "instacart", "delivery"]),
@@ -548,7 +548,7 @@ def run_tests():
     # Get temporal clusters
     print("\n[3/4] Testing temporal clustering...")
     clusters = manager.get_temporal_clusters(
-        gap_minutes=30,
+        gap_minutes=20,  # 20 min gap to separate the 3 groups
         exclude_recent_minutes=30,  # Exclude memories from last 30 min
         exclude_summarized=False
     )
@@ -566,7 +566,7 @@ def run_tests():
     # Summarize clusters
     print("\n[4/4] Summarizing clusters...")
     summaries = manager.summarize_recent_clusters(
-        gap_minutes=30,
+        gap_minutes=20,
         exclude_recent_minutes=30,
         min_cluster_size=2
     )
@@ -578,7 +578,7 @@ def run_tests():
     
     # Verify exclude_summarized works
     clusters_after = manager.get_temporal_clusters(
-        gap_minutes=30,
+        gap_minutes=20,
         exclude_recent_minutes=30,
         exclude_summarized=True
     )
