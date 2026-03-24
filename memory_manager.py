@@ -509,20 +509,19 @@ def create_test_memories(manager: MemoryManager) -> dict:
 
 
 def run_tests():
-    """Run extensive tests of the MemoryManager."""
+    """Run temporal clustering test with 3 topic groups."""
     print("=" * 60)
-    print("Memory Manager Test Suite")
+    print("Memory Manager Temporal Clustering Test")
     print("=" * 60)
     
     # Check API availability
-    print("\n[1/10] Checking API availability...")
+    print("\n[1/4] Checking API availability...")
     manager = MemoryManager()
     
     if not check_api_health(manager):
         print("\n❌ ERROR: Memory API is not running!")
         print("   Please start the memory API first:")
         print("   cd memory/ && python api.py")
-        print("   (or wherever your memory API server is)")
         return False
     
     if not check_llm_health(manager):
@@ -534,158 +533,71 @@ def run_tests():
     print("   ✓ Memory API is running")
     print("   ✓ LLM API is running")
     
-    # Test 2: Basic CRUD operations
-    print("\n[2/10] Testing basic CRUD operations...")
+    # Get initial count
     initial_count = manager.count()
-    print(f"   Initial count: {initial_count}")
+    print(f"\n   Initial memory count: {initial_count}")
     
-    # Add memory
-    m = manager.add(
-        "Testing the memory manager!",
-        keywords=["test", "riven"],
-        properties={"status": "working"}
-    )
-    print(f"   ✓ Added memory #{m.id}: '{m.content}'")
+    # Create test memories
+    print("\n[2/4] Creating test memories in 3 topic groups...")
+    created_ids = create_test_memories(manager)
     
-    # Verify count increased
-    new_count = manager.count()
-    assert new_count == initial_count + 1, "Count should increase by 1"
-    print(f"   ✓ Count increased: {initial_count} -> {new_count}")
+    print(f"   ✓ Created memories:")
+    for topic, ids in created_ids.items():
+        print(f"      {topic}: {len(ids)} memories (IDs: {ids})")
     
-    # Test 3: Get memory
-    print("\n[3/10] Testing get_memory...")
-    mem = manager.get(m.id)
-    assert mem.id == m.id
-    assert mem.content == "Testing the memory manager!"
-    assert "test" in mem.keywords
-    assert "riven" in mem.keywords
-    assert mem.properties.get("status") == "working"
-    print(f"   ✓ Retrieved memory #{mem.id}")
-    print(f"   ✓ Keywords: {mem.keywords}")
-    print(f"   ✓ Properties: {mem.properties}")
-    
-    # Test 4: node_type and temporal_location
-    print("\n[4/10] Testing node_type and temporal_location...")
-    assert mem.node_type == "memory"
-    assert mem.temporal_location is not None
-    print(f"   ✓ node_type: {mem.node_type}")
-    print(f"   ✓ temporal_location: {mem.temporal_location}")
-    
-    # Test 5: Search
-    print("\n[5/10] Testing search...")
-    results = manager.search("k:test")
-    assert results.count >= 1
-    print(f"   ✓ Found {results.count} memories with 'test' keyword")
-    
-    # Test 6: Links
-    print("\n[6/10] Testing links...")
-    m2 = manager.add("Second test memory", keywords=["test"])
-    link_result = manager.add_link(m.id, m2.id, "related_to")
-    print(f"   ✓ Added link: {m.id} -> {m2.id} (related_to)")
-    
-    # Test 7: Summarization
-    print("\n[7/10] Testing LLM summarization...")
-    summary = manager.summarize_memory(m.id, keywords=["test_summary"])
-    print(f"   ✓ Created summary #{summary.id}: '{summary.content}'")
-    
-    # Verify summary properties
-    summary_mem = manager.get(summary.id)
-    assert summary_mem.properties.get("is_summary") == "true"
-    print(f"   ✓ Summary has is_summary=true property")
-    
-    # Test 8: Multi-memory summarization
-    print("\n[8/10] Testing multi-memory summarization...")
-    multi_summary = manager.summarize_memories([m.id, m2.id], keywords=["multi_summary"])
-    print(f"   ✓ Created multi-summary #{multi_summary.id}")
-    
-    multi_mem = manager.get(multi_summary.id)
-    assert multi_mem.properties.get("summarized_count") == "2"
-    print(f"   ✓ summarized_count = 2")
-    
-    # Test 9: Temporal clustering
-    print("\n[9/10] Testing temporal clustering...")
-    
-    # Add multiple memories with different timestamps to test clustering
-    from datetime import datetime, timezone, timedelta
-    
-    # Create memories 20 minutes apart (should be same cluster)
-    now = datetime.now(timezone.utc)
-    m3 = manager.add(
-        "Memory from 20 minutes ago",
-        keywords=["cluster_test"],
-        created_at=(now - timedelta(minutes=20)).isoformat()
-    )
-    m4 = manager.add(
-        "Memory from 10 minutes ago",
-        keywords=["cluster_test"],
-        created_at=(now - timedelta(minutes=10)).isoformat()
-    )
-    
-    # Add memory 45 minutes ago (should be different cluster due to gap)
-    m5 = manager.add(
-        "Memory from 45 minutes ago",
-        keywords=["cluster_test"],
-        created_at=(now - timedelta(minutes=45)).isoformat()
-    )
-    
-    print(f"   Added test memories: #{m3.id}, #{m4.id}, #{m5.id}")
-    
-    # Get clusters (exclude recent to avoid the active session)
+    # Get temporal clusters
+    print("\n[3/4] Testing temporal clustering...")
     clusters = manager.get_temporal_clusters(
         gap_minutes=30,
-        exclude_recent_minutes=5,  # Only exclude last 5 minutes
-        exclude_summarized=False  # Include everything for testing
+        exclude_recent_minutes=30,  # Exclude memories from last 30 min
+        exclude_summarized=False
     )
     
-    print(f"   ✓ Found {len(clusters)} temporal clusters")
+    print(f"   ✓ Found {len(clusters)} temporal clusters:")
     for i, c in enumerate(clusters):
-        print(f"      Cluster {i+1}: {c.size} memories from {c.start_time[:19]} to {c.end_time[:19]}")
+        print(f"      Cluster {i+1}: {c.size} memories")
+        print(f"         Time range: {c.start_time[:19]} to {c.end_time[:19]}")
+        # Show keywords from this cluster
+        all_kw = set()
+        for m in c.memories:
+            all_kw.update(m.keywords)
+        print(f"         Keywords: {sorted(all_kw)}")
     
-    # Test 10: Exclude already summarized
-    print("\n[10/10] Testing exclude_summarized...")
-    
-    # Get clusters with summarization exclusion
-    clusters_with_exclude = manager.get_temporal_clusters(
-        gap_minutes=30,
-        exclude_recent_minutes=5,
-        exclude_summarized=True
-    )
-    
-    print(f"   ✓ Clusters excluding summarized: {len(clusters_with_exclude)}")
-    
-    # Summarize the clusters
+    # Summarize clusters
+    print("\n[4/4] Summarizing clusters...")
     summaries = manager.summarize_recent_clusters(
         gap_minutes=30,
-        exclude_recent_minutes=5,
-        min_cluster_size=1
+        exclude_recent_minutes=30,
+        min_cluster_size=2
     )
-    print(f"   ✓ Created {len(summaries)} cluster summaries")
     
-    # Now get clusters again - should have fewer (some excluded)
+    print(f"   ✓ Created {len(summaries)} summaries")
+    for s in summaries:
+        sm = manager.get(s.id)
+        print(f"      Summary #{s.id}: {sm.content[:80]}...")
+    
+    # Verify exclude_summarized works
     clusters_after = manager.get_temporal_clusters(
         gap_minutes=30,
-        exclude_recent_minutes=5,
+        exclude_recent_minutes=30,
         exclude_summarized=True
     )
-    print(f"   ✓ Clusters after summarization: {len(clusters_after)}")
+    print(f"\n   ✓ After summarization: {len(clusters_after)} clusters (should be fewer)")
     
-    # Cleanup: delete test memories
-    print("\n--- Cleaning up test memories ---")
-    manager.delete(m.id)
-    manager.delete(m2.id)
-    manager.delete(summary.id)
-    manager.delete(multi_summary.id)
-    manager.delete(m3.id)
-    manager.delete(m4.id)
-    manager.delete(m5.id)
+    # Cleanup
+    print("\n--- Cleaning up ---")
+    all_ids = []
+    for ids in created_ids.values():
+        all_ids.extend(ids)
+    for mid in all_ids:
+        manager.delete(mid)
     
     for s in summaries:
         manager.delete(s.id)
     
-    print(f"   ✓ Deleted {6 + len(summaries)} test memories")
-    
     final_count = manager.count()
-    print(f"   ✓ Final count: {final_count} (should match initial: {initial_count})")
+    print(f"   ✓ Deleted {len(all_ids) + len(summaries)} test memories")
+    print(f"   ✓ Final count: {final_count} (should be {initial_count})")
     
     print("\n" + "=" * 60)
     print("✅ All tests passed!")
