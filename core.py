@@ -11,6 +11,11 @@ from pydantic_ai import AgentStreamEvent, AgentRunResultEvent
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    UserPromptPart,
+    TextPart,
 )
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -104,18 +109,20 @@ class Core:
             tools=tools
         )
 
-    async def _run_with_retry(self, system_prompt: str, prompt: str) -> Any:
+    async def _run_with_retry(self, system_prompt: str, prompt: str, message_history: list[ModelMessage] = None) -> Any:
         """Run agent with streaming events for real-time tool output."""
         last_error = None
         tool_results = []  # Track tool results for memory
         pending_tool = None  # Buffer for tool call awaiting result
+        message_history = message_history or []
         
         for attempt in range(self.max_retries):
             try:
                 agent = self._create_agent(system_prompt)
                 
                 # Use run_stream_events() for real-time tool output
-                async for event in agent.run_stream_events(prompt):
+                # Pass message_history to inject our memory context
+                async for event in agent.run_stream_events(prompt, message_history=message_history):
                     if isinstance(event, FunctionToolCallEvent):
                         # Buffer tool call - will print with result
                         args = event.part.args
@@ -177,33 +184,43 @@ class Core:
         
         return prompt
 
-    def _build_prompt(self, user_input: str) -> str:
-        """Build prompt with memory context."""
+    def _build_prompt(self, user_input: str) -> tuple[str, list[ModelMessage]]:
+        """Build prompt with memory context.
+        
+        Returns tuple of (user_prompt, message_history) where message_history
+        contains the converted memory context.
+        """
         # Get context from memory
         context = self._memory.get_context()
         
         if not context:
-            return user_input
+            return user_input, []
         
-        # Build context string
-        context_parts = []
+        # Convert memory context to pydantic_ai ModelMessage format
+        message_history: list[ModelMessage] = []
+        
         for msg in context:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
-            context_parts.append(f"{role}: {content}")
+            
+            if role == "user":
+                message_history.append(ModelRequest(parts=[UserPromptPart(content=content)]))
+            elif role == "assistant":
+                message_history.append(ModelResponse(parts=[TextPart(content=content)]))
+            elif role == "tool":
+                # Tools are inserted as assistant messages with tool result
+                message_history.append(ModelResponse(parts=[TextPart(content=f"[Tool: {content}")]))
         
-        context_str = "\n".join(context_parts)
-        
-        return f"Context from previous conversation:\n{context_str}\n\nCurrent user request: {user_input}"
+        return user_input, message_history
 
     async def run(self, prompt: str) -> Any:
         """Run the agent with the given prompt."""
         # Build prompts first (don't add to memory until success)
         system_prompt = self._build_system_prompt()
-        full_prompt = self._build_prompt(prompt)
+        user_prompt, message_history = self._build_prompt(prompt)
         
-        # Run agent (tool results already streamed and stored in memory)
-        result = await self._run_with_retry(system_prompt, full_prompt)
+        # Run agent with message history injected
+        result = await self._run_with_retry(system_prompt, user_prompt, message_history)
         
         # Add user/assistant to memory after successful run
         self._memory.add_context("user", prompt)
