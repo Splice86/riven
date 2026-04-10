@@ -117,8 +117,9 @@ class Core:
                 async for event in agent.run_stream_events(prompt):
                     if isinstance(event, FunctionToolCallEvent):
                         # Tool is being called - show it immediately
-                        args = event.tool_call.args
-                        print(f"→ {event.tool_call.tool_name}{args}", flush=True)
+                        args = event.part.args
+                        tool_name = event.part.tool_name
+                        print(f"→ {tool_name}{args}", flush=True)
                         
                     elif isinstance(event, FunctionToolResultEvent):
                         # Tool returned - show result immediately
