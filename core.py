@@ -2,19 +2,48 @@
 
 import asyncio
 import logging
+import os
 from typing import Any
 
+import requests
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.tools import Tool as PydanticTool
 from openai import AsyncOpenAI
 
-from context import SystemContext
-from context import ActivityLog
 from modules import ModuleRegistry, get_all_modules
 
 logger = logging.getLogger(__name__)
+
+MEMORY_API_URL = os.environ.get("MEMORY_API_URL", "http://127.0.0.1:8030")
+
+
+class MemoryClient:
+    """Simple client for memory API context endpoints."""
+    
+    def __init__(self, db_name: str = "default", base_url: str = MEMORY_API_URL):
+        self.db_name = db_name
+        self.base_url = base_url
+    
+    def add_context(self, role: str, content: str, created_at: str = None) -> dict:
+        """Add a context message."""
+        resp = requests.post(
+            f"{self.base_url}/context",
+            params={"db_name": self.db_name},
+            json={"role": role, "content": content, "created_at": created_at}
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def get_context(self, limit: int = 100) -> list[dict]:
+        """Get context for prompt."""
+        resp = requests.get(
+            f"{self.base_url}/context",
+            params={"db_name": self.db_name, "limit": limit}
+        )
+        resp.raise_for_status()
+        return resp.json().get("context", [])
 
 
 class Core:
@@ -36,10 +65,10 @@ class Core:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.db_name = db_name
+        self.system_prompt = system_prompt or ""
 
         self._modules = ModuleRegistry()
-        self._system_context = SystemContext(system_prompt)
-        self._activity_log = ActivityLog(db_name=db_name)
+        self._memory = MemoryClient(db_name=db_name)
         
         # Auto-register all discovered modules
         for module in get_all_modules():
@@ -115,40 +144,61 @@ class Core:
             case 'End':
                 logger.info(f"Done: {node.data.output}")
 
-    async def run(self, prompt: str) -> Any:
-        """Run the agent with the given prompt."""
-        self._activity_log.add_user(prompt)
+    def _build_system_prompt(self) -> str:
+        """Build system prompt with module context."""
+        prompt = self.system_prompt
         
-        # Get tag replacements from modules
-        replacements = []
+        # Add module context replacements
         for module in self._modules.all().values():
             if module.get_context and module.tag:
                 value = module.get_context()
-                replacements.append((module.tag, value))
+                prompt = prompt.replace(f"{{{module.tag}}}", value)
         
-        # Get updated system prompt
-        system_prompt = self._system_context.apply_tags(replacements)
+        return prompt
+
+    def _build_prompt(self, user_input: str) -> str:
+        """Build full prompt with conversation context."""
+        # Get context from memory API
+        context_messages = self._memory.get_context(limit=50)
         
-        # Get context from memory-backed activity log
-        context = self._activity_log.get_context_for_prompt()
-        full_prompt = f"Previous conversation:\n{context}\n\nCurrent: {prompt}" if context != "(No conversation history)" else prompt
+        if not context_messages:
+            return user_input
         
+        # Build conversation history
+        history_parts = []
+        for msg in context_messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            
+            if role == "summary":
+                history_parts.append(f"Previous: {content}")
+            else:
+                history_parts.append(f"{role}: {content}")
+        
+        history = "\n".join(history_parts)
+        return f"Conversation:\n{history}\n\nUser: {user_input}"
+
+    async def run(self, prompt: str) -> Any:
+        """Run the agent with the given prompt."""
+        # Add user message to memory
+        self._memory.add_context("user", prompt)
+        
+        # Build prompts
+        system_prompt = self._build_system_prompt()
+        full_prompt = self._build_prompt(prompt)
+        
+        # Run agent
         result = await self._run_with_retry(system_prompt, full_prompt)
-        self._activity_log.add_assistant(str(result.output))
+        
+        # Add assistant response to memory
+        self._memory.add_context("assistant", str(result.output))
         
         return result
 
 
 async def main():
     """Interactive REPL for the agent."""
-    system_prompt = """{{bio}}
-
----
-Current time: {{time}}
-
-Open documents:
-{{documents}}
-"""
+    system_prompt = """You are a helpful AI assistant."""
 
     core = Core(
         system_prompt=system_prompt,
