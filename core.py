@@ -145,20 +145,27 @@ class Core:
                             print(f"→ {pending_tool['name']}{pending_tool['args']}", flush=True)
                             pending_tool = None
                         
-                        # Truncate to configured max lines
+                        # Truncate to configured max lines for display
                         lines = content_str.split('\n')
                         if len(lines) > MAX_OUTPUT_LINES:
                             lines = lines[:MAX_OUTPUT_LINES] + [f"... (truncated {len(lines) - MAX_OUTPUT_LINES} lines)"]
                         
-                        # Indent the result
-                        for line in lines:
-                            print(f"  {line}", flush=True)
+                        # Truncate to 200 chars for memory and display
+                        truncated_str = content_str[:200]
+                        if len(content_str) > 200:
+                            truncated_str += f" ... (truncated, {len(content_str)} total chars)"
                         
-                        # Store for memory
+                        # Store truncated result for memory
                         tool_results.append({
                             "tool": tool_name,
-                            "result": content_str
+                            "result": truncated_str
                         })
+                        
+                        # Print truncated output to user
+                        for line in lines[:10]:  # Show first 10 lines
+                            print(f"  {line}", flush=True)
+                        if len(lines) > 10:
+                            print(f"  ... ({len(lines) - 10} more lines)", flush=True)
                         
                     elif isinstance(event, AgentRunResultEvent):
                         # Final result - store tool results in memory
