@@ -78,11 +78,17 @@ class DocumentManager:
             Formatted string with line numbers
         """
         lines = doc.lines
+        truncated = False
+        display_count = len(lines)
+        
         if max_lines and len(lines) > max_lines:
             lines = lines[:max_lines]
             truncated = True
-        else:
-            truncated = len(lines) > 200  # Auto-truncate very long files
+            display_count = max_lines
+        elif len(lines) > 200:
+            lines = lines[:200]
+            truncated = True
+            display_count = 200
         
         # Calculate padding for line numbers
         num_digits = len(str(len(lines)))
@@ -94,7 +100,7 @@ class DocumentManager:
             output_lines.append(fmt.format(i, line.rstrip('\n')))
         
         if truncated:
-            output_lines.append(f"... ({len(doc.lines) - max_lines} more lines)")
+            output_lines.append(f"... ({len(doc.lines) - display_count} more lines)")
         
         return "\n".join(output_lines)
     
