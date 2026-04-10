@@ -19,7 +19,7 @@ except ImportError:
 app = FastAPI(title="Riven Memory API")
 
 # Default DB name
-DEFAULT_DB = "default"
+DEFAULT_DB = "default.db"
 
 # Directory for DB files
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +29,7 @@ def get_db_path(db_name: str) -> str:
     """Get full path for a DB file."""
     if not db_name:
         db_name = DEFAULT_DB
+    # Only append .db if not already present
     if not db_name.endswith(".db"):
         db_name = f"{db_name}.db"
     return os.path.join(DB_DIR, db_name)
@@ -90,7 +91,7 @@ class AddContextRequest(BaseModel):
 
 
 # Database dependency - gets DB from query param
-def get_db(db_name: str = Query(DEFAULT_DB, description="Database name (without .db)")) -> MemoryDB:
+def get_db(db_name: str = Query(DEFAULT_DB, description="Database name")) -> MemoryDB:
     """Get or create a database instance for the requested DB name.
     
     Auto-creates the database if it doesn't exist.

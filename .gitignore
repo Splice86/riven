@@ -18,3 +18,4 @@ venv/
 
 # Local config overrides
 config_local.yaml
+memory/config_local.yaml

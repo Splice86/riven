@@ -1,0 +1,44 @@
+# Memory API Configuration
+# This file is gitignored - add local overrides to memory/config_local.yaml
+
+# Database settings
+database:
+  # Directory for DB files (relative to this file's location)
+  db_dir: "."
+  # Default database name (full filename)
+  default_db: "default.db"
+
+# Embedding cache settings
+cache:
+  # Directory for cache files
+  cache_dir: "."
+  # Cache database filename
+  cache_db: "embeddings_cache.db"
+
+# Memory API server
+api:
+  host: "0.0.0.0"
+  port: 8030
+
+# LLM settings for summarization
+llm:
+  url: "http://127.0.0.1:8010"
+  api_key: "sk-dummy"
+  model: "llama3"
+  context_window: 128000
+
+# Context / Summarization settings
+context:
+  # Max tokens in active context before triggering summarization
+  max_tokens: 32000
+  # Temporal clustering: new cluster if gap > this many minutes
+  cluster_gap_minutes: 30
+  # Don't summarize messages from the last N minutes (active session)
+  cluster_exclude_minutes: 30
+  # Minimum cluster size to consider for summarization
+  min_cluster_size: 3
+
+# Embedding settings
+embedding:
+  model_size: "27b"  # 270m, 0.6b, or 27b
+  force_cpu: true

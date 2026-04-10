@@ -33,7 +33,7 @@ DEFAULT_MODEL_SIZE = "27b"
 FORCE_CPU = True
 
 # Cache settings
-DEFAULT_CACHE_DB = "memory/embeddings_cache.db"
+DEFAULT_CACHE_DB = "embeddings_cache.db"
 
 
 class EmbeddingModel:
