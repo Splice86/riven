@@ -7,8 +7,11 @@ from modules import Module
 
 MEMORY_API_URL = os.environ.get("MEMORY_API_URL", "http://127.0.0.1:8030")
 
+# Database name - set from config, not overrideable via tools
+DEFAULT_DB = os.environ.get("MEMORY_DB", "riven")
 
-def get_module(db_name: str = "default"):
+
+def get_module():
     """Get the memory module."""
     
     async def search_memories(query: str = "", limit: int = 50) -> str:
@@ -16,7 +19,7 @@ def get_module(db_name: str = "default"):
         import requests
         resp = requests.get(
             f"{MEMORY_API_URL}/memories/search",
-            params={"db_name": db_name},
+            params={"db_name": DEFAULT_DB},
             json={"query": query, "limit": limit}
         )
         data = resp.json()
@@ -42,7 +45,7 @@ def get_module(db_name: str = "default"):
         import requests
         resp = requests.post(
             f"{MEMORY_API_URL}/memories",
-            params={"db_name": db_name},
+            params={"db_name": DEFAULT_DB},
             json={"content": content, "keywords": keywords, "properties": properties}
         )
         result = resp.json()
@@ -53,7 +56,7 @@ def get_module(db_name: str = "default"):
         import requests
         resp = requests.get(
             f"{MEMORY_API_URL}/memories/{memory_id}",
-            params={"db_name": db_name}
+            params={"db_name": DEFAULT_DB}
         )
         if resp.status_code == 404:
             return f"Memory #{memory_id} not found"
@@ -71,7 +74,7 @@ def get_module(db_name: str = "default"):
         import requests
         resp = requests.get(
             f"{MEMORY_API_URL}/memories",
-            params={"db_name": db_name, "limit": limit}
+            params={"db_name": DEFAULT_DB, "limit": limit}
         )
         data = resp.json()
         results = data.get("memories", [])
@@ -91,7 +94,7 @@ def get_module(db_name: str = "default"):
         import requests
         resp = requests.get(
             f"{MEMORY_API_URL}/stats",
-            params={"db_name": db_name}
+            params={"db_name": DEFAULT_DB}
         )
         count = resp.json().get("count", 0)
         return f"Total memories: {count}"
@@ -101,7 +104,7 @@ def get_module(db_name: str = "default"):
         import requests
         resp = requests.post(
             f"{MEMORY_API_URL}/memories/search",
-            params={"db_name": db_name},
+            params={"db_name": DEFAULT_DB},
             json={"query": f"d:last {hours} hours", "limit": limit}
         )
         results = resp.json().get("memories", [])
@@ -120,7 +123,7 @@ def get_module(db_name: str = "default"):
         """Get memory stats for system prompt."""
         import requests
         try:
-            resp = requests.get(f"{MEMORY_API_URL}/stats", params={"db_name": db_name}, timeout=2)
+            resp = requests.get(f"{MEMORY_API_URL}/stats", params={"db_name": DEFAULT_DB}, timeout=2)
             count = resp.json().get("count", 0)
             return f"Memory database: {count} memories"
         except Exception:
