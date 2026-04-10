@@ -84,11 +84,11 @@ class Core:
         self.llm_api_key = llm_api_key or LLM_API_KEY
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.db_name = db_name
+        self.db_name = db_name or DEFAULT_DB
         self.system_prompt = system_prompt or ""
 
         self._modules = ModuleRegistry()
-        self._memory = MemoryClient(db_name=db_name)
+        self._memory = MemoryClient(db_name=self.db_name)
         
         # Auto-register all discovered modules
         for module in get_all_modules():
