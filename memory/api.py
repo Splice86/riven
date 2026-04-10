@@ -7,6 +7,7 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from database import MemoryDB, init_db
+from context import Context
 import numpy as np
 
 # Try to import tiktoken for token counting
@@ -88,6 +89,11 @@ class AddContextRequest(BaseModel):
     content: str
     role: str  # "user", "assistant", "system", "tool"
     created_at: str | None = None  # Optional timestamp
+
+
+class GetContextRequest(BaseModel):
+    """Request to get context."""
+    limit: int = 100
 
 
 # Database dependency - gets DB from query param
@@ -180,56 +186,55 @@ def _count_message_tokens(role: str, content: str) -> int:
     return _count_tokens(content) + 4  # ~4 tokens for role/formatting
 
 
-@app.post("/memories/context")
-async def add_context(request: AddContextRequest, db: MemoryDB = Depends(get_db)) -> dict:
-    """Add a context message (conversation turn).
+@app.post("/context")
+async def add_context(
+    request: AddContextRequest,
+    max_tokens: int | None = Query(None, description="Max tokens before summarization"),
+    min_cluster_size: int | None = Query(None, description="Min messages before summarization"),
+    db: MemoryDB = Depends(get_db)
+) -> dict:
+    """Add a context message and auto-summarize if needed.
     
-    This endpoint is optimized for adding conversation messages.
-    It automatically:
-    - Adds keyword "context"
-    - Adds property "role" with the message role
-    - Computes and stores token count
+    Uses the Context class which handles:
+    - Adding the message with context keyword and role
+    - Token counting
+    - Auto-summarization when threshold is exceeded
     
     Args:
         request: Context content and role
+        max_tokens: Override max tokens before summarization (default 32000)
+        min_cluster_size: Override min messages before summarization (default 3)
         db: Database name (query param)
         
     Returns:
-        The ID of the created memory, plus token count
+        Memory ID, role, token count, and summarization status
     """
-    # Validate role
-    valid_roles = {"user", "assistant", "system", "tool"}
-    if request.role not in valid_roles:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid role. Must be one of: {valid_roles}"
-        )
+    ctx = Context(db, max_tokens=max_tokens or 32000, min_cluster_size=min_cluster_size or 3)
+    result = ctx.add(request.role, request.content, request.created_at)
     
-    # Compute token count
-    token_count = _count_message_tokens(request.role, request.content)
+    return result
+
+
+@app.get("/context")
+async def get_context(
+    limit: int = Query(100, description="Max messages to return"),
+    max_tokens: int | None = Query(None, description="Max tokens threshold (for get)"),
+    db: MemoryDB = Depends(get_db)
+) -> dict:
+    """Get context for LLM: summary first, then unsummarized turns.
     
-    # Use provided timestamp or current time
-    created_at = request.created_at or datetime.now(timezone.utc).isoformat()
+    Args:
+        limit: Maximum number of unsummarized turns to return
+        max_tokens: Override max tokens (optional, for metadata)
+        db: Database name (query param)
+        
+    Returns:
+        List of context messages (summary + unsummarized)
+    """
+    ctx = Context(db)
+    context = ctx.get(limit=limit)
     
-    # Add memory with context-specific properties
-    memory_id = db.add_memory(
-        content=request.content,
-        keywords=["context", request.role],
-        properties={
-            "role": request.role,
-            "node_type": "context",
-            "token_count": str(token_count)
-        },
-        created_at=created_at
-    )
-    
-    return {
-        "id": memory_id, 
-        "content": request.content[:100],
-        "role": request.role,
-        "token_count": token_count,
-        "created_at": created_at
-    }
+    return {"context": context, "count": len(context)}
 
 
 @app.post("/memories/summary")
