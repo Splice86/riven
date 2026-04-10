@@ -342,6 +342,69 @@ async def get_stats(db: MemoryDB = Depends(get_db)) -> dict:
     return {"count": len(results)}
 
 
+@app.get("/embed/model")
+async def get_embedding_model_info() -> dict:
+    """Get information about the embedding model.
+    
+    Returns:
+        Model name, dimension, and other info
+    """
+    from embedding import MODELS, DEFAULT_MODEL_SIZE
+    
+    # Get info from the embedding model if loaded
+    try:
+        from embedding import _default_model
+        if _default_model:
+            return {
+                "model_name": _default_model.model_name,
+                "model_size": _default_model.model_size,
+                "dimension": _default_model.dimension,
+                "device": _default_model.device,
+                "cache_db": _default_model.cache_db,
+            }
+    except Exception:
+        pass
+    
+    # Return defaults
+    return {
+        "model_name": MODELS[DEFAULT_MODEL_SIZE]["name"],
+        "model_size": DEFAULT_MODEL_SIZE,
+        "dimension": MODELS[DEFAULT_MODEL_SIZE]["dimension"],
+    }
+
+
+@app.get("/embed/cache")
+async def get_embedding_cache_info() -> dict:
+    """Get embedding cache statistics.
+    
+    Returns:
+        Cache count and info
+    """
+    try:
+        from embedding import get_embedding_model
+        model = get_embedding_model()
+        return model.get_cache_stats()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
+@app.delete("/embed/cache")
+async def clear_embedding_cache() -> dict:
+    """Clear the embedding cache.
+    
+    Returns:
+        Number of entries deleted
+    """
+    try:
+        from embedding import get_embedding_model
+        model = get_embedding_model()
+        count = model.clear_cache()
+        return {"deleted": count}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/docs/search-syntax")
 async def get_search_syntax() -> dict:
     """Get documentation for the search query syntax.
