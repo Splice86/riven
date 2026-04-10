@@ -178,11 +178,23 @@ class Core:
         return prompt
 
     def _build_prompt(self, user_input: str) -> str:
-        """Build prompt. Currently just returns user input.
+        """Build prompt with memory context."""
+        # Get context from memory
+        context = self._memory.get_context()
         
-        Context handling is done via memory API separately.
-        """
-        return user_input
+        if not context:
+            return user_input
+        
+        # Build context string
+        context_parts = []
+        for msg in context:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            context_parts.append(f"{role}: {content}")
+        
+        context_str = "\n".join(context_parts)
+        
+        return f"Context from previous conversation:\n{context_str}\n\nCurrent user request: {user_input}"
 
     async def run(self, prompt: str) -> Any:
         """Run the agent with the given prompt."""
