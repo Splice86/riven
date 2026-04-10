@@ -108,6 +108,7 @@ class Core:
         """Run agent with streaming events for real-time tool output."""
         last_error = None
         tool_results = []  # Track tool results for memory
+        pending_tool = None  # Buffer for tool call awaiting result
         
         for attempt in range(self.max_retries):
             try:
@@ -116,13 +117,13 @@ class Core:
                 # Use run_stream_events() for real-time tool output
                 async for event in agent.run_stream_events(prompt):
                     if isinstance(event, FunctionToolCallEvent):
-                        # Tool is being called - show it immediately
+                        # Buffer tool call - will print with result
                         args = event.part.args
                         tool_name = event.part.tool_name
-                        print(f"→ {tool_name}{args}", flush=True)
+                        pending_tool = {"name": tool_name, "args": args}
                         
                     elif isinstance(event, FunctionToolResultEvent):
-                        # Tool returned - show result immediately
+                        # Tool returned - print call + result together
                         content = event.result.content
                         tool_name = event.result.tool_name
                         
@@ -131,7 +132,13 @@ class Core:
                             content = content.content
                         content_str = str(content) if content else ""
                         
-                        print(f"← {tool_name}: {content_str}", flush=True)
+                        # Print call + result as one block
+                        if pending_tool:
+                            print(f"→ {pending_tool['name']}{pending_tool['args']}", flush=True)
+                            pending_tool = None
+                        # Indent the result
+                        for line in content_str.split('\n'):
+                            print(f"  {line}", flush=True)
                         
                         # Store for memory
                         tool_results.append({
