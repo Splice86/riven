@@ -138,7 +138,7 @@ class Core:
                         if hasattr(part, 'tool_name'):
                             tool_results = node.tool_call_results or {}
                             tool_result = tool_results.get(part.tool_name)
-                            result_str = str(tool_result) if tool_result else "Done"
+                            result_str = str(tool_result) if tool_result else ""
                             
                             # Log full result to memory with tool name and args
                             args_str = str(part.args) if part.args else "{}"
