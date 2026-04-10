@@ -144,12 +144,8 @@ class Core:
                             args_str = str(part.args) if part.args else "{}"
                             self._memory.add_context("tool", f"{part.tool_name} {args_str}: {result_str}")
                             
-                            # Show command + truncated result to user
-                            if len(result_str) > 500:
-                                display_str = result_str[:500] + f"\n... ({len(result_str) - 500} more chars)"
-                            else:
-                                display_str = result_str
-                            logger.info(f"→ {part.tool_name}{args_str}: {display_str}")
+                            # Show to user
+                            logger.info(f"→ {part.tool_name}{args_str}: {result_str}")
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with module context."""
