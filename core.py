@@ -145,27 +145,19 @@ class Core:
                             print(f"→ {pending_tool['name']}{pending_tool['args']}", flush=True)
                             pending_tool = None
                         
-                        # Truncate to configured max lines for display
-                        lines = content_str.split('\n')
-                        if len(lines) > MAX_OUTPUT_LINES:
-                            lines = lines[:MAX_OUTPUT_LINES] + [f"... (truncated {len(lines) - MAX_OUTPUT_LINES} lines)"]
-                        
-                        # Truncate to 200 chars for memory and display
-                        truncated_str = content_str[:200]
-                        if len(content_str) > 200:
-                            truncated_str += f" ... (truncated, {len(content_str)} total chars)"
-                        
-                        # Store truncated result for memory
+                        # Store FULL result in memory
                         tool_results.append({
                             "tool": tool_name,
-                            "result": truncated_str
+                            "result": content_str
                         })
                         
-                        # Print truncated output to user
-                        for line in lines[:10]:  # Show first 10 lines
+                        # Truncate output for user display
+                        lines = content_str.split('\n')
+                        display_lines = lines[:10]  # Show first 10 lines
+                        for line in display_lines:
                             print(f"  {line}", flush=True)
                         if len(lines) > 10:
-                            print(f"  ... ({len(lines) - 10} more lines)", flush=True)
+                            print(f"  ... ({len(lines) - 10} more lines, {len(content_str)} total chars)", flush=True)
                         
                     elif isinstance(event, AgentRunResultEvent):
                         # Final result - store tool results in memory
