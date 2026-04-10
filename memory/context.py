@@ -29,9 +29,9 @@ except ImportError:
 # Config
 # ============================================================================
 
-LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8010")
+LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8000/v1/")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "sk-dummy")
-LLM_MODEL = os.environ.get("LLM_MODEL", "llama3")
+LLM_MODEL = os.environ.get("LLM_MODEL", "nvidia/MiniMax-M2.5-NVFP4")
 
 MAX_TOKENS_DEFAULT = 32000
 MIN_CLUSTER_SIZE = 3
