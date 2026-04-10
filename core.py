@@ -7,9 +7,8 @@ from typing import Any
 
 import requests
 from pydantic_ai import Agent
+from pydantic_ai import AgentStreamEvent, AgentRunResultEvent
 from pydantic_ai.messages import (
-    AgentStreamEvent,
-    AgentRunResultEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
 )
