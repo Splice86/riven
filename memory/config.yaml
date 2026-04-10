@@ -4,14 +4,14 @@
 # Database settings
 database:
   # Directory for DB files (relative to this file's location)
-  db_dir: "."
+  db_dir: "./database"
   # Default database name (full filename)
   default_db: "default.db"
 
 # Embedding cache settings
 cache:
   # Directory for cache files
-  cache_dir: "."
+  cache_dir: "./database"
   # Cache database filename
   cache_db: "embeddings_cache.db"
 
@@ -32,7 +32,7 @@ context:
   # Max tokens in active context before triggering summarization
   max_tokens: 32000
   # Temporal clustering: new cluster if gap > this many minutes
-  cluster_gap_minutes: 30
+  cluster_gap_minutes: 1
   # Don't summarize messages from the last N minutes (active session)
   cluster_exclude_minutes: 30
   # Minimum cluster size to consider for summarization
