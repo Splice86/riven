@@ -143,8 +143,14 @@ class Core:
                         if pending_tool:
                             print(f"→ {pending_tool['name']}{pending_tool['args']}", flush=True)
                             pending_tool = None
+                        
+                        # Truncate to 200 lines for safety
+                        lines = content_str.split('\n')
+                        if len(lines) > 200:
+                            lines = lines[:200] + [f"... (truncated {len(lines) - 200} lines)"]
+                        
                         # Indent the result
-                        for line in content_str.split('\n'):
+                        for line in lines:
                             print(f"  {line}", flush=True)
                         
                         # Store for memory
