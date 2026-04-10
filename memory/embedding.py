@@ -1,10 +1,14 @@
 """Embedding model using Microsoft's harrier-oss-v1 with SQLite caching."""
 
+import os
 import sqlite3
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 from typing import Optional
+
+# HuggingFace token for faster downloads and higher rate limits
+HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
 # Available models
 MODELS = {
@@ -59,7 +63,11 @@ class EmbeddingModel:
         # Load model
         print(f"Loading {self.model_name} on {self.device}...")
         try:
-            self.model = SentenceTransformer(self.model_name, device=self.device)
+            self.model = SentenceTransformer(
+                self.model_name, 
+                device=self.device,
+                token=HF_TOKEN
+            )
         except RuntimeError as e:
             if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
                 print(f"Warning: CUDA failed ({e}), falling back to CPU")

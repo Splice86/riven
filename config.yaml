@@ -1,0 +1,33 @@
+# Riven Configuration
+# This file is gitignored - add local overrides to config_local.yaml
+
+# Memory API settings
+memory_api:
+  url: "http://192.168.1.11:8030"
+  db_name: "riven"
+
+# LLM settings
+llm:
+  url: "http://192.168.1.11:8010"
+  api_key: "sk-dummy"
+  model: "llama3"
+  # Context window size (leave room for system prompt + tools)
+  # llama3 = 8k, llama3.1 = 128k
+  context_window: 128000
+
+# Context / Summarization settings
+context:
+  # Max tokens in active context before triggering summarization
+  max_tokens: 32000
+  # Fallback: max message count (used if token counting fails or for quick checks)
+  max_messages: 50
+  # Temporal clustering: new cluster if gap > this many minutes
+  cluster_gap_minutes: 30
+  # Don't summarize messages from the last N minutes (active session)
+  cluster_exclude_minutes: 30
+
+# Embedding settings
+embedding:
+  model_size: "27b"  # 270m, 0.6b, or 27b
+  force_cpu: true
+  cache_db: "memory/embeddings_cache.db"

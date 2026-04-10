@@ -1,26 +1,104 @@
 """Context system for agent conversations - memory-backed."""
 
+import os
+import yaml
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
 from memory_manager import MemoryManager
 
-# Try to import config
+# Try to import tiktoken for token counting
 try:
-    from config import (
-        DEFAULT_DB,
-        CONTEXT_MAX_MESSAGES,
-        CONTEXT_KEEP_RECENT,
-        CONTEXT_CLUSTER_GAP_MINUTES,
-        CONTEXT_CLUSTER_EXCLUDE_MINUTES
-    )
+    import tiktoken
+    tiktoken_available = True
 except ImportError:
-    DEFAULT_DB = "riven"
-    CONTEXT_MAX_MESSAGES = 50
-    CONTEXT_KEEP_RECENT = 10
-    CONTEXT_CLUSTER_GAP_MINUTES = 30
-    CONTEXT_CLUSTER_EXCLUDE_MINUTES = 30
+    tiktoken_available = False
+
+
+def _load_config() -> dict:
+    """Load config from YAML file.
+    
+    Priority: config_local.yaml > config.yaml > defaults
+    """
+    defaults = {
+        "memory_api": {"url": "http://127.0.0.1:8030", "db_name": "riven"},
+        "llm": {"url": "http://127.0.0.1:8010", "api_key": "sk-dummy", "model": "llama3", "context_window": 128000},
+        "context": {
+            "max_tokens": 32000,
+            "max_messages": 50,
+            "cluster_gap_minutes": 30,
+            "cluster_exclude_minutes": 30
+        },
+        "embedding": {"model_size": "27b", "force_cpu": True, "cache_db": "memory/embeddings_cache.db"}
+    }
+    
+    config = defaults.copy()
+    
+    # Try config.yaml first
+    for config_file in ["config_local.yaml", "config.yaml"]:
+        if os.path.exists(config_file):
+            with open(config_file) as f:
+                file_config = yaml.safe_load(f)
+                if file_config:
+                    # Merge file config into config (file takes priority)
+                    for section, values in file_config.items():
+                        if section in config:
+                            if isinstance(config[section], dict) and isinstance(values, dict):
+                                config[section].update(values)
+                            else:
+                                config[section] = values
+                        else:
+                            config[section] = values
+    
+    return config
+
+
+# Load config once at module import
+CONFIG = _load_config()
+
+# Aliases for backwards compatibility / convenience
+DEFAULT_DB = CONFIG["memory_api"]["db_name"]
+CONTEXT_MAX_TOKENS = CONFIG["context"]["max_tokens"]
+CONTEXT_MAX_MESSAGES = CONFIG["context"]["max_messages"]
+CONTEXT_CLUSTER_GAP_MINUTES = CONFIG["context"]["cluster_gap_minutes"]
+CONTEXT_CLUSTER_EXCLUDE_MINUTES = CONFIG["context"]["cluster_exclude_minutes"]
+
+
+
+def count_tokens(text: str, model: str = "cl100k_base") -> int:
+    """Count tokens in text using tiktoken.
+    
+    Args:
+        text: Text to count tokens for
+        model: Tiktoken model to use (cl100k_base is GPT-4/3.5 tokenizer, good enough for estimation)
+        
+    Returns:
+        Token count
+    """
+    if not tiktoken_available:
+        # Fallback: rough estimate (~4 chars per token)
+        return len(text) // 4
+    
+    try:
+        encoding = tiktoken.get_encoding(model)
+        return len(encoding.encode(text))
+    except Exception:
+        return len(text) // 4
+
+
+def count_message_tokens(role: str, content: str) -> int:
+    """Count tokens for a message (approximates OpenAI format).
+    
+    Args:
+        role: Message role (user, assistant, system)
+        content: Message content
+        
+    Returns:
+        Token count including message formatting overhead
+    """
+    # ~4 tokens overhead per message (role labels, formatting)
+    return count_tokens(content) + 4
 
 
 @dataclass
@@ -37,23 +115,26 @@ class ActivityLog:
     """Conversation history backed by MemoryManager.
     
     Messages are stored in the memory API with node_type=context.
-    When count exceeds max_messages, older ones are clustered and summarized.
+    When token count exceeds max_tokens, older messages are clustered by
+    temporal proximity and summarized using the LLM.
     """
     
     def __init__(
         self,
+        max_tokens: int = CONTEXT_MAX_TOKENS,
         max_messages: int = CONTEXT_MAX_MESSAGES,
         memory_manager: Optional[MemoryManager] = None,
-        keep_recent: int = CONTEXT_KEEP_RECENT,
-        db_name: str = DEFAULT_DB
+        db_name: str = DEFAULT_DB,
+        cluster_gap: int = CONTEXT_CLUSTER_GAP_MINUTES,
+        cluster_exclude: int = CONTEXT_CLUSTER_EXCLUDE_MINUTES
     ):
-        self._max = max_messages
-        self._keep_recent = keep_recent  # Keep this many un-summarized
+        self._max_tokens = max_tokens
+        self._max_messages = max_messages
         self._db_name = db_name
         self._manager = memory_manager or MemoryManager(db_name=db_name)
         self._recent_ids: list[int] = []  # Track recent message IDs
-        self._cluster_gap = CONTEXT_CLUSTER_GAP_MINUTES
-        self._cluster_exclude = CONTEXT_CLUSTER_EXCLUDE_MINUTES
+        self._cluster_gap = cluster_gap
+        self._cluster_exclude = cluster_exclude
     
     @property
     def manager(self) -> MemoryManager:
@@ -109,15 +190,30 @@ class ActivityLog:
     def add_system(self, content: str, created_at: str | None = None) -> int:
         return self.add("system", content, created_at=created_at)
     
+    def _get_token_count(self, memories: list) -> int:
+        """Get total token count for a list of memories.
+        
+        Args:
+            memories: List of Memory objects
+            
+        Returns:
+            Total token count
+        """
+        total = 0
+        for m in memories:
+            total += count_message_tokens(m.properties.get("role", "user"), m.content)
+        return total
+    
     def _maybe_cluster(self) -> None:
         """Check if we need to summarize old messages.
         
         Logic:
-        1. Get count of recent UNSUMMARIZED memories
-        2. If over threshold, try temporal clustering
-        3. If cluster found, summarize it
-        4. Else, reduce time delta until we get a cluster
-        5. Mark summarized, repeat until under threshold
+        1. Get all UNSUMMARIZED context messages
+        2. Calculate total token count
+        3. If over threshold, try temporal clustering
+        4. If cluster found, summarize it
+        5. Else, reduce time gap until we get a cluster
+        6. Mark summarized, repeat until under token threshold
         """
         # Keep summarizing until we're under the threshold
         while True:
@@ -129,23 +225,18 @@ class ActivityLog:
             
             # Sort by time
             sorted_memories = sorted(result.memories, key=lambda m: m.created_at)
-            total = len(sorted_memories)
+            total_tokens = self._get_token_count(sorted_memories)
+            total_messages = len(sorted_memories)
             
-            # If under threshold, done
-            if total <= self._max:
+            # If under both thresholds, done
+            if total_tokens <= self._max_tokens and total_messages <= self._max_messages:
                 return
             
-            # Calculate how many we could summarize (keep recent ones)
-            if total <= self._keep_recent:
+            # If we have too many tokens but very few messages, still summarize
+            if total_messages < 3:
                 return
             
-            # Get messages to potentially summarize (everything except recent)
-            to_summarize = sorted_memories[:-self._keep_recent] if self._keep_recent > 0 else sorted_memories
-            
-            if len(to_summarize) < 3:
-                return
-            
-            print(f"Context at {total} unsummarized, checking for clusters...")
+            print(f"Context at {total_tokens} tokens ({total_messages} msgs), checking for clusters...")
             
             # Try temporal clustering with decreasing time gaps
             memory_ids = None
@@ -159,15 +250,13 @@ class ActivityLog:
                     query_filter="p:node_type=context AND NOT p:summarized=true"
                 )
                 
-                # Find cluster that overlaps with our to_summarize messages
+                # Find a cluster to summarize
                 for cluster in clusters:
                     cluster_ids = set(cluster.memory_ids)
-                    summarize_ids = set(m.id for m in to_summarize)
                     
-                    # If cluster overlaps with what we want to summarize
-                    if cluster_ids & summarize_ids:
-                        memory_ids = list(cluster_ids & summarize_ids)
-                        break
+                    # Take this cluster
+                    memory_ids = list(cluster_ids)
+                    break
                 
                 if memory_ids:
                     break
@@ -175,7 +264,7 @@ class ActivityLog:
             
             # If no temporal cluster found, just take oldest ones
             if not memory_ids:
-                memory_ids = [m.id for m in to_summarize[:min(10, len(to_summarize))]]
+                memory_ids = [m.id for m in sorted_memories[:min(10, len(sorted_memories))]]
             
             if len(memory_ids) < 3:
                 return

@@ -779,7 +779,7 @@ class SearchParser:
                     # SQLite CAST('negative' AS REAL) returns 0, so we need to check
                     # that the stored value looks numeric (digits, decimal, negative sign)
                     sql = f"""EXISTS (
-                        SELECT 1 FROM memory_properties mp 
+                        SELECT 1 FROM properties mp 
                         WHERE mp.memory_id = m.id AND mp.key = ? 
                         AND mp.value GLOB '*[0-9]*'
                         AND mp.value GLOB '*[0-9.-]*'
@@ -793,7 +793,7 @@ class SearchParser:
             elif '=' in value:
                 # Simple key=value format
                 prop_key, prop_val = value.split('=', 1)
-                sql = " EXISTS (SELECT 1 FROM memory_properties mp WHERE mp.memory_id = m.id AND mp.key = ? AND mp.value = ?)"
+                sql = " EXISTS (SELECT 1 FROM properties mp WHERE mp.memory_id = m.id AND mp.key = ? AND mp.value = ?)"
                 params = [prop_key.lower(), prop_val]
             else:
                 sql = " 1=1"
@@ -1080,7 +1080,7 @@ class MemorySearcher:
                 
                 # Get properties for this memory
                 props = conn.execute(
-                    "SELECT key, value FROM memory_properties WHERE memory_id = ?",
+                    "SELECT key, value FROM properties WHERE memory_id = ?",
                     (row['id'],)
                 ).fetchall()
                 properties_dict = {p['key']: p['value'] for p in props}

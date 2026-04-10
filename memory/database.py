@@ -18,8 +18,32 @@ except ImportError:
         def get(self, text: str) -> np.ndarray:
             return np.zeros(self.dimension, dtype=np.float32)
 
+# Try to import tiktoken for token counting
+try:
+    import tiktoken
+    tiktoken_available = True
+except ImportError:
+    tiktoken_available = False
+
 
 DEFAULT_DB_PATH = "memory.db"
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken, fallback to rough estimate."""
+    if not text:
+        return 0
+    
+    if tiktoken_available:
+        try:
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        except Exception:
+            pass
+    
+    # Fallback: ~4 chars per token
+    return len(text) // 4
+
 
 
 class MemoryDB:
@@ -61,12 +85,15 @@ class MemoryDB:
         # Use provided timestamp or current time
         created_at = created_at or datetime.now(timezone.utc).isoformat()
         
+        # Compute token count
+        token_count = _count_tokens(content)
+        
         with sqlite3.connect(self.db_path) as conn:
             # Insert memory
             cursor = conn.execute(
-                """INSERT INTO memories (content, embedding, created_at, last_updated)
-                   VALUES (?, ?, ?, ?)""",
-                (content, embedding.tobytes(), created_at, created_at)
+                """INSERT INTO memories (content, embedding, created_at, last_updated, token_count)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (content, embedding.tobytes(), created_at, created_at, token_count)
             )
             memory_id = cursor.lastrowid
             
@@ -103,7 +130,7 @@ class MemoryDB:
                     key_lower = key.lower().strip()
                     if key_lower:
                         conn.execute(
-                            """INSERT OR REPLACE INTO memory_properties (memory_id, key, value)
+                            """INSERT OR REPLACE INTO properties (memory_id, key, value)
                                VALUES (?, ?, ?)""",
                             (memory_id, key_lower, value)
                         )
@@ -181,7 +208,7 @@ class MemoryDB:
             # Get properties
             properties = {
                 r[0]: r[1] for r in conn.execute(
-                    "SELECT key, value FROM memory_properties WHERE memory_id = ?",
+                    "SELECT key, value FROM properties WHERE memory_id = ?",
                     (memory_id,)
                 ).fetchall()
             }
@@ -216,7 +243,7 @@ class MemoryDB:
             
             # Delete in correct order (foreign keys)
             conn.execute("DELETE FROM memory_keywords WHERE memory_id = ?", (memory_id,))
-            conn.execute("DELETE FROM memory_properties WHERE memory_id = ?", (memory_id,))
+            conn.execute("DELETE FROM properties WHERE memory_id = ?", (memory_id,))
             conn.execute("DELETE FROM memory_links WHERE source_id = ? OR target_id = ?", (memory_id, memory_id))
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
@@ -249,7 +276,7 @@ class MemoryDB:
                 for key, value in properties.items():
                     # Upsert property
                     conn.execute(
-                        """INSERT OR REPLACE INTO memory_properties (memory_id, key, value) 
+                        """INSERT OR REPLACE INTO properties (memory_id, key, value) 
                            VALUES (?, ?, ?)""",
                         (memory_id, key, value)
                     )
@@ -286,7 +313,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 embedding BLOB,
                 created_at TEXT NOT NULL,
                 last_updated TEXT NOT NULL,
-                last_accessed TEXT
+                last_accessed TEXT,
+                token_count INTEGER DEFAULT 0
             )
         """)
         
@@ -308,9 +336,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         """)
         
-        # Memory properties (key-value store)
+        # Memory properties (key-value store) - renamed from memory_properties
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS memory_properties (
+            CREATE TABLE IF NOT EXISTS properties (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
                 key TEXT NOT NULL,
@@ -318,6 +346,36 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 UNIQUE(memory_id, key)
             )
         """)
+        
+        # Handle migration: rename old table if it exists (for existing databases)
+        # Check if old table exists
+        old_table_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_properties'"
+        ).fetchone()
+        
+        if old_table_exists:
+            # Rename old table
+            conn.execute("""
+                ALTER TABLE memory_properties RENAME TO properties_old
+            """)
+            
+            # Copy data from old table
+            conn.execute("""
+                INSERT INTO properties (memory_id, key, value)
+                SELECT memory_id, key, value FROM properties_old
+            """)
+            
+            # Drop old table
+            conn.execute("DROP TABLE properties_old")
+        
+        # Add token_count column if it doesn't exist (for existing databases)
+        # Check if column exists
+        col_exists = conn.execute(
+            "SELECT name FROM pragma_table_info('memories') WHERE name='token_count'"
+        ).fetchone()
+        
+        if not col_exists:
+            conn.execute("ALTER TABLE memories ADD COLUMN token_count INTEGER DEFAULT 0")
         
         # Memory links (directional relationships)
         conn.execute("""
@@ -334,7 +392,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_mk_memory ON memory_keywords(memory_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_mk_keyword ON memory_keywords(keyword_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_keyword_name ON keywords(name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_mp_memory_key ON memory_properties(memory_id, key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mp_memory_key ON properties(memory_id, key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_links_source ON memory_links(source_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_links_target ON memory_links(target_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_links_type ON memory_links(link_type)")

@@ -1,12 +1,20 @@
 """Memory API server - FastAPI endpoints for memory storage and search."""
 
+import os
 from fastapi import FastAPI, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime, timezone
 
 from database import MemoryDB, init_db
 import numpy as np
-import os
+
+# Try to import tiktoken for token counting
+try:
+    import tiktoken
+    tiktoken_available = True
+except ImportError:
+    tiktoken_available = False
 
 app = FastAPI(title="Riven Memory API")
 
@@ -72,6 +80,13 @@ class SearchRequest(BaseModel):
 class EmbedRequest(BaseModel):
     """Request to get embedding for text."""
     text: str
+
+
+class AddContextRequest(BaseModel):
+    """Request to add a context message."""
+    content: str
+    role: str  # "user", "assistant", "system", "tool"
+    created_at: str | None = None  # Optional timestamp
 
 
 # Database dependency - gets DB from query param
@@ -140,6 +155,80 @@ async def add_memory(request: AddMemoryRequest, db: MemoryDB = Depends(get_db)) 
     )
     
     return {"id": memory_id, "content": request.content[:100]}
+
+
+def _count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken, fallback to rough estimate."""
+    if not text:
+        return 0
+    
+    if tiktoken_available:
+        try:
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        except Exception:
+            pass
+    
+    # Fallback: ~4 chars per token
+    return len(text) // 4
+
+
+
+def _count_message_tokens(role: str, content: str) -> int:
+    """Count tokens for a message including overhead."""
+    return _count_tokens(content) + 4  # ~4 tokens for role/formatting
+
+
+@app.post("/memories/context")
+async def add_context(request: AddContextRequest, db: MemoryDB = Depends(get_db)) -> dict:
+    """Add a context message (conversation turn).
+    
+    This endpoint is optimized for adding conversation messages.
+    It automatically:
+    - Adds keyword "context"
+    - Adds property "role" with the message role
+    - Computes and stores token count
+    
+    Args:
+        request: Context content and role
+        db: Database name (query param)
+        
+    Returns:
+        The ID of the created memory, plus token count
+    """
+    # Validate role
+    valid_roles = {"user", "assistant", "system", "tool"}
+    if request.role not in valid_roles:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid role. Must be one of: {valid_roles}"
+        )
+    
+    # Compute token count
+    token_count = _count_message_tokens(request.role, request.content)
+    
+    # Use provided timestamp or current time
+    created_at = request.created_at or datetime.now(timezone.utc).isoformat()
+    
+    # Add memory with context-specific properties
+    memory_id = db.add_memory(
+        content=request.content,
+        keywords=["context", request.role],
+        properties={
+            "role": request.role,
+            "node_type": "context",
+            "token_count": str(token_count)
+        },
+        created_at=created_at
+    )
+    
+    return {
+        "id": memory_id, 
+        "content": request.content[:100],
+        "role": request.role,
+        "token_count": token_count,
+        "created_at": created_at
+    }
 
 
 @app.post("/memories/summary")
