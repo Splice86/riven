@@ -57,12 +57,15 @@ def print_banner() -> None:
             else:
                 print()
         
+        # Code Hammer subtitle in smaller red text
+        print(f"{RED}CODE HAMMER{RESET}")
+        
         # Tagline
         print(f"{CYAN}┌{'─' * 40}┐{RESET}")
         # Calculate visible width (account for combining chars)
         import unicodedata
         visible_len = len(unicodedata.normalize('NFKC', TAGLINE))
-        print(f"{CYAN}│{RESET}{MAGENTA}        {TAGLINE}{CYAN}{' ' * (40 - visible_len)+8}{RESET}{CYAN}│{RESET}")
+        print(f"{CYAN}│{RESET}{MAGENTA}        {TAGLINE}{CYAN}{' ' * (40 - visible_len+14)}{RESET}{CYAN}│{RESET}")
         print(f"{CYAN}└{'─' * 40}┘{RESET}")
         
     except ImportError:
