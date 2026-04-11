@@ -56,7 +56,7 @@ def print_banner() -> None:
         
         # Tagline
         print(f"{CYAN}┌{'─' * 40}┐{RESET}")
-        print(f"{CYAN}│{RESET}  {MAGENTA}AI Code Agent{CYAN}                    {RESET}{CYAN}│{RESET}")
+        print(f"{CYAN}│{RESET}  {RED}Breaking Things{PURPLE} | {MAGENTA}Code Weapon{CYAN}          {RESET}{CYAN}│{RESET}")
         print(f"{CYAN}└{'─' * 40}┘{RESET}")
         
     except ImportError:
