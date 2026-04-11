@@ -76,7 +76,7 @@ def main() -> None:
     parser.add_argument(
         "--core", "-c",
         default="default",
-        help=f"Core to use (default: default). Available: {list_cores()}"
+        help=f"Core to use (default: code_hammer). Available: {list_cores()}"
     )
     args = parser.parse_args()
     
