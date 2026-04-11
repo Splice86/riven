@@ -77,8 +77,6 @@ class DocumentManager:
     def open(
         self,
         path: str,
-        show_line_numbers: bool = True,
-        max_lines: Optional[int] = None
     ) -> str:
         """Open a document and add to context.
         
@@ -88,8 +86,6 @@ class DocumentManager:
         
         Args:
             path: Path to the file
-            show_line_numbers: Deprecated, kept for compatibility
-            max_lines: Deprecated, kept for compatibility
             
         Returns:
             Confirmation message
@@ -374,13 +370,11 @@ def get_module():
         
         Args:
             path: Path to the file to open.
-            show_line_numbers: Include line numbers in output (default: True)
-            max_lines: Maximum lines to show (None for all, use 200 for auto-truncate)
             
         Returns:
-            File content with line numbers
+            Confirmation message
         """
-        return manager.open(path, show_line_numbers, max_lines)
+        return manager.open(path)
     
     async def get_lines(path: str, start: int = 1, end: Optional[int] = None) -> str:
         """Get a specific range of lines from an open file.
