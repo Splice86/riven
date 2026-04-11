@@ -9,11 +9,14 @@ from core import get_core, list_cores, get_core_display_name, CONFIG
 _processing = False
 
 
-def get_prompt_prefix(core_name: str, session_id: str = None) -> str:
-    """Get the prompt prefix with core name and session ID in cyan."""
-    if session_id:
-        return f"\033[96mRiven - {core_name} [{session_id}]\033[0m"
+def get_prompt_prefix(core_name: str) -> str:
+    """Get the prompt prefix with core name in cyan."""
     return f"\033[96mRiven - {core_name}\033[0m"
+
+
+def get_session_line(session_id: str) -> str:
+    """Get session ID line in dim grey."""
+    return f"\033[90m[{session_id}]\033[0m"
 
 
 TAGLINE = "⬡ ̸S̵I̷G̴N̷A̵L̷S̴ ̷◆̷ ̷T̸O̶ ̵T̶H̷E̴ ̷V̶O̴I̵D̸ ⬡"
@@ -84,7 +87,7 @@ async def run_repl(core_name: str) -> None:
     core = get_core(core_name)
     display_name = get_core_display_name(core_name)
     session_id = core.get_session_id()
-    prompt_prefix = get_prompt_prefix(display_name, session_id)
+    prompt_prefix = get_prompt_prefix(display_name)
     
     print(f"Using core: {display_name}")
     print(f"Tools loaded: {list(core._modules.all().keys())}")
@@ -98,11 +101,13 @@ async def run_repl(core_name: str) -> None:
             if _processing:
                 # Wait for previous operation to finish
                 print("\n⏳ Still processing...\n")
+                print(f"{get_session_line(session_id)}")
                 print(f"{prompt_prefix} > ", end="")
                 continue
             
             _processing = True
-            prompt = input(f"{prompt_prefix} > ").strip()
+            session_line = get_session_line(session_id)
+            prompt = input(f"{session_line}\n{prompt_prefix} > ").strip()
             
             if not prompt:
                 _processing = False
@@ -117,9 +122,10 @@ async def run_repl(core_name: str) -> None:
             
             # Handle /clear command - reset session
             if prompt.strip().lower() == '/clear':
-                new_session = core.clear_session()
-                print(f"✓ Session cleared. New session: {new_session[:8]}...")
+                session_id = core.clear_session()
+                print(f"✓ Session cleared. New session: {session_id}")
                 _processing = False
+                print(f"{get_session_line(session_id)}")
                 print(f"{prompt_prefix} > ", end="")
                 continue
             
@@ -139,6 +145,7 @@ async def run_repl(core_name: str) -> None:
             _processing = False
             core.cancel()
             print("\n^C Interrupted")
+            print(f"{get_session_line(session_id)}")
             print(f"{prompt_prefix} > ", end="")
         except asyncio.CancelledError:
             # Clean exit - don't print error
