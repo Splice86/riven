@@ -3,7 +3,7 @@
 import asyncio
 import argparse
 
-from core import get_core, list_cores
+from core import get_core, list_cores, CONFIG
 
 # Flag to track if we're currently processing a request
 _processing = False
@@ -133,11 +133,14 @@ def main() -> None:
     """Main entry point for CLI."""
     import logging
     
+    # Get default core from config
+    default_core = CONFIG.get('default_core', 'code_hammer')
+    
     parser = argparse.ArgumentParser(description="Riven AI Agent")
     parser.add_argument(
         "--core", "-c",
-        default="code_hammer",
-        help=f"Core to use (default: code_hammer). Available: {list_cores()}"
+        default=default_core,
+        help=f"Core to use (default: {default_core}). Available: {list_cores()}"
     )
     args = parser.parse_args()
     

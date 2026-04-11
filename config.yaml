@@ -4,6 +4,9 @@
 # Cores are loaded from the cores/ folder
 # Each .yaml file in cores/ defines a core
 
+# Default core to use
+default_core: code_hammer
+
 # Memory API settings
 memory_api:
   url: "http://100.90.58.38:8030"
