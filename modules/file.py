@@ -82,7 +82,7 @@ class DocumentManager:
         
         Once opened, the file content is available in the system prompt.
         Use get_lines, replace_lines, insert_lines, or remove_lines to modify.
-        Use save_file to write changes to disk.
+        All edits auto-save automatically.
         
         Args:
             path: Path to the file
@@ -164,7 +164,7 @@ class DocumentManager:
         
         return "\n".join(output_lines)
     
-    def insert_lines(self, path: str, after_line: int, new_content: str, auto_save: bool = True) -> str:
+    def insert_lines(self, path: str, after_line: int, new_content: str) -> str:
         """Insert new content after a specific line.
         
         Note: You must provide correct indentation in new_content. The function
@@ -175,7 +175,6 @@ class DocumentManager:
             path: Path to the file.
             after_line: Insert after this line number.
             new_content: Content to insert.
-            auto_save: If True, automatically save after editing (default: True).
         """
         abs_path = os.path.abspath(path)
         
@@ -193,14 +192,11 @@ class DocumentManager:
         
         doc.lines[after_line:after_line] = new_lines
         doc.content = ''.join(doc.lines)
-        
-        if auto_save:
-            self.save(abs_path)
-        doc.content = ''.join(doc.lines)
+        self.save(abs_path)
         
         return f"Inserted {len(new_lines)} lines after line {after_line}"
     
-    def remove_lines(self, path: str, start: int, end: int, auto_save: bool = True) -> str:
+    def remove_lines(self, path: str, start: int, end: int) -> str:
         """Remove a range of lines.
         
         Note: This removes entire lines only.
@@ -209,7 +205,6 @@ class DocumentManager:
             path: Path to the file.
             start: Start line number (1-indexed).
             end: End line number (inclusive).
-            auto_save: If True, automatically save after editing (default: True).
         """
         abs_path = os.path.abspath(path)
         
@@ -226,9 +221,7 @@ class DocumentManager:
         num_removed = end - start + 1
         del doc.lines[start-1:end]
         doc.content = ''.join(doc.lines)
-        
-        if auto_save:
-            self.save(abs_path)
+        self.save(abs_path)
         
         return f"Removed lines {start}-{end} from {os.path.basename(path)} ({num_removed} lines)"
     
@@ -237,7 +230,6 @@ class DocumentManager:
         path: str,
         old_text: str,
         new_text: str,
-        auto_save: bool = True
     ) -> str:
         """Replace text anywhere in file using fuzzy matching.
         
@@ -248,7 +240,6 @@ class DocumentManager:
             path: Path to the file.
             old_text: Text to find (will use fuzzy matching).
             new_text: Replacement text.
-            auto_save: If True, automatically save after editing (default: True).
             
         Returns:
             Confirmation message with what was replaced.
@@ -280,8 +271,7 @@ class DocumentManager:
                     new_lines[-1] += '\n'
                 doc.lines[start:end] = new_lines
                 found = True
-                if auto_save:
-                    self.save(abs_path)
+                self.save(abs_path)
                 return f"Replaced lines {start+1}-{end} (fuzzy match {score:.0%})"
             else:
                 # Show what's actually in the file to help model
@@ -295,9 +285,7 @@ class DocumentManager:
                 )
         
         doc.content = ''.join(doc.lines)
-        
-        if auto_save:
-            self.save(abs_path)
+        self.save(abs_path)
         
         return f"Replaced text"
     
@@ -389,68 +377,46 @@ def get_module():
         """
         return manager.get_lines(path, start, end)
     
-    async def insert_lines(path: str, after_line: int, new_content: str, auto_save: bool = True) -> str:
+    async def insert_lines(path: str, after_line: int, new_content: str) -> str:
         """Insert new content after a specific line.
         
         Args:
             path: Path to the file.
             after_line: Insert after this line number.
             new_content: Content to insert.
-            auto_save: If True, automatically save after editing (default: True).
             
         Returns:
             Confirmation message
         """
-        return manager.insert_lines(path, after_line, new_content, auto_save)
+        return manager.insert_lines(path, after_line, new_content)
     
-    async def remove_lines(path: str, start: int, end: int, auto_save: bool = True) -> str:
+    async def remove_lines(path: str, start: int, end: int) -> str:
         """Remove a range of lines.
         
         Args:
             path: Path to the file.
             start: Start line number (1-indexed).
             end: End line number (inclusive).
-            auto_save: If True, automatically save after editing (default: True).
             
         Returns:
             Confirmation message
         """
-        return manager.remove_lines(path, start, end, auto_save)
+        return manager.remove_lines(path, start, end)
     
-    async def replace_text(path: str, old_text: str, new_text: str, auto_save: bool = True) -> str:
+    async def replace_text(path: str, old_text: str, new_text: str) -> str:
         """Replace text anywhere in file using fuzzy matching.
         
         Args:
             path: Path to the file.
             old_text: Text to find (uses fuzzy matching).
             new_text: Replacement text.
-            auto_save: If True, automatically save after editing (default: True).
             
         Returns:
             Confirmation message with what was replaced.
         """
-        return manager.replace_text(path, old_text, new_text, auto_save)
+        return manager.replace_text(path, old_text, new_text)
     
-    async def save_file(path: str) -> str:
-        """Save an open file's in-memory changes to disk.
-        
-        Args:
-            path: Path to the file to save.
-            
-        Returns:
-            Confirmation message
-        """
-        return manager.save(path)
     
-    async def save_all_files() -> str:
-        """Save all open files to disk.
-        
-        Returns:
-            Confirmation message
-        """
-        return manager.save_all()
-    
-    async def close_file(path: str) -> str:
         """Close a file and remove it from the context.
         
         Args:
@@ -487,24 +453,22 @@ def get_module():
 The open files and their line numbers are automatically included in your system prompt as {file}. 
 You should use this context instead of calling get_lines() or re-opening files.
 
-### Workflow: Open → Edit → Save → Close
+### Workflow: Open → Edit → Close
 1. **open_file(path)**: Opens a file (do this first)
-2. **replace_text(path, old_text, new_text)**: Replace text anywhere using fuzzy matching
-3. **insert_lines(path, after_line, new_content)**: Insert new lines after a line
-4. **remove_lines(path, start, end)**: Delete lines by number
-5. **save_file(path)**: Write changes to disk
-6. **close_file(path)**: Close the file
+2. **replace_text(path, old_text, new_text)**: Replace text anywhere using fuzzy matching (auto-saves)
+3. **insert_lines(path, after_line, new_content)**: Insert new lines after a line (auto-saves)
+4. **remove_lines(path, start, end)**: Delete lines by number (auto-saves)
+5. **close_file(path)**: Close the file
 
 ### Tips
 - Check {file} in system prompt for open file line numbers
 - Don't re-open files - they're already in your context
 - replace_text uses fuzzy matching - just give it the text to find
-- Always save_file after edits before closing
+- All edits auto-save automatically
 ### Example
 ```
 open_file("main.py")
 replace_text("main.py", "old_function", "new_function")  # Fuzzy find & replace
-save_file("main.py")
 close_file("main.py")
 ```"""
         
@@ -545,8 +509,6 @@ close_file("main.py")
             "insert_lines": insert_lines,
             "remove_lines": remove_lines,
             "replace_text": replace_text,
-            "save_file": save_file,
-            "save_all_files": save_all_files,
             "close_file": close_file,
             "list_open_files": list_open_files,
         },
