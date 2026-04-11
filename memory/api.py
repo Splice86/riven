@@ -322,17 +322,19 @@ async def new_session(db: MemoryDB = Depends(get_db)) -> dict:
 async def cluster_context(
     target_tokens: int = Query(5000, description="Target token count for summarized context"),
     min_live_tokens: int = Query(1000, description="Minimum tokens to keep unsummarized"),
+    max_gap: int = Query(30, description="Max seconds between messages to cluster together"),
     session: str | None = Query(None, description="Session ID to cluster (optional)"),
     db: MemoryDB = Depends(get_db)
 ) -> dict:
     """Force temporal clustering to reduce context to target token count.
     
-    Continuously summarizes oldest memories until context is reduced to target,
-    while keeping at least min_live_tokens in unsummarized form.
+    Groups messages by temporal proximity (within max_gap seconds) and summarizes
+    oldest groups first, while keeping at least min_live_tokens in unsummarized form.
     
     Args:
         target_tokens: Target token count (default 5000)
         min_live_tokens: Minimum tokens to keep live (default 1000)
+        max_gap: Max seconds between messages to cluster (default 30)
         session: Optional session to cluster
         
     Returns:
@@ -340,7 +342,7 @@ async def cluster_context(
     """
     from context import Context
     ctx = Context(db)
-    return ctx.force_cluster(target_tokens, min_live_tokens, session)
+    return ctx.force_cluster(target_tokens, min_live_tokens, max_gap, session)
 
 
 @app.post("/memories/summary")

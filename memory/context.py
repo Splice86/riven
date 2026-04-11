@@ -384,19 +384,59 @@ class Context:
         unsummarized.sort(key=lambda m: m["created_at"])
         return unsummarized[-limit:]
     
-    def force_cluster(self, target_tokens: int = 5000, min_live_tokens: int = 1000, session: str = None) -> dict:
+    def _group_by_time(self, memories: list[dict], max_gap: int = 30) -> list[list[dict]]:
+        """Group memories by temporal proximity.
+        
+        Args:
+            memories: List of memories sorted by created_at
+            max_gap: Max seconds between messages to be in same group
+            
+        Returns:
+            List of groups (each group is a list of memories)
+        """
+        if not memories:
+            return []
+        
+        from datetime import datetime
+        
+        groups = []
+        current_group = [memories[0]]
+        
+        for i in range(1, len(memories)):
+            prev_time = datetime.fromisoformat(memories[i-1]["created_at"].replace("Z", "+00:00"))
+            curr_time = datetime.fromisoformat(memories[i]["created_at"].replace("Z", "+00:00"))
+            
+            # Calculate gap in seconds
+            gap = (curr_time - prev_time).total_seconds()
+            
+            if abs(gap) <= max_gap:
+                # Within gap - add to current group
+                current_group.append(memories[i])
+            else:
+                # Gap too large - start new group
+                groups.append(current_group)
+                current_group = [memories[i]]
+        
+        # Don't forget the last group
+        if current_group:
+            groups.append(current_group)
+        
+        return groups
+    
+    def force_cluster(self, target_tokens: int = 5000, min_live_tokens: int = 1000, max_gap: int = 30, session: str = None) -> dict:
         """Force temporal clustering to reduce context to target token count.
         
-        Continuously summarizes oldest memories until context is reduced to target,
-        while keeping at least min_live_tokens in unsummarized form.
+        Groups messages by temporal proximity (within max_gap seconds) and summarizes
+        oldest groups first, while keeping at least min_live_tokens in unsummarized form.
         
         Args:
             target_tokens: Target token count for summarized context (default 5000)
             min_live_tokens: Minimum tokens to keep unsummarized (default 1000)
+            max_gap: Max seconds between messages to cluster together (default 30)
             session: Optional session to cluster
             
         Returns:
-            Dict withsummarized count, iterations, final_token_count
+            Dict with iterations, memories_summarized, final_token_count
         """
         if min_live_tokens >= target_tokens:
             return {"error": "min_live_tokens must be less than target_tokens"}
@@ -405,10 +445,9 @@ class Context:
         total_summarized = 0
         
         while True:
-            # Get unsummarized (newest first from _get_unsummarized), reverse to get oldest first
+            # Get unsummarized sorted oldest first
             unsummarized = self._get_unsummarized(limit=10000, session=session)
-            # Reverse to get oldest first for clustering
-            unsummarized = list(reversed(unsummarized))
+            unsummarized.sort(key=lambda m: m.get("created_at", ""))
             
             if not unsummarized:
                 break
@@ -429,10 +468,16 @@ class Context:
             if current_tokens - min_live_tokens <= 0:
                 break
             
-            # Need more summarization - take oldest memories up to min_cluster_size
-            to_summarize = unsummarized[:self.min_cluster_size]
+            # Group by temporal proximity
+            groups = self._group_by_time(unsummarized, max_gap)
             
-            if len(to_summarize) < self.min_cluster_size:
+            if not groups:
+                break
+            
+            # Take the oldest group to summarize
+            to_summarize = groups[0]
+            
+            if len(to_summarize) < 2:
                 break
             
             # Summarize these
