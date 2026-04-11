@@ -53,6 +53,14 @@ async def run_repl(core_name: str) -> None:
             await core.run(prompt)
             _processing = False
             
+            # Check if exit was requested via tool call
+            from modules.system import is_exit_requested
+            if is_exit_requested():
+                from modules.system import clear_exit
+                clear_exit()
+                print("Goodbye!")
+                break
+            
         except KeyboardInterrupt:
             # Interrupt - cancel any ongoing operation
             _processing = False
