@@ -338,7 +338,7 @@ async def cluster_context(
     Returns:
         Iterations, memories summarized, final token count
     """
-    from memory.context import Context
+    from context import Context
     ctx = Context(db)
     return ctx.force_cluster(target_tokens, min_live_tokens, session)
 

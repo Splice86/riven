@@ -5,8 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5192d5f5-7588-4d43-8edf-896240829a51" name="Changes" comment="update">
-      <change beforePath="$PROJECT_DIR$/memory/context.py" beforeDir="false" afterPath="$PROJECT_DIR$/memory/context.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memory/database.py" beforeDir="false" afterPath="$PROJECT_DIR$/memory/database.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_check.txt" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
