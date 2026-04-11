@@ -8,6 +8,9 @@ from typing import Any
 
 import requests
 import yaml
+
+# Global to store the last built system prompt (for debug/diagnostics)
+_current_system_prompt: str = ""
 from pydantic_ai import Agent
 from pydantic_ai import AgentStreamEvent, AgentRunResultEvent
 from pydantic_ai.messages import (
@@ -335,7 +338,15 @@ class Core:
                 if value is not None:
                     prompt = prompt.replace(f"{{{module.tag}}}", value)
         
+        # Store globally for debug access
+        global _current_system_prompt
+        _current_system_prompt = prompt
+        
         return prompt
+
+    def get_system_prompt() -> str:
+        """Get the current system prompt (for debug/diagnostics)."""
+        return _current_system_prompt
 
     def _build_prompt(self, user_input: str) -> tuple[str, list[ModelMessage]]:
         """Build prompt with memory context.

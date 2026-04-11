@@ -106,16 +106,17 @@ def get_module():
         lines.append(f"Platform: {platform.platform()}")
         lines.append(f"Executable: {sys.executable}")
         
-        # System prompt from config
+        # System prompt from core
         lines.append("\n### SYSTEM PROMPT ###")
-        default_core = CONFIG.get("default_core", "code_hammer")
-        cores_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cores", f"{default_core}.yaml")
         try:
-            with open(cores_path) as f:
-                core_config = yaml.safe_load(f)
-            lines.append(core_config.get("system_prompt", "(not found)"))
+            from core import get_system_prompt
+            prompt = get_system_prompt()
+            if prompt:
+                lines.append(prompt)
+            else:
+                lines.append("(no prompt built yet - run a query first)")
         except Exception as e:
-            lines.append(f"Error loading system prompt: {e}")
+            lines.append(f"Error getting system prompt: {e}")
         
         # Get module contexts
         lines.append("\n### MODULE CONTEXTS ###")
