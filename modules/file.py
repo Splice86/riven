@@ -298,11 +298,14 @@ class DocumentManager:
                     self.save(abs_path)
                 return f"Replaced lines {start+1}-{end} (fuzzy match {score:.0%})"
             else:
+                # Show what's actually in the file to help model
+                actual_content = ''.join(doc.lines[:20])
                 return (
-                    f"Text not found.\n"
-                    f"Expected: {repr(old_text)}\n"
-                    f"Best match in file: {score:.0%}\n"
-                    f"Tip: Copy the EXACT text from the file."
+                    f"Text not found. The text you're looking for is not in the file.\n"
+                    f"Expected (not in file):\n{repr(old_text[:200])}\n\n"
+                    f"Best fuzzy match: {score:.0%}\n"
+                    f"Actual file content (first 20 lines):\n{actual_content[:500]}\n\n"
+                    f"Tip: Use open_file first to see current content, then provide EXACT text to replace."
                 )
         
         doc.content = ''.join(doc.lines)
