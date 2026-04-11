@@ -7,7 +7,7 @@ system_prompt: |
   Use web search and document tools to gather information. Be thorough and cite sources.
 
 tools: ["documents", "memory"]
-llm_url: "http://100.90.58.38:8000/v1"
+llm_url: "http://127.0.0.1:8000/v1"
 llm_model: "nvidia/MiniMax-M2.5-NVFP4"
 memory_db: "research"
 tool_timeout: 45
