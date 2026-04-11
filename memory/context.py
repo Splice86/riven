@@ -239,7 +239,7 @@ class Context:
         # Build query with session filter if provided (property filter)
         query_parts = ["k:context"]
         if session:
-            query_parts.append(f"session={session}")
+            query_parts.append(f"p:session={session}")
         query = " AND ".join(query_parts)
         results = self.db.search(query, limit=10000)
         
@@ -262,7 +262,7 @@ class Context:
         # Build query with session filter if provided (property filter)
         query_parts = ["k:context"]
         if session:
-            query_parts.append(f"session={session}")
+            query_parts.append(f"p:session={session}")
         query = " AND ".join(query_parts)
         results = self.db.search(query, limit=10000)
         
@@ -341,7 +341,7 @@ class Context:
         # Build query with session filter if provided (property filter)
         query_parts = ["k:summary"]
         if session:
-            query_parts.append(f"session={session}")
+            query_parts.append(f"p:session={session}")
         query = " AND ".join(query_parts)
         results = self.db.search(query, limit=10)
         
@@ -357,7 +357,7 @@ class Context:
         # Build query with session filter if provided (property filter)
         query_parts = ["k:context"]
         if session:
-            query_parts.append(f"session={session}")
+            query_parts.append(f"p:session={session}")
         query = " AND ".join(query_parts)
         results = self.db.search(query, limit=10000)
         
