@@ -45,8 +45,8 @@ def print_banner() -> None:
         
         result = pyfiglet.figlet_format("RIVEN", font=chosen_font)
         
-        # Apply gradient by lines (filter trailing empty lines)
-        lines = [l for l in result.split('\n') if l.strip()]
+        # Apply gradient by lines
+        lines = result.split('\n')
         n = len(lines)
         gradient_colors = [RED, MAGENTA, PURPLE, PURPLE, CYAN]
         
