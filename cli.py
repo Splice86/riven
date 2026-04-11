@@ -44,6 +44,7 @@ async def run_repl(core_name: str) -> None:
             
             # Handle /exit command BEFORE sending to LLM
             if prompt.strip().lower() == '/exit':
+                core.cancel()  # Cancel any ongoing operation
                 print("Goodbye!")
                 _processing = False
                 break
@@ -58,6 +59,10 @@ async def run_repl(core_name: str) -> None:
             core.cancel()
             print("\n^C Interrupted")
             print(f"{prompt_prefix} > ", end="")
+        except asyncio.CancelledError:
+            # Clean exit - don't print error
+            _processing = False
+            print("\nGoodbye!")
         except Exception as e:
             _processing = False
             print(f"Error: {e}\n")
@@ -79,7 +84,10 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     
-    asyncio.run(run_repl(args.core))
+    try:
+        asyncio.run(run_repl(args.core))
+    except KeyboardInterrupt:
+        pass  # Clean exit
 
 
 if __name__ == "__main__":
