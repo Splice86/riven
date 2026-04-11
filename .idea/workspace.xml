@@ -5,7 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="5192d5f5-7588-4d43-8edf-896240829a51" name="Changes" comment="update">
-      <change beforePath="$PROJECT_DIR$/bios/riven.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/config.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cores/code_hammer.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/cores/code_hammer.yaml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

@@ -5,7 +5,7 @@
 # Each .yaml file in cores/ defines a core
 
 # Default core to use
-default_core: code_hammer
+default_core: Code Hammer
 
 # Memory API settings
 memory_api:

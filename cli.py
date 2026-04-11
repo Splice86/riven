@@ -14,6 +14,9 @@ def get_prompt_prefix(core_name: str) -> str:
     return f"\033[96mRiven - {core_name}\033[0m"
 
 
+TAGLINE = "Breaking Things | Code Weapon"
+
+
 def print_banner() -> None:
     """Print cyberpunk ASCII art banner using pyfiglet."""
     try:
@@ -56,7 +59,7 @@ def print_banner() -> None:
         
         # Tagline
         print(f"{CYAN}┌{'─' * 40}┐{RESET}")
-        print(f"{CYAN}│{RESET}  {RED}Breaking Things{PURPLE} | {MAGENTA}Code Weapon{CYAN}          {RESET}{CYAN}│{RESET}")
+        print(f"{CYAN}│{RESET}  {RED}Breaking Things{PURPLE} | {MAGENTA}Code Weapon{CYAN}         {RESET}{CYAN}│{RESET}")
         print(f"{CYAN}└{'─' * 40}┘{RESET}")
         
     except ImportError:
