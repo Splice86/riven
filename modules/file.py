@@ -1,7 +1,6 @@
 """File module for riven - manage open files with line editing."""
 
 import os
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -105,35 +104,6 @@ class DocumentManager:
         doc = self._documents[abs_path]
         
         return f"Opened {os.path.basename(abs_path)} ({len(doc.lines)} lines). File content is now in system prompt."
-    
-    def _format_with_lines(self, doc: OpenDocument, max_lines: Optional[int] = None) -> str:
-        """Format document content with line numbers."""
-        lines = doc.lines
-        truncated = False
-        display_count = len(lines)
-        
-        if max_lines and len(lines) > max_lines:
-            lines = lines[:max_lines]
-            truncated = True
-            display_count = max_lines
-        elif len(lines) > 1000:
-            lines = lines[:1000]
-            truncated = True
-            display_count = 1000
-        
-        # Calculate padding for line numbers
-        num_digits = len(str(len(lines)))
-        fmt = f"{{:{num_digits}}} │ {{}}"
-        
-        output_lines = [f"File: {doc.path} ({len(doc.lines)} lines)"]
-        
-        for i, line in enumerate(lines, 1):
-            output_lines.append(fmt.format(i, line.rstrip('\n')))
-        
-        if truncated:
-            output_lines.append(f"... ({len(doc.lines) - display_count} more lines)")
-        
-        return "\n".join(output_lines)
     
     def get_lines(self, path: str, start: int = 1, end: Optional[int] = None) -> str:
         """Get a specific range of lines from an open document."""
@@ -416,7 +386,7 @@ def get_module():
         """
         return manager.replace_text(path, old_text, new_text)
     
-    
+    async def close_file(path: str) -> str:
         """Close a file and remove it from the context.
         
         Args:
