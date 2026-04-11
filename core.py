@@ -1,6 +1,7 @@
 """Core agentic loop - pydantic_ai implementation."""
 
 import asyncio
+from anyio import BrokenResourceError
 import logging
 import os
 import re
@@ -341,6 +342,13 @@ class Core:
                 # Handle Ctrl+C interruption gracefully
                 logger.info("Operation cancelled")
                 return None
+            except BrokenResourceError as e:
+                # Stream broken - may have partial results, don't retry
+                logger.warning(f"Stream broken: {e}")
+                if tool_results:
+                    # We have tool results, try to return what we have
+                    return _streamed_text
+                raise
             except Exception as e:
                 last_error = e
                 
