@@ -229,151 +229,6 @@ class Core:
             tools=tools
         )
 
-    # Remove old _wrap_tool method - now in tools.py
-
-    async def _run_with_retry(self, system_prompt: str, prompt: str, message_history: list[ModelMessage] = None) -> Any:
-        """Run agent with streaming events for real-time tool output.
-        
-        System prompt is stored as a mutable dict so it can be refreshed after file edits."""
-        # Use mutable system_prompt that can be refreshed
-        system_prompt_ref = {"prompt": system_prompt}
-        last_error = None
-        tool_results = []  # Track tool results for memory
-        pending_tool = None  # Buffer for tool call awaiting result
-        message_history = message_history or []
-        
-        # Buffers for streaming content
-        _thinking_buffer = ""
-        global _in_thinking
-        _in_thinking = False  # Track if we're inside <think> tags
-        _streamed_text = ""  # Track text already streamed
-        
-        # Reset cancelled flag at start
-        self._cancelled = False
-        
-        for attempt in range(self.max_retries):
-            try:
-                agent = self._create_agent(system_prompt)
-                
-                # Use run_stream_events() for real-time tool output
-                # Pass message_history to inject our memory context
-                async for event in agent.run_stream_events(prompt, message_history=message_history):
-                    # Check for cancellation
-                    if self._cancelled:
-                        return None
-                    
-                    # Collect text content (no printing)
-                    if isinstance(event, PartStartEvent):
-                        part = event.part
-                        if isinstance(part, ThinkingPart):
-                            _thinking_buffer = part.content
-                        elif hasattr(part, 'content'):
-                            _streamed_text += part.content
-                            
-                    elif isinstance(event, PartDeltaEvent):
-                        delta = event.delta
-                        if isinstance(delta, ThinkingPartDelta):
-                            if delta.content_delta:
-                                _thinking_buffer += delta.content_delta
-                        elif hasattr(delta, 'content_delta') and delta.content_delta:
-                            _streamed_text += delta.content_delta
-                            
-                    elif isinstance(event, PartEndEvent) and isinstance(event.part, ThinkingPart):
-                        _thinking_buffer = ""
-                        
-                    elif isinstance(event, FunctionToolCallEvent):
-                        # Actual tool call from model
-                        logger.info(f"Tool call: {event.part.tool_name}")
-                        args = event.part.args
-                        tool_name = event.part.tool_name
-                        pending_tool = {"name": tool_name, "args": args}
-                        
-                    elif isinstance(event, FunctionToolResultEvent):
-                        # Tool returned
-                        content = event.result.content
-                        tool_name = event.result.tool_name
-                        
-                        # Handle both string and non-string content
-                        if hasattr(content, 'content'):
-                            content = content.content
-                        content_str = str(content) if content else ""
-                        
-                        # Store tool call and result
-                        if pending_tool:
-                            tool_results.append({
-                                "tool": pending_tool['name'],
-                                "call": f"→ {pending_tool['name']}{pending_tool['args']}",
-                                "result": content_str
-                            })
-                            pending_tool = None
-                        else:
-                            tool_results.append({
-                                "tool": tool_name,
-                                "result": content_str
-                            })
-                        
-                        # Auto-refresh file context after file edits
-                        if tool_name in ('replace_text', 'close_file', 'open_file'):
-                            try:
-                                from modules.file import get_module as get_file_module
-                                file_module = get_file_module()
-                                if file_module.get_context:
-                                    _ = file_module.get_context()  # Force refresh
-                            except Exception:
-                                pass  # Ignore refresh errors
-                        elif len(lines) > 10:
-                            print(f"  ... ({len(lines) - 10} more lines, {len(content_str)} total chars)", flush=True)
-                        
-                    elif isinstance(event, AgentRunResultEvent):
-                        # Store tool results in memory (truncated)
-                        if self.store_tool_results > 0:
-                            import time
-                            t_tool = time.perf_counter()
-                            max_lines = self.store_tool_results
-                            for tr in tool_results:
-                                # Truncate tool result: 100 chars = 1 line, cap at 10 if no newlines
-                                result = tr['result']
-                                chars_per_line = 100
-                                if '\n' in result:
-                                    # Has newlines - count normally
-                                    lines = result.split('\n')
-                                    line_count = sum((len(l) + chars_per_line - 1) // chars_per_line for l in lines)
-                                else:
-                                    # No newlines - cap at 10 lines worth
-                                    line_count = (len(result) + chars_per_line - 1) // chars_per_line
-                                    line_count = min(line_count, 10)
-                                
-                                if line_count > max_lines:
-                                    # Build truncated result
-                                    if '\n' in result:
-                                        result = '\n'.join(lines[:max_lines])
-                                    else:
-                                        result = result[:max_lines * chars_per_line]
-                                    result += f'\n... ({line_count} total lines)'
-                                
-                                self._memory.add_context(
-                                    "tool",
-                                    f"{tr['tool']}: {result}",
-                                    session=self._session_id
-                                )
-                            
-                        # Return result
-                        return event.result
-                        
-            except asyncio.CancelledError:
-                # Handle Ctrl+C interruption gracefully
-                logger.info("Operation cancelled")
-                return None
-            except Exception as e:
-                last_error = e
-                
-                logger.warning(f"Retry {attempt + 1}: {e}")
-                
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(self.retry_delay * (attempt + 1))
-        
-        raise last_error
-
     def _build_system_prompt(self) -> str:
         """Build system prompt with module context."""
         # Check if file context needs refresh
@@ -440,29 +295,30 @@ class Core:
 
     async def run(self, prompt: str) -> Any:
         """Run the agent with the given prompt - waits for complete response."""
-        # Build prompts first (don't add to memory until success)
-        system_prompt = self._build_system_prompt()
-        user_prompt, message_history = self._build_prompt(prompt)
+        # Collect all tokens from stream
+        output_text = ""
+        async for event in self.run_stream(prompt):
+            if "error" in event:
+                raise Exception(event["error"])
+            if "token" in event:
+                output_text += event["token"]
         
-        # Run agent with message history injected
-        result = await self._run_with_retry(system_prompt, user_prompt, message_history)
+        # Return mock result object
+        class Result:
+            def __init__(self, output):
+                self.output = output
         
-        # Handle cancelled operation
-        if result is None:
-            return None
-        
-        # Strip thinking tags from output before storing in memory
-        output_text = str(result.output)
+        # Strip thinking tags
         if self.strip_thinking:
             output_text = re.sub(r"<think>.*?</think>", "", output_text, flags=re.DOTALL).strip()
         else:
             output_text = output_text.replace("<think>", "").replace("</think>", "").strip()
         
-        # Add user/assistant to memory after successful run
+        # Add to memory
         self._memory.add_context("user", prompt, session=self._session_id)
         self._memory.add_context("assistant", output_text, session=self._session_id)
         
-        return result
+        return Result(output_text)
     
     async def run_stream(self, prompt: str):
         """Run agent with streaming - yields tokens as they arrive.
@@ -591,11 +447,12 @@ def get_core_display_name(core_name: str) -> str:
     return cores
 
 
-def get_core(name: str = "code_hammer") -> Core:
+def get_core(name: str = "code_hammer", session_id: str = None) -> Core:
     """Factory function to create a core by name from config.
     
     Args:
         name: Name of the core in cores/ folder (default: "code_hammer")
+        session_id: Optional session ID for memory persistence
     
     Returns:
         Configured Core instance
@@ -608,11 +465,13 @@ def get_core(name: str = "code_hammer") -> Core:
     if name not in cores:
         raise ValueError(f"Core '{name}' not found. Available: {list(cores.keys())}")
     
-    return Core(config=cores[name])
+    core = Core(config=cores[name])
+    if session_id:
+        core._session_id = session_id  # Use provided session for memory
+    return core
 
 
 
 def list_cores() -> list[str]:
     """List available core names from cores/ folder."""
     return list(_load_cores().keys())
-

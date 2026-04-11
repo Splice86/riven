@@ -43,11 +43,15 @@ def list_cores():
 
 @app.post("/api/v1/sessions")
 def create_session(req: SessionCreate):
-    """Create a new session."""
+    """Create a new session token. Returns session_id for persistence."""
     result = manager.start(core_name=req.core_name)
     if not result.get("ok"):
         raise HTTPException(400, result.get("message"))
-    return result
+    return {
+        "session_id": result.get("session_id"),
+        "core_name": result.get("core_name"),
+        "ok": True
+    }
 
 
 @app.get("/api/v1/sessions")
@@ -76,12 +80,11 @@ def delete_session(session_id: str):
 
 @app.post("/api/v1/sessions/{session_id}/messages")
 async def send_message(session_id: str, req: MessageSend):
-    """Send a message to a session.
+    """Send a message. Stream or get result. Session ends after processing.
     
-    If stream=true, returns SSE with real-time tokens.
-    Otherwise returns complete response.
+    - stream=true: SSE with tokens as they arrive
+    - stream=false: JSON with full output when done
     """
-    # Get session info
     session = manager.get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -89,12 +92,12 @@ async def send_message(session_id: str, req: MessageSend):
     core_name = session.get("core_name", "code_hammer")
     
     if req.stream:
-        # Real streaming - use core.run_stream()
+        # Streaming mode - yield tokens via SSE
         import asyncio
         
         async def generate():
             try:
-                core = get_core(core_name)
+                core = get_core(core_name, session_id)
                 async for event in core.run_stream(req.message):
                     if "error" in event:
                         yield f"data: {json.dumps({'error': event['error']})}\n\n"
@@ -108,26 +111,15 @@ async def send_message(session_id: str, req: MessageSend):
         
         return StreamingResponse(generate(), media_type="text/event-stream")
     
-    # Non-streaming - wait for complete response
-    result = manager.send(session_id, req.message)
+    # Non-streaming - use session's core (persists memory)
+    try:
+        core = get_core(core_name, session_id)
+        result = await core.run(req.message)
+        output = str(result.output) if result else ""
+    except Exception as e:
+        raise HTTPException(500, str(e))
     
-    if not result.get("ok"):
-        raise HTTPException(400, result.get("error"))
-    
-    if result.get("queued"):
-        import time
-        output = ""
-        for _ in range(60):
-            time.sleep(0.5)
-            messages = manager.receive(session_id)
-            if messages:
-                output = messages[0]
-                break
-        else:
-            output = "Timeout waiting for response"
-    else:
-        output = result.get("output", "")
-    
+    # Session persists - client can send more messages
     return {"output": output}
 
 
