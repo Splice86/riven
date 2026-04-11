@@ -54,11 +54,10 @@ def print_banner() -> None:
             if line.strip():
                 color_idx = min(i * len(gradient_colors) // n, len(gradient_colors) - 1)
                 print(f"{gradient_colors[color_idx]}{line}{RESET}")
-            else:
-                print()
         
-        # Code Hammer subtitle - line above tagline
+        # Code Hammer subtitle - line above tagline (no blank line after banner)
         print(f"{' ' * 32}{RED}CODE HAMMER{RESET}")
+        print()  # Blank line between CODE HAMMER and tagline
         
         # Tagline
         print(f"{CYAN}┌{'─' * 40}┐{RESET}")
