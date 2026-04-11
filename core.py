@@ -192,7 +192,7 @@ class Core:
         
         # Buffers for streaming content
         _thinking_buffer = ""
-        _thinking_printed = False
+        _in_thinking = False  # Track if we're inside <think> tags
         _streamed_text = ""  # Track text already streamed
         
         # Reset cancelled flag at start
@@ -210,39 +210,55 @@ class Core:
                         return None
                     
                     # Handle thinking/reasoning content
+                    def _print_with_thinking_color(text: str) -> None:
+                        """Print text, switching colors based on <think> tags."""
+                        global _in_thinking
+                        while text:
+                            if _in_thinking:
+                                # We're inside thinking - look for end tag
+                                end_idx = text.find('</think>')
+                                if end_idx != -1:
+                                    print(f"{GREY}{text[:end_idx]}{RESET}", end="", flush=True)
+                                    text = text[end_idx + len('</think>'):]
+                                    _in_thinking = False
+                                else:
+                                    print(f"{GREY}{text}{RESET}", end="", flush=True)
+                                    break
+                            else:
+                                # We're outside thinking - look for start tag
+                                start_idx = text.find('<think>')
+                                if start_idx != -1:
+                                    print(f"{WHITE}{text[:start_idx]}{RESET}", end="", flush=True)
+                                    text = text[start_idx + len('<think>'):]
+                                    _in_thinking = True
+                                else:
+                                    print(f"{WHITE}{text}{RESET}", end="", flush=True)
+                                    break
+                    
                     if isinstance(event, PartStartEvent):
                         part = event.part
                         if isinstance(part, ThinkingPart):
-                            # Start of thinking - print thinking header in grey
                             _thinking_buffer = part.content
                             if _thinking_buffer:
-                                print(f"\n{GREY}🤔 Thinking...{RESET}", flush=True)
-                                _thinking_printed = True
+                                print(flush=True)
+                                _print_with_thinking_color(_thinking_buffer)
                         elif hasattr(part, 'content'):
-                            # Stream text content, converting thinking tags for display
-                            text = part.content.replace('<think>', f'\n{GREY}Thinking: ').replace('</think>', f'{RESET}')
                             _streamed_text += part.content
-                            print(f"{WHITE}{text}{RESET}", end="", flush=True)
+                            _print_with_thinking_color(part.content)
                             
                     elif isinstance(event, PartDeltaEvent):
                         delta = event.delta
                         if isinstance(delta, ThinkingPartDelta):
-                            # Streaming thinking content in grey
                             if delta.content_delta:
                                 _thinking_buffer += delta.content_delta
-                                if _thinking_printed:
-                                    print(f"{GREY}{delta.content_delta}{RESET}", end="", flush=True)
+                                _print_with_thinking_color(delta.content_delta)
                         elif hasattr(delta, 'content_delta') and delta.content_delta:
-                            # Stream text delta, converting thinking tags for display
-                            text = delta.content_delta.replace('<think>', f'\n{GREY}Thinking: ').replace('</think>', f'{RESET}')
                             _streamed_text += delta.content_delta
-                            print(f"{WHITE}{text}{RESET}", end="", flush=True)
+                            _print_with_thinking_color(delta.content_delta)
                             
                     elif isinstance(event, PartEndEvent) and isinstance(event.part, ThinkingPart):
-                        # End of thinking - clear buffer
                         _thinking_buffer = ""
-                        _thinking_printed = False
-                        # Add newline after thinking output
+                        _in_thinking = False
                         print(flush=True)
                         
                     elif isinstance(event, FunctionToolCallEvent):
