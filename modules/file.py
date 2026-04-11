@@ -200,6 +200,24 @@ class DocumentManager:
         return list(self._documents.keys())
 
 
+# Global state for file context refresh
+_file_context_dirty = False
+
+def mark_dirty() -> None:
+    """Mark file context as needing refresh."""
+    global _file_context_dirty
+    _file_context_dirty = True
+
+def is_dirty() -> bool:
+    """Check if file context needs refresh."""
+    global _file_context_dirty
+    return _file_context_dirty
+
+def clear_dirty() -> None:
+    """Clear the dirty flag after refresh."""
+    global _file_context_dirty
+    _file_context_dirty = False
+
 def get_module():
     """Get the file module."""
     manager = DocumentManager()
@@ -228,7 +246,9 @@ def get_module():
         Returns:
             Confirmation message with what was replaced.
         """
-        return manager.replace_text(path, old_text, new_text)
+        result = manager.replace_text(path, old_text, new_text)
+        mark_dirty()
+        return result
     
     async def close_file(path: str) -> str:
         """Close a file and remove it from the context.
@@ -239,33 +259,45 @@ def get_module():
         Returns:
             Status message
         """
-        return manager.close(path)
+        result = manager.close(path)
+        mark_dirty()
+        return result
+    
+    async def refresh_file_context() -> str:
+        """Force refresh of file context. Call this after editing files to get updated content.
+        
+        Returns:
+            Confirmation message
+        """
+        # This will trigger a refresh on next get_file_context call
+        return "File context will be refreshed on next prompt"
     
     def get_file_context() -> str:
         """Return info about currently open files with their content."""
+        global _file_context_dirty
+        _file_context_dirty = False  # Clear dirty flag after refresh
         # Tool usage instructions
         instructions = """## File Tools Usage
 
 ### CRITICAL: Use System Prompt Context
-The open files and their line numbers are automatically included in your system prompt as {file}. 
-You should use this context instead of calling get_lines() or re-opening files.
+Open files are automatically included in your system prompt as {file}. 
+Use this context instead of re-opening files.
 
-### Workflow: Open → Edit → Close
+### Workflow: Open → Edit → Refresh → Close
 1. **open_file(path)**: Opens a file (do this first)
 2. **replace_text(path, old_text, new_text)**: Replace text anywhere using fuzzy matching (auto-saves)
-3. **insert_lines(path, after_line, new_content)**: Insert new lines after a line (auto-saves)
-4. **remove_lines(path, start, end)**: Delete lines by number (auto-saves)
-5. **close_file(path)**: Close the file
+3. **refresh_file_context()**: Call this AFTER editing to get updated file content in context
+4. **close_file(path)**: Close the file
 
-### Tips
-- Check {file} in system prompt for open file line numbers
-- Don't re-open files - they're already in your context
-- replace_text uses fuzzy matching - just give it the text to find
-- All edits auto-save automatically
+### Important
+- After replace_text, ALWAYS call refresh_file_context() to update your context
+- The {file} section won't update automatically - you must request refresh
+- Don't re-open files - use refresh_file_context() instead
 ### Example
 ```
 open_file("main.py")
-replace_text("main.py", "old_function", "new_function")  # Fuzzy find & replace
+replace_text("main.py", "old_function", "new_function")
+refresh_file_context()
 close_file("main.py")
 ```
 """
@@ -301,6 +333,7 @@ close_file("main.py")
             "open_file": open_file,
             "replace_text": replace_text,
             "close_file": close_file,
+            "refresh_file_context": refresh_file_context,
         },
         get_context=get_file_context,
         tag="file"

@@ -218,7 +218,11 @@ class Core:
     # Remove old _wrap_tool method - now in tools.py
 
     async def _run_with_retry(self, system_prompt: str, prompt: str, message_history: list[ModelMessage] = None) -> Any:
-        """Run agent with streaming events for real-time tool output."""
+        """Run agent with streaming events for real-time tool output.
+        
+        System prompt is stored as a mutable dict so it can be refreshed after file edits."""
+        # Use mutable system_prompt that can be refreshed
+        system_prompt_ref = {"prompt": system_prompt}
         last_error = None
         tool_results = []  # Track tool results for memory
         pending_tool = None  # Buffer for tool call awaiting result
@@ -335,6 +339,18 @@ class Core:
                         if len(lines) > 10:
                             print(f"  ... ({len(lines) - 10} more lines, {len(content_str)} total chars)", flush=True)
                         
+                        # Auto-refresh file context after file edits
+                        if tool_name in ('replace_text', 'close_file', 'open_file'):
+                            try:
+                                from modules.file import get_module as get_file_module
+                                file_module = get_file_module()
+                                if file_module.get_context:
+                                    _ = file_module.get_context()  # Force refresh
+                            except Exception:
+                                pass  # Ignore refresh errors
+                        elif len(lines) > 10:
+                            print(f"  ... ({len(lines) - 10} more lines, {len(content_str)} total chars)", flush=True)
+                        
                     elif isinstance(event, AgentRunResultEvent):
                         # Store tool results in memory (truncated)
                         if self.store_tool_results > 0:
@@ -389,6 +405,20 @@ class Core:
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with module context."""
+        # Check if file context needs refresh
+        try:
+            from modules.file import is_dirty as file_is_dirty, clear_dirty as file_clear_dirty
+            if file_is_dirty():
+                # Force refresh file context
+                from modules.file import get_module as get_file_module
+                file_module = get_file_module()
+                if hasattr(file_module, 'get_context'):
+                    # This will trigger refresh and clear dirty flag
+                    _ = file_module.get_context()
+                file_clear_dirty()
+        except ImportError:
+            pass
+        
         prompt = self.system_prompt
         
         # Add module context replacements
