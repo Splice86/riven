@@ -326,9 +326,13 @@ class Core:
         # Run agent with message history injected
         result = await self._run_with_retry(system_prompt, user_prompt, message_history)
         
+        # Strip thinking tags from output before storing in memory
+        output_text = str(result.output)
+        output_text = output_text.replace("<think>", "").replace("</think>", "").strip()
+        
         # Add user/assistant to memory after successful run
         self._memory.add_context("user", prompt)
-        self._memory.add_context("assistant", str(result.output))
+        self._memory.add_context("assistant", output_text)
         
         return result
 
