@@ -1,8 +1,16 @@
 """File module for riven - manage open files with line editing."""
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
+
+# For fuzzy matching
+try:
+    import jellyfish
+    HAS_JELLYFISH = True
+except ImportError:
+    HAS_JELLYFISH = False
 
 from modules import Module
 
@@ -17,6 +25,47 @@ class OpenDocument:
     def __post_init__(self):
         # Pre-split into lines for easy editing
         self.lines = self.content.splitlines(keepends=True)
+
+
+def _find_best_window(
+    haystack_lines: list[str],
+    needle: str,
+    threshold: float = 0.95
+) -> tuple[tuple[int, int] | None, float]:
+    """Find line window with best Jaro-Winkler similarity to needle.
+    
+    Args:
+        haystack_lines: Lines to search in
+        needle: Text to match
+        threshold: Minimum similarity score (0.0-1.0)
+    
+    Returns:
+        Tuple of (span, score) where span is (start, end) line indices,
+        or (None, score) if no match above threshold
+    """
+    if not HAS_JELLYFISH or not needle:
+        return None, 0.0
+    
+    needle = needle.rstrip("\n")
+    needle_lines = needle.splitlines()
+    win_size = len(needle_lines)
+    
+    if win_size == 0:
+        return None, 0.0
+    
+    best_score = 0.0
+    best_span: tuple[int, int] | None = None
+    
+    for i in range(len(haystack_lines) - win_size + 1):
+        window = "\n".join(haystack_lines[i:i + win_size])
+        score = jellyfish.jaro_winkler_similarity(window, needle)
+        if score > best_score:
+            best_score = score
+            best_span = (i, i + win_size)
+    
+    if best_score >= threshold:
+        return best_span, best_score
+    return None, best_score
 
 
 class DocumentManager:
@@ -280,9 +329,32 @@ class DocumentManager:
                 return f"No match found for regex: {old_text}"
             new_line = re.sub(old_text, new_text, line)
         else:
-            if old_text not in line:
-                return f"Text not found: {old_text}"
-            new_line = line.replace(old_text, new_text, 1)
+            # First try exact match
+            if old_text in line:
+                new_line = line.replace(old_text, new_text, 1)
+            else:
+                # Try fuzzy matching across the document
+                span, score = _find_best_window(doc.lines, old_text)
+                if span:
+                    start, end = span
+                    # Replace the matched span with new_text
+                    new_lines = new_text.splitlines(keepends=True)
+                    if new_lines and not new_lines[-1].endswith('\n'):
+                        new_lines[-1] += '\n'
+                    doc.lines[start:end] = new_lines
+                    doc.content = ''.join(doc.lines)
+                    if auto_save:
+                        self.save(abs_path)
+                    return f"Replaced lines {start+1}-{end} (fuzzy match {score:.0%})"
+                else:
+                    # No match - provide helpful error with actual line content
+                    return (
+                        f"Text not found at line {line_number}.\n"
+                        f"Expected: {repr(old_text)}\n"
+                        f"Actual: {repr(line.strip())}\n"
+                        f"Best match in file: {score:.0%}\n"
+                        f"Tip: Copy the EXACT text from the file and paste into old_text."
+                    )
         
         doc.lines[line_number - 1] = new_line
         doc.content = ''.join(doc.lines)
@@ -487,12 +559,41 @@ def get_module():
         return "\n".join(lines)
     
     def get_file_context() -> str:
-        """Return info about currently open files."""
+        """Return info about currently open files and tool usage instructions."""
+        # Tool usage instructions
+        instructions = """## File Tools Usage
+
+### Workflow: Open → Edit → Save → Close
+1. **open_file(path)**: Opens a file, returns content with line numbers
+2. **get_lines(path, start, end)**: Get specific lines from open file
+3. **replace_lines(path, start, end, new_content)**: Replace by line numbers
+4. **insert_lines(path, after_line, new_content)**: Insert after a line
+5. **remove_lines(path, start, end)**: Delete lines by number
+6. **replace_text_at_line(path, line_number, old_text, new_text)**: Replace text within a line
+7. **save_file(path)**: Write changes to disk
+8. **close_file(path)**: Close the file
+
+### Tips
+- Once a file is opened, it stays in context - don't re-open!
+- Use line numbers from open_file output to target edits
+- For replace_text_at_line: copy EXACT text from the file for old_text
+- If "Text not found" error: copy the exact text including whitespace
+- Fuzzy matching: if exact match fails, will search for 95%+ similar match
+- Always save_file after edits before closing
+
+### Example
+```
+open_file("main.py")  # Get line numbers first
+replace_lines("main.py", 10, 15, "new content here")
+save_file("main.py")
+close_file("main.py")
+```"""
+        
         open_files = manager.list_open()
         if not open_files:
-            return "No files currently open"
+            return instructions + "\n\nNo files currently open"
         
-        lines = ["Currently open files:"]
+        lines = [instructions, "", "Currently open files:"]
         for path in open_files:
             doc = manager._documents[path]
             lines.append(f"  - {os.path.basename(path)} ({len(doc.lines)} lines)")
