@@ -1,6 +1,7 @@
-"""Exit module for riven - allows LLM to exit the program."""
+"""System module for riven - system operations like exit and reload."""
 
 import threading
+import sys
 from modules import Module, check_modules_changed, update_module_mtimes
 
 # Global flag to signal exit (thread-safe)
@@ -19,7 +20,7 @@ def clear_exit() -> None:
 
 
 def get_module():
-    """Get the exit module."""
+    """Get the system module."""
     
     def exit_session(message: str = "Goodbye!") -> str:
         """Exit the current session.
@@ -44,12 +45,25 @@ def get_module():
             return "Modules have changed. Call reload_modules to apply changes."
         return "No module changes detected."
     
+    def get_system_info() -> str:
+        """Get system information like Python version and platform.
+        
+        Returns:
+            System information string.
+        """
+        import platform
+        info = f"Python: {platform.python_version()}\n"
+        info += f"Platform: {platform.platform()}\n"
+        info += f"Executable: {sys.executable}"
+        return info
+    
     return Module(
-        name="exit",
+        name="system",
         enrollment=lambda: None,
         functions={
             "exit_session": exit_session,
             "check_reload_modules": check_reload_modules,
+            "get_system_info": get_system_info,
         },
         get_context=lambda: None,
         tag="system"
