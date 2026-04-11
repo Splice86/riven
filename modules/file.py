@@ -526,9 +526,10 @@ close_file("main.py")
         lines = [instructions, "", "Currently open files with content:"]
         for path in sorted_files:
             doc = manager._documents[path]
-            lines.append(f"\n=== {os.path.basename(path)} ===")
-            lines.append(''.join(doc.lines))
-        return "\n".join(lines)
+            lines.append(f"\n=== {os.path.basename(path)} ({len(doc.lines)} lines) ===")
+            # Add line numbers
+            for i, line in enumerate(doc.lines, 1):
+                lines.append(f"{i:4d}  {line.rstrip()}")
         return "\n".join(lines)
     
     return Module(
