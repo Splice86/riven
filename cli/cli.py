@@ -45,39 +45,60 @@ def get_session_line(session_id: str) -> str:
     return f"\033[90m[{session_id[:8]}]{RESET}"
 
 
-def format_output(text: str) -> str:
-    """Format output: strip ANSI codes, thinking tags, show tool calls nicely."""
-    if not text:
-        return text
-    
-    # Remove ANSI escape sequences
-    ansi_pattern = re.compile(r'\x1b\[[0-9;]*m')
-    output = ansi_pattern.sub('', text)
-    
-    # Remove thinking tags but keep content
-    output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL)
-    
-    # Clean up extra whitespace
-    output = re.sub(r'\n\n+', '\n', output)
-    output = output.strip()
-    
-    return output
-
-
-def print_formatted(text: str):
-    """Print formatted output with tool call highlighting."""
+def print_streamed(text: str):
+    """Print streamed output with colors: grey thinking, yellow tools, cyan text."""
     if not text:
         return
     
-    # Process to find tool calls and format them
-    lines = text.split('\n')
-    for line in lines:
-        if '→ ' in line:
-            # Tool call line - highlight it
-            print(f"{YELLOW}{line}{RESET}")
+    GREY = "\033[90m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    RESET = "\033[0m"
+    
+    in_thinking = False
+    in_tool = False
+    tool_buffer = ""
+    
+    while text:
+        if in_thinking:
+            end = text.find('</think>')
+            if end != -1:
+                print(f"{GREY}{text[:end]}{RESET}", end="", flush=True)
+                text = text[end + len('</think>'):]
+                in_thinking = False
+            else:
+                print(f"{GREY}{text}{RESET}", end="", flush=True)
+                break
+        elif in_tool:
+            end = text.find('</tool>')
+            if end != -1:
+                tool_buffer += text[:end]
+                text = text[end + len('</tool>'):]
+                print(f"{YELLOW}{tool_buffer}{RESET}", end="", flush=True)
+                tool_buffer = ""
+                in_tool = False
+            else:
+                tool_buffer += text
+                break
         else:
-            print(line)
-    print()
+            # Check for thinking start
+            start = text.find('<think>')
+            if start != -1:
+                print(f"{CYAN}{text[:start]}{RESET}", end="", flush=True)
+                text = text[start + len('<think>'):]
+                in_thinking = True
+            else:
+                # Check for tool start
+                start = text.find('<tool>')
+                if start != -1:
+                    print(f"{CYAN}{text[:start]}{RESET}", end="", flush=True)
+                    text = text[start + len('<tool>'):]
+                    in_tool = True
+                else:
+                    print(f"{CYAN}{text}{RESET}", end="", flush=True)
+                    break
+    
+    print()  # newline at end
 
 
 def main():
@@ -136,9 +157,8 @@ def main():
             # Send message with streaming
             try:
                 raw = client.stream_message(user_input)
-                formatted = format_output(raw)
-                if formatted:
-                    print_formatted(formatted)
+                if raw:
+                    print_streamed(raw)
             except Exception as e:
                 print(f"\n{RED}Error: {e}{RESET}\n")
     

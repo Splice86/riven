@@ -67,23 +67,13 @@ class RivenClient:
         return resp.json()
     
     def stream_message(self, message: str) -> str:
-        """Send message and stream response with pretty colors for thinking/tools."""
+        """Send message and stream response. Returns raw output for cli to format."""
         if not self.session_id:
             raise ValueError("No session - call create_session first")
         
         import json
-        import re
-        
-        # ANSI colors
-        GREY = "\033[90m"
-        YELLOW = "\033[93m"
-        CYAN = "\033[96m"
-        RESET = "\033[0m"
         
         output = ""
-        in_thinking = False
-        in_tool = False
-        tool_buffer = ""
         
         with requests.post(
             f"{self.base_url}/api/v1/sessions/{self.session_id}/messages",
@@ -104,59 +94,13 @@ class RivenClient:
                             
                             token = data.get('token', '')
                             if token:
-                                # Check for thinking tags in token
-                                while token:
-                                    if in_thinking:
-                                        end = token.find('</think>')
-                                        if end != -1:
-                                            print(f"{GREY}{token[:end]}{RESET}", end="", flush=True)
-                                            output += token[:end]
-                                            token = token[end + len('</think>'):]
-                                            in_thinking = False
-                                        else:
-                                            print(f"{GREY}{token}{RESET}", end="", flush=True)
-                                            output += token
-                                            token = ""
-                                    elif in_tool:
-                                        end = token.find('</tool>')
-                                        if end != -1:
-                                            tool_buffer += token[:end]
-                                            token = token[end + len('</tool>'):]
-                                            # Print tool result in yellow
-                                            print(f"{YELLOW}{tool_buffer}{RESET}", end="", flush=True)
-                                            output += tool_buffer
-                                            tool_buffer = ""
-                                            in_tool = False
-                                        else:
-                                            tool_buffer += token
-                                            token = ""
-                                    else:
-                                        # Check for start of thinking
-                                        start = token.find('<think>')
-                                        if start != -1:
-                                            print(token[:start], end="", flush=True)
-                                            output += token[:start]
-                                            token = token[start + len('</think>'):]
-                                            in_thinking = True
-                                        else:
-                                            # Check for start of tool
-                                            start = token.find('<tool>')
-                                            if start != -1:
-                                                print(token[:start], end="", flush=True)
-                                                output += token[:start]
-                                                token = token[start + len('<tool>'):]
-                                                in_tool = True
-                                            else:
-                                                # Regular text - print in cyan
-                                                print(f"{CYAN}{token}{RESET}", end="", flush=True)
-                                                output += token
-                                                token = ""
-                                
+                                output += token
+                            
                             if data.get('done'):
                                 break
                         except json.JSONDecodeError:
                             pass
-        print()  # newline after stream
+        
         return output.strip()
     
     def poll_messages(self) -> List[str]:
