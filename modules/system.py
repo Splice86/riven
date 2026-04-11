@@ -15,7 +15,8 @@ try:
 except Exception:
     CONFIG = {}
 
-MEMORY_API_URL = os.environ.get("MEMORY_API_URL", CONFIG.get('memory_api', {}).get('url', "http://127.0.0.1:8030"))
+from core import SECRETS, CONFIG
+MEMORY_API_URL = os.environ.get("MEMORY_API_URL", CONFIG.get('memory_api', {}).get('url', SECRETS.get('memory_api', {}).get('url', "http://127.0.0.1:8030")))
 DEFAULT_DB = os.environ.get("MEMORY_DB", CONFIG.get('memory_api', {}).get('db_name', "riven"))
 
 # Global flag to signal exit (thread-safe)

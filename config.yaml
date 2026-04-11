@@ -9,5 +9,5 @@ default_core: code_hammer
 
 # Memory API settings
 memory_api:
-  url: "http://127.0.0.1:8030"
+  url: "$MEMORY_API_URL"
   db_name: "riven"

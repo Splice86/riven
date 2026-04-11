@@ -57,17 +57,32 @@ def _load_config() -> dict:
                 if loaded:
                     config.update(loaded)
     
+    # Load secrets and resolve placeholders
+    secrets = _load_secrets()
+    memory_api_url = secrets.get('memory_api', {}).get('url', 'http://127.0.0.1:8030')
+    
+    # Resolve placeholders in config
+    if 'memory_api' in config and 'url' in config['memory_api']:
+        if config['memory_api']['url'] == '$MEMORY_API_URL':
+            config['memory_api']['url'] = memory_api_url
+    
     return config
 
 CONFIG = _load_config()
 
 
 def _load_secrets() -> dict:
-    """Load secrets from secrets.yaml (gitignored)."""
-    secrets_file = "secrets.yaml"
-    if os.path.exists(secrets_file):
-        with open(secrets_file) as f:
+    """Load secrets from secrets.yaml, falling back to template if not found."""
+    # Try secrets.yaml first (gitignored, for local overrides)
+    if os.path.exists("secrets.yaml"):
+        with open("secrets.yaml") as f:
             return yaml.safe_load(f) or {}
+    
+    # Fall back to template
+    if os.path.exists("secrets_template.yaml"):
+        with open("secrets_template.yaml") as f:
+            return yaml.safe_load(f) or {}
+    
     return {}
 
 
