@@ -3,12 +3,19 @@
 import os
 from typing import Optional
 
-from modules import Module
+# Load config - same as core.py
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
+try:
+    import yaml
+    with open(CONFIG_PATH) as f:
+        CONFIG = yaml.safe_load(f)
+except Exception:
+    CONFIG = {}
 
-MEMORY_API_URL = os.environ.get("MEMORY_API_URL", "http://127.0.0.1:8030")
+MEMORY_API_URL = os.environ.get("MEMORY_API_URL", CONFIG.get('memory_api', {}).get('url', "http://127.0.0.1:8030"))
 
 # Database name - set from config, not overrideable via tools
-DEFAULT_DB = os.environ.get("MEMORY_DB", "riven")
+DEFAULT_DB = os.environ.get("MEMORY_DB", CONFIG.get('memory_api', {}).get('db_name', "riven"))
 
 
 def get_module():
