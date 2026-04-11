@@ -22,32 +22,23 @@ TAGLINE = "⬡ ̸S̵I̷G̴N̷A̵L̷S̴ ̷◆̷ ̷T̶O̶ ̵T̷H̷E̴ ̷V̴O̵I̶D
 
 
 def print_banner():
-    """Print cyberpunk ASCII art banner with per-letter gradient."""
+    """Print cyberpunk ASCII art banner with vertical gradient."""
     try:
         import pyfiglet
         result = pyfiglet.figlet_format("RIVEN", font="slant")
         
-        # Per-letter gradient: dark red -> magenta -> cyan
-        letter_colors = [31, 35, 36]  # red, magenta, cyan
+        # Vertical gradient: dark red -> magenta -> cyan
+        gradient = [31, 31, 35, 35, 35, 35, 36, 36]  # explicit colors
         
         lines = result.split('\n')
-        num_letters = 5  # R I V E N
-        chars_per_letter = 6  # approximate width
+        nonempty = [l for l in lines if l.strip()]
+        num_lines = len(nonempty)
         
-        for line in lines:
-            if not line.strip():
-                continue
-            output = ""
-            for j, char in enumerate(line):
-                if char == ' ':
-                    output += ' '
-                else:
-                    # Determine which letter this char belongs to
-                    letter_idx = j // chars_per_letter
-                    letter_idx = min(letter_idx, len(letter_colors) - 1)
-                    color_code = letter_colors[letter_idx]
-                    output += f"\033[{color_code}m{char}"
-            print(f"{output}\033[0m")
+        for i, line in enumerate(nonempty):
+            color_idx = int(i / num_lines * len(gradient))
+            color_idx = min(color_idx, len(gradient) - 1)
+            color = gradient[color_idx]
+            print(f"\033[{color}m{line}\033[0m")
         
         print(f"{' ' * 30}\033[95mCODEHAMMER\033[0m")
         print()
