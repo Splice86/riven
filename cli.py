@@ -11,7 +11,7 @@ _processing = False
 
 def get_prompt_prefix(core_name: str) -> str:
     """Get the prompt prefix with core name in cyan."""
-    return f"\033[96m[{core_name}]\033[0m"
+    return f"\033[96mRiven - {core_name}\033[0m"
 
 
 async def run_repl(core_name: str) -> None:
