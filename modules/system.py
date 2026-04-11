@@ -1,4 +1,4 @@
-"""System module for riven - system operations like exit and reload."""
+"""System module for riven - system operations like exit, reload, and core management."""
 
 import os
 import threading
@@ -32,6 +32,41 @@ def is_exit_requested() -> bool:
 def clear_exit() -> None:
     """Clear the exit flag."""
     _exit_requested.clear()
+
+
+# Core management functions - import from core_manager
+def _get_manager():
+    """Lazy import to avoid circular deps."""
+    from core_manager import get_manager
+    return get_manager()
+
+
+def list_cores() -> list[dict]:
+    """List available cores with names and descriptions."""
+    return _get_manager().list()
+
+
+def get_core_description(core_name: str) -> str:
+    """Get description for a specific core."""
+    config = _get_manager().get(core_name)
+    if config:
+        return config.get('description', 'No description')
+    return f"Core '{core_name}' not found"
+
+
+def core_exists(core_name: str) -> bool:
+    """Check if a core exists."""
+    return _get_manager().exists(core_name)
+
+
+def switch_core(core_name: str) -> str:
+    """Switch to a different core."""
+    return _get_manager().set_current(core_name)
+
+
+def get_current_core() -> str:
+    """Get the current core name."""
+    return _get_manager().get_current() or "None"
 
 
 def get_module():
@@ -169,6 +204,11 @@ def get_module():
             "check_reload_modules": check_reload_modules,
             "get_system_info": get_system_info,
             "write_context": write_context,
+            "list_cores": list_cores,
+            "get_core_description": get_core_description,
+            "core_exists": core_exists,
+            "switch_core": switch_core,
+            "get_current_core": get_current_core,
         },
         get_context=get_system_context,
         tag="system"
