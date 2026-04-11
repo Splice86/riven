@@ -328,12 +328,16 @@ class Context:
         if not session:
             session = memories[0].get("properties", {}).get("session")
         
+        # Estimate token count for the summary
+        summary_token_count = count_message_tokens("summary", summary_text)
+        
         summary_id = self.db.add_memory(
             content=summary_text,
             keywords=["context", "summary"],
             properties={
                 "role": "summary",
                 "summary_level": str(level),
+                "token_count": str(summary_token_count),
                 "summarized_count": str(len(memories)),
                 "summarized_tokens": str(total_tokens)
             },
@@ -395,6 +399,39 @@ class Context:
         
         unsummarized.sort(key=lambda m: m["created_at"])
         return unsummarized[-limit:]
+    
+    def _get_by_level(self, level: int, session: str = None) -> list[dict]:
+        """Get summaries at a specific level for hierarchical clustering.
+        
+        Args:
+            level: Summary level to fetch (e.g., 1 for first-level summaries)
+            session: Optional session filter
+            
+        Returns:
+            List of summary memories at the specified level
+        """
+        # Build query for summaries at this level
+        query_parts = [f"k:summary", f"summary_level:{level}"]
+        if session:
+            query_parts.append(f"p:session={session}")
+        query = " AND ".join(query_parts)
+        results = self.db.search(query, limit=10000)
+        
+        summaries = []
+        for mem in results:
+            props = mem.get("properties", {})
+            summaries.append({
+                "id": mem["id"],
+                "role": props.get("role", "summary"),
+                "content": mem["content"],
+                "created_at": mem["created_at"],
+                "properties": {
+                    "token_count": props.get("token_count", "0"),
+                    "summary_level": props.get("summary_level")
+                }
+            })
+        
+        return summaries
     
     def _group_by_time(self, memories: list[dict], max_gap: int = 30) -> list[list[dict]]:
         """Group memories by temporal proximity.
@@ -458,16 +495,23 @@ class Context:
         total_summarized = 0
         
         while True:
-            # Get unsummarized sorted oldest first
-            unsummarized = self._get_unsummarized(limit=10000, session=session)
-            unsummarized.sort(key=lambda m: m.get("created_at", ""))
+            # Get memories to summarize based on level
+            if level == 1:
+                # Get unsummarized original messages
+                memories = self._get_unsummarized(limit=10000, session=session)
+            else:
+                # Get summaries from previous level for higher levels
+                memories = self._get_by_level(level - 1, session)
             
-            if not unsummarized:
+            if not memories:
                 break
+            
+            # Sort oldest first
+            memories.sort(key=lambda m: m.get("created_at", ""))
             
             # Calculate current token count
             current_tokens = 0
-            for m in unsummarized:
+            for m in memories:
                 try:
                     current_tokens += int(m.get("properties", {}).get("token_count", "0"))
                 except (ValueError, TypeError):
@@ -477,12 +521,8 @@ class Context:
             if current_tokens <= target_tokens:
                 break
             
-            # Check if we'd drop below min_live_tokens
-            if current_tokens - min_live_tokens <= 0:
-                break
-            
             # Group by temporal proximity
-            groups = self._group_by_time(unsummarized, max_gap)
+            groups = self._group_by_time(memories, max_gap)
             
             if not groups:
                 break
@@ -491,6 +531,11 @@ class Context:
             to_summarize = groups[0]
             
             if len(to_summarize) < 2:
+                break
+            
+            # Check if we'd drop below min_live_tokens after summarizing this group
+            group_tokens = sum(int(m.get("properties", {}).get("token_count", "0")) for m in to_summarize)
+            if current_tokens - group_tokens < min_live_tokens:
                 break
             
             # Summarize these at the specified level
@@ -506,10 +551,14 @@ class Context:
             if iterations > 20:
                 break
         
-        # Get final token count
-        final_unsummarized = self._get_unsummarized(limit=10000, session=session)
+        # Get final token count (remaining after clustering)
+        if level == 1:
+            final_memories = self._get_unsummarized(limit=10000, session=session)
+        else:
+            final_memories = self._get_by_level(level - 1, session)
+        
         final_tokens = 0
-        for m in final_unsummarized:
+        for m in final_memories:
             try:
                 final_tokens += int(m.get("properties", {}).get("token_count", "0"))
             except (ValueError, TypeError):
