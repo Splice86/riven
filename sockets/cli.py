@@ -1,5 +1,6 @@
 """CLI socket for interactive terminal."""
 
+import os
 import sys
 import asyncio
 import threading
