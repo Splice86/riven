@@ -94,15 +94,17 @@ def get_module():
         
         return "\n".join(lines)
     
-    async def coremgr_run(core: str, message: str) -> dict:
+    async def coremgr_run(core: str, message: str, blocking: bool = False, timeout: int = 300) -> dict:
         """Start a core running with a message.
         
         Args:
             core: Name of the core to run (e.g., 'code_hammer', 'research')
             message: Message to send to the core
+            blocking: If True, wait for completion (uses timeout). If False, run async.
+            timeout: Seconds to wait for blocking runs (default: 300)
         
         Returns:
-            dict with 'id', 'core', 'started', and 'ok' fields
+            dict with 'id', 'core', 'started', 'ok' fields. If blocking=True, also includes 'result' or 'error'.
         """
         # Validate core exists
         available = list_cores()
@@ -126,7 +128,56 @@ def get_module():
             status="running"
         )
         
-        # Start async execution in background thread
+        if blocking:
+            # Run synchronously and wait for completion
+            import concurrent.futures
+            
+            result_holder = {"result": None, "error": None}
+            
+            def run_blocking():
+                try:
+                    core_instance = get_core(core)
+                    result = asyncio.run(core_instance.run(message))
+                    result_holder["result"] = str(result.output) if result else None
+                except Exception as e:
+                    result_holder["error"] = str(e)
+            
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(run_blocking)
+            
+            try:
+                future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                result_holder["error"] = f"Timeout after {timeout} seconds"
+            except Exception as e:
+                result_holder["error"] = str(e)
+            
+            executor.shutdown(wait=False)
+            
+            # Move to completed
+            finished_at = datetime.now()
+            _completed_cores[run_id] = CoreRun(
+                id=run_id,
+                core_name=core,
+                message=message,
+                status="error" if result_holder["error"] else "completed",
+                result=result_holder.get("result"),
+                error=result_holder.get("error"),
+                finished_at=finished_at
+            )
+            del _running_cores[run_id]
+            
+            return {
+                "id": run_id,
+                "core": core,
+                "started": True,
+                "ok": result_holder["error"] is None,
+                "result": result_holder.get("result"),
+                "error": result_holder.get("error"),
+                "finished": finished_at.isoformat()
+            }
+        
+        # Non-blocking: start async execution in background thread
         import threading
         thread = threading.Thread(target=_run_async, args=(run_id, core, message))
         thread.daemon = True
