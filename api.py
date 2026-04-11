@@ -104,6 +104,8 @@ async def send_message(session_id: str, req: MessageSend):
                         break
                     if "token" in event:
                         yield f"data: {json.dumps({'token': event['token']})}\n\n"
+                    if "tool" in event:
+                        yield f"data: {json.dumps(event)}\n\n"
                     if event.get("done"):
                         yield f"data: {json.dumps({'done': True})}\n\n"
             except Exception as e:

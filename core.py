@@ -370,6 +370,8 @@ class Core:
                     args = event.part.args
                     tool_name = event.part.tool_name
                     pending_tool = {"name": tool_name, "args": args}
+                    # Yield tool call wrapped in tags
+                    yield {"token": f"<tool>→ {tool_name}{args}</tool>"}
                     
                 elif isinstance(event, FunctionToolResultEvent):
                     content = event.result.content
@@ -387,6 +389,10 @@ class Core:
                         pending_tool = None
                     else:
                         tool_results.append({"tool": tool_name, "result": content_str})
+                    
+                    # Yield tool result wrapped in tags (truncated)
+                    truncated = content_str[:200] + "..." if len(content_str) > 200 else content_str
+                    yield {"token": f"<tool>{truncated}</tool>"}
                         
                 elif isinstance(event, AgentRunResultEvent):
                     # Store tool results in memory
