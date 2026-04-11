@@ -1,6 +1,21 @@
 """Exit module for riven - allows LLM to exit the program."""
 
+import threading
 from modules import Module
+
+# Global flag to signal exit (thread-safe)
+# This must be at module level so all imports share the same instance
+_exit_requested = threading.Event()
+
+
+def is_exit_requested() -> bool:
+    """Check if exit was requested."""
+    return _exit_requested.is_set()
+
+
+def clear_exit() -> None:
+    """Clear the exit flag."""
+    _exit_requested.clear()
 
 
 def get_module():
@@ -15,9 +30,8 @@ def get_module():
         Returns:
             Goodbye message.
         """
-        # Set a flag that the CLI can check
-        import sys
-        sys.exit(0)
+        _exit_requested.set()
+        return message
     
     return Module(
         name="exit",

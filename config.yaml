@@ -21,6 +21,7 @@ cores:
     memory_db: "riven"
     tool_timeout: 30
     strip_thinking: true  # Remove thinking tags + content from memory
+    store_tool_results: 3  # 0=skip, N=store last N lines (truncates long output)
 
   coding:
     system_prompt: |
@@ -34,6 +35,7 @@ cores:
     memory_db: "coding"
     tool_timeout: 60
     strip_thinking: true
+    store_tool_results: 0
 
   research:
     system_prompt: |
@@ -46,6 +48,7 @@ cores:
     memory_db: "research"
     tool_timeout: 45
     strip_thinking: true
+    store_tool_results: 0
 
 # Memory API settings
 memory_api:

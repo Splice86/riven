@@ -24,21 +24,29 @@ async def run_repl(core_name: str) -> None:
     print(f"Using core: {core_name}")
     print(f"Tools loaded: {list(core._modules.all().keys())}")
     print(f"Memory DB: {core.db_name}")
-    print("Riven agent ready. Type 'quit' or 'exit' to stop.\n")
+    print("Riven agent ready. Type '/exit' to stop.\n")
     
     while True:
         try:
             # Block input while processing
+            if _processing:
+                # Wait for previous operation to finish
+                print("\n⏳ Still processing...\n")
+                print(f"{prompt_prefix} > ", end="")
+                continue
+            
             _processing = True
             prompt = input(f"{prompt_prefix} > ").strip()
-            _processing = False
-            
-            if prompt.lower() in ('quit', 'exit'):
-                print("Goodbye!")
-                break
             
             if not prompt:
+                _processing = False
                 continue
+            
+            # Handle /exit command BEFORE sending to LLM
+            if prompt.strip().lower() == '/exit':
+                print("Goodbye!")
+                _processing = False
+                break
             
             # Result is already streamed to terminal
             await core.run(prompt)

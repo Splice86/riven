@@ -110,7 +110,8 @@ class Core:
         db_name: str = None,
         tools: list = None,
         tool_timeout: int = 20,
-        strip_thinking: bool = False
+        strip_thinking: bool = False,
+        store_tool_results: int = 0  # 0=skip, N=store last N lines
     ):
         # Load from config if provided
         if config:
@@ -122,6 +123,7 @@ class Core:
             self._tool_filter = config.get('tools', None)
             self.tool_timeout = config.get('tool_timeout', 20)
             self.strip_thinking = config.get('strip_thinking', False)
+            self.store_tool_results = config.get('store_tool_results', 0)  # 0=skip, N=store last N lines
         else:
             self.model = model or LLM_MODEL
             self.llm_url = llm_url or LLM_URL
@@ -131,6 +133,7 @@ class Core:
             self._tool_filter = tools
             self.tool_timeout = tool_timeout
             self.strip_thinking = strip_thinking
+            self.store_tool_results = store_tool_results  # 0=skip, N=store last N lines
         
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -275,12 +278,37 @@ class Core:
                             print(f"  ... ({len(lines) - 10} more lines, {len(content_str)} total chars)", flush=True)
                         
                     elif isinstance(event, AgentRunResultEvent):
-                        # Final result - store tool results in memory (don't print, already streamed)
-                        for tr in tool_results:
-                            self._memory.add_context(
-                                "tool",
-                                f"{tr['tool']}: {tr['result']}"
-                            )
+                        # Store tool results in memory (truncated)
+                        if self.store_tool_results > 0:
+                            import time
+                            t_tool = time.perf_counter()
+                            max_lines = self.store_tool_results
+                            for tr in tool_results:
+                                # Truncate tool result: 100 chars = 1 line, cap at 10 if no newlines
+                                result = tr['result']
+                                chars_per_line = 100
+                                if '\n' in result:
+                                    # Has newlines - count normally
+                                    lines = result.split('\n')
+                                    line_count = sum((len(l) + chars_per_line - 1) // chars_per_line for l in lines)
+                                else:
+                                    # No newlines - cap at 10 lines worth
+                                    line_count = (len(result) + chars_per_line - 1) // chars_per_line
+                                    line_count = min(line_count, 10)
+                                
+                                if line_count > max_lines:
+                                    # Build truncated result
+                                    if '\n' in result:
+                                        result = '\n'.join(lines[:max_lines])
+                                    else:
+                                        result = result[:max_lines * chars_per_line]
+                                    result += f'\n... ({line_count} total lines)'
+                                
+                                self._memory.add_context(
+                                    "tool",
+                                    f"{tr['tool']}: {result}"
+                                )
+                            print(f"[TIMING] storing {len(tool_results)} tool results: {time.perf_counter() - t_tool:.3f}s", flush=True)
                         # Add newline at end of output
                         print(flush=True)
                         # Return result but don't print - already streamed above
@@ -308,7 +336,8 @@ class Core:
         for module in self._modules.all().values():
             if module.get_context and module.tag:
                 value = module.get_context()
-                prompt = prompt.replace(f"{{{module.tag}}}", value)
+                if value is not None:
+                    prompt = prompt.replace(f"{{{module.tag}}}", value)
         
         return prompt
 
@@ -318,8 +347,12 @@ class Core:
         Returns tuple of (user_prompt, message_history) where message_history
         contains the converted memory context.
         """
+        import time
+        t0 = time.perf_counter()
+        
         # Get context from memory
         context = self._memory.get_context()
+        print(f"[TIMING] _memory.get_context(): {time.perf_counter() - t0:.3f}s", flush=True)
         
         if not context:
             return user_input, []
@@ -343,12 +376,22 @@ class Core:
 
     async def run(self, prompt: str) -> Any:
         """Run the agent with the given prompt."""
+        import time
+        t0 = time.perf_counter()
+        
         # Build prompts first (don't add to memory until success)
+        t1 = time.perf_counter()
         system_prompt = self._build_system_prompt()
+        print(f"[TIMING] _build_system_prompt: {time.perf_counter() - t1:.3f}s", flush=True)
+        
+        t2 = time.perf_counter()
         user_prompt, message_history = self._build_prompt(prompt)
+        print(f"[TIMING] _build_prompt (get memory context): {time.perf_counter() - t2:.3f}s", flush=True)
         
         # Run agent with message history injected
+        t3 = time.perf_counter()
         result = await self._run_with_retry(system_prompt, user_prompt, message_history)
+        print(f"[TIMING] _run_with_retry (LLM call): {time.perf_counter() - t3:.3f}s", flush=True)
         
         # Handle cancelled operation
         if result is None:
@@ -363,8 +406,11 @@ class Core:
             output_text = output_text.replace("<think>", "").replace("</think>", "").strip()
         
         # Add user/assistant to memory after successful run
+        t5 = time.perf_counter()
         self._memory.add_context("user", prompt)
         self._memory.add_context("assistant", output_text)
+        print(f"[TIMING] add_context (2 calls): {time.perf_counter() - t5:.3f}s", flush=True)
+        print(f"[TIMING] TOTAL run(): {time.perf_counter() - t0:.3f}s", flush=True)
         
         return result
 

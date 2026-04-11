@@ -1,4 +1,16 @@
-"""Documents module for riven - manage open documents with line editing."""
+"""Documents module for riven - manage open documents with line editing.
+
+Workflow:
+    1. open_document(path) - Opens a file, adds to context, shows content with line numbers
+    2. get_lines(path, start, end) - View specific lines (must be open first)
+    3. replace_lines(path, start, end, new_content) - Replace lines in memory
+    4. insert_lines(path, after_line, new_content) - Insert new lines
+    5. remove_lines(path, start, end) - Delete lines
+    6. save_document(path) - Write changes to disk
+    
+Note: All edit operations work on the in-memory version. Call save_document to persist.
+      Files stay open in context until explicitly closed with close_document.
+"""
 
 import os
 from dataclasses import dataclass, field
@@ -25,23 +37,26 @@ class DocumentManager:
     def __init__(self):
         self._documents: dict[str, OpenDocument] = {}
     
-    def open(
+def open(
         self,
         path: str,
         show_line_numbers: bool = True,
         max_lines: Optional[int] = None
     ) -> str:
-        """Open a document, add to context.
+        """Open a document, add to context, and display content.
+        
+        Once opened, the file stays in memory until explicitly closed.
+        Use get_lines, replace_lines, insert_lines, or remove_lines to modify.
+        Use save_document to write changes to disk.
         
         Args:
             path: Path to the file
-            show_line_numbers: Include line numbers in output
-            max_lines: Limit lines shown (None for all)
+            show_line_numbers: Include line numbers in output (default: True)
+            max_lines: Truncate output to N lines (None for all, 200 for auto-truncate)
             
         Returns:
-            Document content with line numbers
+            Document content with line numbers (or just confirmation if show_line_numbers=False)
         """
-        abs_path = os.path.abspath(path)
         
         if not os.path.exists(abs_path):
             return f"Error: File {abs_path} not found"
@@ -278,14 +293,17 @@ class DocumentManager:
         
         return f"Removed lines {start}-{end} from {os.path.basename(path)} ({num_removed} lines)"
     
-    def save(self, path: str) -> str:
-        """Save an open document to disk.
+def save(self, path: str) -> str:
+        """Save an open document's in-memory changes to disk.
+        
+        Writes the current in-memory content to the original file path.
+        Use this after making edits with replace_lines, insert_lines, or remove_lines.
         
         Args:
-            path: Path to the file (or alias if already open)
+            path: Path to the file (must already be open)
             
         Returns:
-            Confirmation message
+            Confirmation message with filename and line count
         """
         abs_path = os.path.abspath(path)
         
@@ -323,13 +341,17 @@ class DocumentManager:
         return f"Saved {len(saved)} files: {', '.join(saved)}"
     
     def close(self, path: str) -> str:
+def close(self, path: str) -> str:
         """Close a document, remove from context.
         
+        Removes the file from memory. If there are unsaved changes, they are lost.
+        Use save_document before closing if you want to keep changes.
+        
         Args:
-            path: Path to the file
+            path: Path to the file (must already be open)
             
         Returns:
-            Status message
+            Status message (success or error)
         """
         abs_path = os.path.abspath(path)
         

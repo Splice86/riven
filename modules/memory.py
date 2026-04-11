@@ -23,10 +23,37 @@ DEFAULT_DB = os.environ.get("MEMORY_DB", CONFIG.get('memory_api', {}).get('db_na
 def get_module():
     """Get the memory module."""
     
-    async def search_memories(query: str = "", limit: int = 50) -> str:
-        """Search the memory database."""
+async def search_memories(query: str = "", limit: int = 50) -> str:
+        """Search the memory database using a query DSL.
+        
+        Search Syntax:
+            k:<keyword>   - Exact keyword match (e.g., "k:python")
+            s:<keyword>   - Semantic keyword similarity (e.g., "s:python")
+            q:<text>      - Semantic text search (e.g., "q:machine learning")
+            d:<date>      - Date filter (e.g., "d:last 7 days", "d:2025-01-01")
+            p:<key=value> - Property filter (e.g., "p:role=user")
+            
+        Operators:
+            AND - Both conditions must match
+            OR  - Either condition must match
+            NOT - Exclude keyword
+            
+        Examples:
+            "k:python AND k:coding"           - Both keywords
+            "k:python OR k:javascript"        - Either keyword
+            "NOT k:deprecated"                - Exclude keyword
+            "s:python@0.8"                    - Similar to python, threshold 0.8
+            "q:machine learning"               - Semantic search
+            "d:last 30 days AND k:important"   - Date range with keyword
+            "(k:bug OR k:fix) AND NOT k:wontfix" - Complex query
+            
+        Date Formats:
+            "today", "yesterday"
+            "last N days", "last N hours"
+            "YYYY-MM-DD to YYYY-MM-DD"
+        """
         import requests
-        resp = requests.get(
+        resp = requests.post(
             f"{MEMORY_API_URL}/memories/search",
             params={"db_name": DEFAULT_DB},
             json={"query": query, "limit": limit}
@@ -45,12 +72,21 @@ def get_module():
         
         return "\n".join(lines)
     
-    async def add_memory(
+async def add_memory(
         content: str,
         keywords: Optional[list[str]] = None,
         properties: Optional[dict[str, str]] = None
     ) -> str:
-        """Add a new memory to the database."""
+        """Add a new memory to the database with optional metadata.
+        
+        Args:
+            content: The main text content of the memory
+            keywords: Optional list of keywords for keyword searches (e.g., ["python", "coding"])
+            properties: Optional dict of key-value properties (e.g., {"role": "user", "priority": "high"})
+            
+        Returns:
+            Confirmation message with memory ID and content preview
+        """
         import requests
         resp = requests.post(
             f"{MEMORY_API_URL}/memories",
@@ -60,8 +96,17 @@ def get_module():
         result = resp.json()
         return f"Added memory #{result.get('id')}: {result.get('content', '')[:50]}..."
     
-    async def get_memory(memory_id: int) -> str:
-        """Get a specific memory by ID."""
+async def get_memory(memory_id: int) -> str:
+        """Get a specific memory by its ID.
+        
+        Use list_memories to find IDs, or search_memories to find relevant memories first.
+        
+        Args:
+            memory_id: The numeric ID of the memory to retrieve
+            
+        Returns:
+            Full memory details including content, creation time, and keywords
+        """
         import requests
         resp = requests.get(
             f"{MEMORY_API_URL}/memories/{memory_id}",
