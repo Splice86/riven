@@ -62,7 +62,7 @@ def _load_config() -> dict:
 CONFIG = _load_config()
 
 
-from secrets import get_secret, get_llm_config, get_memory_api
+from riven_secrets import get_secret, get_llm_config, get_memory_api
 
 # Legacy env/import fallback
 MEMORY_API_URL = os.environ.get("MEMORY_API_URL", get_memory_api())
@@ -75,7 +75,7 @@ MAX_OUTPUT_LINES = 1000
 
 def _resolve_core_config(core_config: dict) -> dict:
     """Resolve llm_config: name to actual LLM values from secrets."""
-    from secrets import get_llm_config
+    from riven_secrets import get_llm_config
     
     resolved = core_config.copy()
     

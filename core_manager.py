@@ -1,22 +1,41 @@
-"""Core Manager - simplified: session ID provides persistence, core is created per message."""
+"""Core Manager - supports both simple (per-message) and threaded (persistent) modes."""
 
 import os
 import glob
 import yaml
 import uuid
 import asyncio
+import threading
+import queue
 from typing import Optional, List, Dict
 from core import get_core
+
+
+# ============== CORE INSTANCE (threaded mode) ==============
+
+class CoreInstance:
+    """A running core instance with I/O queues."""
+    
+    def __init__(self, session_id: str, core_name: str):
+        self.session_id = session_id
+        self.core_name = core_name
+        self.input_queue: queue.Queue = queue.Queue()
+        self.output_queue: queue.Queue = queue.Queue()
+        self.status = "starting"
+        self.thread: Optional[threading.Thread] = None
 
 
 # ============== CORE MANAGER ==============
 
 class CoreManager:
-    """Manages cores - creates fresh core per message, session provides context."""
+    """Manages cores - supports simple and threaded modes."""
     
     def __init__(self):
         self._cores: Dict[str, Dict] = {}  # name -> config
         self._current_session: Optional[str] = None
+        self._instances: Dict[str, CoreInstance] = {}  # session_id -> instance
+        self._lock = threading.Lock()
+        self._mode: str = "threaded"  # "threaded" or "simple"
         self._load_cores()
     
     def _load_cores(self) -> None:
@@ -35,6 +54,10 @@ class CoreManager:
                 if config and 'name' in config:
                     name = config.pop('name')
                     self._cores[name] = config
+    
+    def set_mode(self, mode: str) -> None:
+        """Set mode: 'threaded' for persistent cores, 'simple' for create-per-message."""
+        self._mode = mode
     
     def list(self) -> List[Dict]:
         """List available cores."""
@@ -67,19 +90,10 @@ class CoreManager:
     def start(self, session_id: str = None, core_name: str = None,
               memory_api_url: str = "http://localhost:8030",
               default_db: str = "riven") -> Dict:
-        """Start a new session (creates session ID, core is created per message)."""
+        """Start a new session."""
         # Load default core from config if not provided
         if core_name is None:
-            config_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), 
-                "config.yaml"
-            )
-            if os.path.exists(config_path):
-                with open(config_path) as f:
-                    cfg = yaml.safe_load(f)
-                    core_name = cfg.get('default_core', 'code_hammer')
-            else:
-                core_name = 'code_hammer'
+            core_name = self._get_default_core()
         
         # Validate core exists
         if core_name not in self._cores:
@@ -95,25 +109,75 @@ class CoreManager:
             session_id = str(uuid.uuid4())
         
         self._current_session = session_id
-        display = self._cores[core_name].get('display_name', core_name)
         
+        if self._mode == "threaded":
+            # Threaded mode: spawn background thread
+            with self._lock:
+                if session_id in self._instances:
+                    return {
+                        "session_id": session_id,
+                        "message": f"Session {session_id} already running",
+                        "ok": True
+                    }
+                
+                instance = CoreInstance(session_id, core_name)
+                self._instances[session_id] = instance
+                
+                # Start background thread
+                instance.thread = threading.Thread(
+                    target=self._run_core_thread,
+                    args=(instance,),
+                    daemon=True
+                )
+                instance.thread.start()
+        else:
+            # Simple mode: just record session
+            pass
+        
+        display = self._cores[core_name].get('display_name', core_name)
         return {
             "session_id": session_id,
             "message": f"Session {session_id} ready with {display}",
             "ok": True
         }
     
-    def send(self, session_id: str, message: str, core_name: str = None) -> Dict:
-        """Send a message - creates core, runs, returns output, drops core.
-        
-        Args:
-            session_id: Session ID for context (via memory API)
-            message: Message to send
-            core_name: Optional core to use (uses default if not provided)
+    def _run_core_thread(self, instance: CoreInstance) -> None:
+        """Run core in background thread (threaded mode)."""
+        import sys
+        print(f'[thread] Starting for {instance.session_id}', file=sys.stderr)
+        try:
+            print(f'[thread] Creating core {instance.core_name}', file=sys.stderr)
+            core = get_core(instance.core_name)
+            print(f'[thread] Core created: {core}', file=sys.stderr)
+            instance.status = "running"
             
-        Returns:
-            dict with 'ok', 'output'
-        """
+            while instance.status == "running":
+                try:
+                    msg = instance.input_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+                
+                if msg is None:  # Stop signal
+                    break
+                
+                try:
+                    result = asyncio.run(core.run(msg))
+                    output = str(result.output) if result and hasattr(result, 'output') else str(result)
+                    instance.output_queue.put(output)
+                except Exception as e:
+                    instance.output_queue.put(f"Error: {e}")
+                    
+        except Exception as e:
+            import traceback
+            print(f'[thread] EXCEPTION: {e}', file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            instance.output_queue.put(f"Core error: {e}")
+        finally:
+            instance.status = "stopped"
+            print(f'[thread] Stopped', file=sys.stderr)
+    
+    def send(self, session_id: str, message: str, core_name: str = None) -> Dict:
+        """Send a message to a session."""
         if core_name is None:
             core_name = self._get_default_core()
         
@@ -122,24 +186,44 @@ class CoreManager:
         
         self._current_session = session_id
         
-        try:
-            # Create fresh core instance
-            core = get_core(core_name)
+        if self._mode == "threaded":
+            # Threaded: put message in queue
+            with self._lock:
+                instance = self._instances.get(session_id)
+                if not instance:
+                    return {"ok": False, "error": f"Session '{session_id}' not found"}
+                if instance.status != "running":
+                    return {"ok": False, "error": f"Session not running"}
             
-            # Run synchronously
-            result = asyncio.run(core.run(message))
-            
-            if result and hasattr(result, 'output'):
-                output = str(result.output)
-            elif result:
-                output = str(result)
-            else:
-                output = ""
-            
-            return {"ok": True, "output": output}
-            
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+            instance.input_queue.put(message)
+            return {"ok": True, "queued": True}
+        else:
+            # Simple: create core, run, return
+            try:
+                core = get_core(core_name)
+                result = asyncio.run(core.run(message))
+                output = str(result.output) if result and hasattr(result, 'output') else str(result)
+                return {"ok": True, "output": output}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+    
+    def receive(self, session_id: str, timeout: float = 0.1) -> List[str]:
+        """Receive messages from a session (threaded mode)."""
+        messages = []
+        
+        with self._lock:
+            instance = self._instances.get(session_id)
+            if not instance:
+                return []
+        
+        while True:
+            try:
+                msg = instance.output_queue.get(timeout=0.01)
+                messages.append(msg)
+            except queue.Empty:
+                break
+        
+        return messages
     
     def _get_default_core(self) -> str:
         """Get default core name from config."""
@@ -154,14 +238,36 @@ class CoreManager:
         return 'code_hammer'
     
     def stop(self, session_id: str) -> Dict:
-        """Stop a session (no-op since core is created per message)."""
-        return {"message": f"Session {session_id} ended", "ok": True}
+        """Stop a session."""
+        with self._lock:
+            instance = self._instances.get(session_id)
+            if not instance:
+                return {"message": f"Session {session_id} not found", "ok": False}
+            
+            instance.status = "stopping"
+            instance.input_queue.put(None)  # Signal thread to stop
+            
+            if instance.thread and instance.thread.is_alive():
+                instance.thread.join(timeout=5)
+            
+            del self._instances[session_id]
+            
+            if self._current_session == session_id:
+                self._current_session = None
+        
+        return {"message": f"Session {session_id} stopped", "ok": True}
     
     def list_sessions(self) -> List[Dict]:
-        """List sessions (simplified - just current)."""
-        if self._current_session:
-            return [{"session_id": self._current_session}]
-        return []
+        """List running sessions."""
+        with self._lock:
+            return [
+                {
+                    "session_id": inst.session_id,
+                    "core_name": inst.core_name,
+                    "status": inst.status,
+                }
+                for inst in self._instances.values()
+            ]
 
 
 # ============== GLOBAL INSTANCE ==============
@@ -195,8 +301,13 @@ def stop(session_id: str) -> Dict:
 
 
 def send(session_id: str, message: str, core_name: str = None) -> Dict:
-    """Send a message and get output."""
+    """Send a message to a session."""
     return get_manager().send(session_id, message, core_name)
+
+
+def receive(session_id: str, timeout: float = 0.1) -> List[str]:
+    """Receive messages from a session."""
+    return get_manager().receive(session_id, timeout)
 
 
 def list_sessions() -> List[Dict]:

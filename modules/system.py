@@ -15,7 +15,7 @@ try:
 except Exception:
     CONFIG = {}
 
-from secrets import get_memory_api
+from riven_secrets import get_memory_api
 MEMORY_API_URL = os.environ.get("MEMORY_API_URL", get_memory_api())
 DEFAULT_DB = os.environ.get("MEMORY_DB", CONFIG.get('memory_api', {}).get('db_name', "riven"))
 
