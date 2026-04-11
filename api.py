@@ -74,13 +74,8 @@ def delete_session(session_id: str):
 
 
 @app.post("/api/v1/sessions/{session_id}/messages")
-def send_message(session_id: str, req: MessageSend):
-    """Send a message to a session.
-    
-    If stream=true, returns SSE stream.
-    Otherwise returns direct response.
-    """
-    # Send message
+async def send_message(session_id: str, req: MessageSend):
+    """Send a message to a session. Returns response when complete."""
     result = manager.send(session_id, req.message)
     
     if not result.get("ok"):
@@ -101,17 +96,6 @@ def send_message(session_id: str, req: MessageSend):
         # Simple mode - already have output
         output = result.get("output", "")
     
-    if req.stream:
-        # Stream response via SSE
-        async def generate():
-            words = output.split()
-            for i, word in enumerate(words):
-                yield f"data: {json.dumps({'token': word, 'done': i == len(words)-1})}\n\n"
-                await asyncio.sleep(0.02)
-        
-        return StreamingResponse(generate(), media_type="text/event-stream")
-    
-    # Direct response
     return {"output": output}
 
 

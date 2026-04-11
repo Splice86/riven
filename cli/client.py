@@ -55,7 +55,41 @@ class RivenClient:
             json={"message": message, "stream": stream}
         )
         resp.raise_for_status()
+        
+        if stream:
+            # Return the raw response for streaming
+            return {"stream": True, "response": resp}
+        
         return resp.json()
+    
+    def stream_message(self, message: str) -> str:
+        """Send message and stream response token by token."""
+        if not self.session_id:
+            raise ValueError("No session - call create_session first")
+        
+        import json
+        with requests.post(
+            f"{self.base_url}/api/v1/sessions/{self.session_id}/messages",
+            json={"message": message, "stream": True},
+            stream=True
+        ) as resp:
+            resp.raise_for_status()
+            output = ""
+            for line in resp.iter_lines():
+                if line:
+                    data = line.decode('utf-8')
+                    if data.startswith('data: '):
+                        try:
+                            token_data = json.loads(data[6:])
+                            token = token_data.get('token', '')
+                            print(token, end=' ', flush=True)
+                            output += token + " "
+                            if token_data.get('done'):
+                                break
+                        except:
+                            pass
+            print()  # newline after stream
+            return output
     
     def poll_messages(self) -> List[str]:
         """Poll for messages from the session."""

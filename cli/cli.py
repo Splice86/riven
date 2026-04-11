@@ -98,9 +98,6 @@ def main():
                 print(f"\n{result['output']}\n")
             elif result.get("error"):
                 print(f"\n{RED}Error: {result['error']}{RESET}\n")
-            
-            print(f"{get_session_line(session)}")
-            print(f"{prompt_prefix} > ", end="")
     
     except KeyboardInterrupt:
         print("\n^C Interrupted")
