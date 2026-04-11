@@ -24,7 +24,7 @@ api:
 llm:
   url: "http://127.0.0.1:8010"
   api_key: "sk-dummy"
-  model: "llama3"
+  model: "nvidia/MiniMax-M2.5-NVFP4"
   context_window: 128000
 
 # Context / Summarization settings
@@ -34,11 +34,11 @@ context:
   # Temporal clustering: new cluster if gap > this many minutes
   cluster_gap_minutes: 1
   # Don't summarize messages from the last N minutes (active session)
-  cluster_exclude_minutes: 30
+  cluster_exclude_minutes: 10
   # Minimum cluster size to consider for summarization
   min_cluster_size: 3
 
 # Embedding settings
 embedding:
-  model_size: "27b"  # 270m, 0.6b, or 27b
+  model_size: "270m"  # 270m, 0.6b, or 27b
   force_cpu: true
