@@ -265,6 +265,8 @@ class Core:
                         print(flush=True)
                         
                     elif isinstance(event, FunctionToolCallEvent):
+                        # Actual tool call from model
+                        logger.info(f"Tool call: {event.part.tool_name}")
                         # Buffer tool call - will print with result
                         # Add newline before tool output for clean separation
                         print(flush=True)
