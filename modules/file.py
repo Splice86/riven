@@ -275,23 +275,6 @@ class DocumentManager:
         except Exception as e:
             return f"Error saving {abs_path}: {e}"
     
-    def save_all(self) -> str:
-        """Save all open documents."""
-        saved = []
-        errors = []
-        
-        for path, doc in self._documents.items():
-            try:
-                with open(path, 'w') as f:
-                    f.write(doc.content)
-                saved.append(os.path.basename(path))
-            except Exception as e:
-                errors.append(f"{os.path.basename(path)}: {e}")
-        
-        if errors:
-            return f"Saved {len(saved)} files. Errors: {'; '.join(errors)}"
-        return f"Saved {len(saved)} files: {', '.join(saved)}"
-    
     def close(self, path: str) -> str:
         """Close a document, remove from context."""
         abs_path = os.path.abspath(path)
@@ -440,7 +423,8 @@ You should use this context instead of calling get_lines() or re-opening files.
 open_file("main.py")
 replace_text("main.py", "old_function", "new_function")  # Fuzzy find & replace
 close_file("main.py")
-```"""
+```
+"""
         
         open_files = manager.list_open()
         if not open_files:
