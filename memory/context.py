@@ -386,11 +386,12 @@ class Context:
         unsummarized = []
         for mem in results:
             props = mem.get("properties", {})
-            # Skip if already summarized
+            # Skip if already summarized (original messages marked after summarization)
             if props.get("was_summarized") == "true":
                 continue
-            # Skip if this IS a summary (has summary_level)
-            if props.get("summary_level"):
+            # For level 1, only get original messages (not summaries)
+            # Summaries have role="summary" and summary_level set
+            if props.get("role") == "summary":
                 continue
             
             unsummarized.append({
@@ -437,6 +438,23 @@ class Context:
         
         return summaries
     
+    # Hierarchical max_gap: time window for each summary level
+    # Level 1: ~1 minute (cluster messages within a conversation)
+    # Level 2: ~30 minutes (cluster summaries of conversations)
+    # Level 3: ~3 hours (cluster summary-of-summaries)
+    # Level 4+: ~1 day, ~1 week, etc.
+    MAX_GAP_BY_LEVEL = {
+        1: 60,        # 1 minute
+        2: 1800,      # 30 minutes
+        3: 10800,     # 3 hours
+        4: 86400,     # 1 day
+        5: 604800,    # 1 week
+    }
+    
+    def _get_max_gap_for_level(self, level: int) -> int:
+        """Get the appropriate max_gap for a given summary level."""
+        return self.MAX_GAP_BY_LEVEL.get(level, 86400)  # default to 1 day
+    
     def _group_by_time(self, memories: list[dict], max_gap: int = 30) -> list[list[dict]]:
         """Group memories by temporal proximity.
         
@@ -476,16 +494,22 @@ class Context:
         
         return groups
     
-    def force_cluster(self, target_tokens: int = 5000, min_live_tokens: int = 1000, max_gap: int = 30, level: int = 1, session: str = None) -> dict:
+    def force_cluster(self, target_tokens: int = 5000, min_live_tokens: int = 1000, max_gap: int = None, level: int = 1, session: str = None) -> dict:
         """Force temporal clustering to reduce context to target token count.
         
-        Groups messages by temporal proximity (within max_gap seconds) and summarizes
-        oldest groups first, while keeping at least min_live_tokens in unsummarized form.
+        Groups messages by temporal proximity and summarizes oldest groups first,
+        while keeping at least min_live_tokens in unsummarized form.
+        
+        Uses hierarchical time windows based on level:
+        - Level 1: ~1 minute (messages in a conversation)
+        - Level 2: ~30 minutes (summaries of conversations)
+        - Level 3: ~3 hours (summaries of summaries)
+        - etc.
         
         Args:
             target_tokens: Target token count for summarized context (default 5000)
             min_live_tokens: Minimum tokens to keep unsummarized (default 1000)
-            max_gap: Max seconds between messages to cluster together (default 30)
+            max_gap: Max seconds between messages to cluster (auto-calculated from level if None)
             level: Summary level to create (1 = summary, 2 = summary of summaries, etc.)
             session: Optional session to cluster
             
@@ -494,6 +518,10 @@ class Context:
         """
         if min_live_tokens >= target_tokens:
             return {"error": "min_live_tokens must be less than target_tokens"}
+        
+        # Use hierarchical max_gap based on level if not provided
+        if max_gap is None:
+            max_gap = self._get_max_gap_for_level(level)
         
         iterations = 0
         total_summarized = 0
