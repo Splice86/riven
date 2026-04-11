@@ -136,11 +136,12 @@ class Core:
     ):
         # Load from config if provided
         if config:
-            self.model = config.get('llm_model') or config.get('llm_model', LLM_MODEL)
-            self.llm_url = config.get('llm_url', LLM_URL)
-            self.llm_api_key = config.get('llm_api_key', LLM_API_KEY)
+            # Env vars take priority over config
+            self.model = os.environ.get('LLM_MODEL', config.get('llm_model', LLM_MODEL))
+            self.llm_url = os.environ.get('LLM_URL', config.get('llm_url', LLM_URL))
+            self.llm_api_key = os.environ.get('LLM_API_KEY', config.get('llm_api_key', LLM_API_KEY))
             self.system_prompt = config.get('system_prompt', '')
-            self.db_name = config.get('memory_db', DEFAULT_DB)
+            self.db_name = os.environ.get('MEMORY_DB', config.get('memory_db', DEFAULT_DB))
             self._tool_filter = config.get('tools', None)
             self.tool_timeout = config.get('tool_timeout', 20)
             self.strip_thinking = config.get('strip_thinking', False)
