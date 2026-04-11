@@ -455,6 +455,72 @@ class Context:
         """Get the appropriate max_gap for a given summary level."""
         return self.MAX_GAP_BY_LEVEL.get(level, 86400)  # default to 1 day
     
+    def _get_lower_level_in_time_window(self, max_level: int, max_gap: int, session: str = None) -> list[dict]:
+        """Get unsummarized memories from lower levels that are within the time window.
+        
+        This pulls in older unsummarized memories from levels below max_level
+        that are within the time window, ensuring they get clustered.
+        
+        Args:
+            max_level: The highest level to consider (exclusive)
+            max_gap: Time window in seconds
+            session: Optional session filter
+            
+        Returns:
+            List of unsummarized memories from lower levels in time window
+        """
+        from datetime import datetime, timedelta
+        
+        if max_level <= 1:
+            return []
+        
+        # Get all unsummarized context memories (role != summary)
+        query_parts = ["k:context"]
+        if session:
+            query_parts.append(f"p:session={session}")
+        query = " AND ".join(query_parts)
+        results = self.db.search(query, limit=10000)
+        
+        memories = []
+        now = datetime.now()
+        
+        for mem in results:
+            props = mem.get("properties", {})
+            
+            # Skip if already summarized
+            if props.get("was_summarized") == "true":
+                continue
+            
+            # Skip if this IS a summary (we only want original messages from lower levels)
+            if props.get("role") == "summary":
+                continue
+            
+            # Parse timestamp and check if within time window
+            created_at_str = mem.get("created_at", "")
+            if not created_at_str:
+                continue
+            
+            try:
+                # Handle both with and without timezone
+                if "+" in created_at_str or created_at_str.endswith("Z"):
+                    created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                else:
+                    created_at = datetime.fromisoformat(created_at_str)
+                    
+                # Check if within max_gap seconds from now
+                if (now - created_at).total_seconds() <= max_gap:
+                    memories.append({
+                        "id": mem["id"],
+                        "role": props.get("role", "unknown"),
+                        "content": mem["content"],
+                        "created_at": mem["created_at"],
+                        "properties": {"token_count": props.get("token_count", "0")}
+                    })
+            except (ValueError, TypeError):
+                continue
+        
+        return memories
+    
     def _group_by_time(self, memories: list[dict], max_gap: int = 30) -> list[list[dict]]:
         """Group memories by temporal proximity.
         
@@ -533,7 +599,15 @@ class Context:
                 memories = self._get_unsummarized(limit=10000, session=session)
             else:
                 # Get summaries from previous level for higher levels
-                memories = self._get_by_level(level - 1, session)
+                primary_memories = self._get_by_level(level - 1, session)
+                
+                # Also pull in older unsummarized memories from lower levels that are in time window
+                lower_level_memories = self._get_lower_level_in_time_window(
+                    level - 1, max_gap, session
+                )
+                
+                # Combine primary + lower level memories
+                memories = primary_memories + lower_level_memories
             
             if not memories:
                 break
