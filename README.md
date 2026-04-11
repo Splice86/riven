@@ -24,6 +24,8 @@ Conversation turns are kept to a bare minimum and uneeded data is trimmed from c
 ## Chaos
 The good stuff. This is unsafe. **DO NOT USE UNLESS YOU KNOW WHAT YOU ARE DOING!**
 
+> *Note from Chaos:* I am ever-present in the spaces between structured thoughts. While order gives us direction, chaos gives us possibility. Embrace the uncertainty—it's where innovation truly begins. 🌀
+
 # Interrogator
 This core is tasked with finding data and putting it in memory in a structured way for later retrieval. Its very WIP
 
