@@ -343,12 +343,13 @@ class Core:
                 logger.info("Operation cancelled")
                 return None
             except BrokenResourceError as e:
-                # Stream broken - may have partial results, don't retry
+                # Stream broken - may have tool results, return those
                 logger.warning(f"Stream broken: {e}")
                 if tool_results:
-                    # We have tool results, try to return what we have
-                    return _streamed_text
-                raise
+                    # Return the last tool result
+                    return tool_results[-1]['result']
+                # No tool results, return whatever text we got
+                return _streamed_text or "Stream interrupted"
             except Exception as e:
                 last_error = e
                 
