@@ -386,7 +386,11 @@ class Context:
         unsummarized = []
         for mem in results:
             props = mem.get("properties", {})
+            # Skip if already summarized
             if props.get("was_summarized") == "true":
+                continue
+            # Skip if this IS a summary (has summary_level)
+            if props.get("summary_level"):
                 continue
             
             unsummarized.append({
