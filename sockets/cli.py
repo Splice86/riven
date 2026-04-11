@@ -173,13 +173,22 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     
+    # Load config
+    import yaml
+    CONFIG = {}
+    if os.path.exists("config.yaml"):
+        with open("config.yaml") as f:
+            CONFIG = yaml.safe_load(f) or {}
+    
+    default_core = CONFIG.get('default_core', 'code_hammer')
+    
     # Get core list for help text
     from core_manager import list_cores
     available = [c['name'] for c in list_cores()]
     
     parser = argparse.ArgumentParser(description="Riven AI Agent")
-    parser.add_argument("--core", "-c", default="code_hammer", 
-                        help=f"Core to use (default: code_hammer). Available: {available}")
+    parser.add_argument("--core", "-c", default=default_core, 
+                        help=f"Core to use (default: {default_core}). Available: {available}")
     args = parser.parse_args()
     
     socket = CLISocket(core_name=args.core)

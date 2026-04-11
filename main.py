@@ -1,10 +1,20 @@
 """Main entry point for Riven agent."""
 
 import argparse
+import os
+import yaml
 
 
 def main():
     """Main entry point."""
+    # Load config for default core
+    CONFIG = {}
+    if os.path.exists("config.yaml"):
+        with open("config.yaml") as f:
+            CONFIG = yaml.safe_load(f) or {}
+    
+    default_core = CONFIG.get('default_core', 'code_hammer')
+    
     parser = argparse.ArgumentParser(description="Riven AI Agent")
     
     # Mode selection
@@ -14,8 +24,8 @@ def main():
                         help="Launch WebSocket socket")
     
     # Core selection
-    parser.add_argument("--core", default="code_hammer",
-                        help="Core to use (default: code_hammer)")
+    parser.add_argument("--core", default=default_core,
+                        help=f"Core to use (default: {default_core})")
     
     args = parser.parse_args()
     
@@ -25,7 +35,10 @@ def main():
     elif args.websocket:
         print("WebSocket socket not implemented yet")
     else:
-        # Default: CLI
+        # Default: CLI - pass core via sys.argv
+        import sys
+        sys.argv = ['cli', '-c', args.core]
+        
         from sockets.cli import main as cli_main
         cli_main()
 
