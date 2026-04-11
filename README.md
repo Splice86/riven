@@ -29,7 +29,7 @@ Conversation turns are kept to a bare minimum and unneeded data is trimmed from 
 
 ## Chaos
 The good stuff. This is unsafe. **DO NOT USE UNLESS YOU KNOW WHAT YOU ARE DOING!**
-This one had to be toned down a lot for public consumption
+This one had to be toned down a lot for public consumption - way to cramp my artistic freedom internet people...
 
 > *Note from Chaos:* I am ever-present in the spaces between structured thoughts. While order gives us direction, chaos gives us possibility. Embrace the uncertainty—it's where innovation truly begins. 🌀
 
