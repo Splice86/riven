@@ -350,6 +350,10 @@ class Core:
         # Run agent with message history injected
         result = await self._run_with_retry(system_prompt, user_prompt, message_history)
         
+        # Handle cancelled operation
+        if result is None:
+            return None
+        
         # Strip thinking tags from output before storing in memory
         output_text = str(result.output)
         if self.strip_thinking:
