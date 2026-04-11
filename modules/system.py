@@ -57,6 +57,11 @@ def get_module():
         info += f"Executable: {sys.executable}"
         return info
     
+    def get_system_context() -> str:
+        """Get system context for prompt."""
+        import platform
+        return f"System: Python {platform.python_version()} on {platform.platform()}"
+    
     return Module(
         name="system",
         enrollment=lambda: None,
@@ -65,6 +70,6 @@ def get_module():
             "check_reload_modules": check_reload_modules,
             "get_system_info": get_system_info,
         },
-        get_context=lambda: None,
+        get_context=get_system_context,
         tag="system"
     )

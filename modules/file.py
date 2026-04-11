@@ -486,6 +486,18 @@ def get_module():
         
         return "\n".join(lines)
     
+    def get_file_context() -> str:
+        """Return info about currently open files."""
+        open_files = manager.list_open()
+        if not open_files:
+            return "No files currently open"
+        
+        lines = ["Currently open files:"]
+        for path in open_files:
+            doc = manager._documents[path]
+            lines.append(f"  - {os.path.basename(path)} ({len(doc.lines)} lines)")
+        return "\n".join(lines)
+    
     return Module(
         name="file",
         enrollment=lambda: None,
@@ -500,5 +512,7 @@ def get_module():
             "save_all_files": save_all_files,
             "close_file": close_file,
             "list_open_files": list_open_files,
-        }
+        },
+        get_context=get_file_context,
+        tag="file"
     )
