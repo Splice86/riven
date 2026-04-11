@@ -323,6 +323,7 @@ async def cluster_context(
     target_tokens: int = Query(5000, description="Target token count for summarized context"),
     min_live_tokens: int = Query(1000, description="Minimum tokens to keep unsummarized"),
     max_gap: int = Query(30, description="Max seconds between messages to cluster together"),
+    level: int = Query(1, description="Summary level (1 = summary, 2 = summary of summaries)"),
     session: str | None = Query(None, description="Session ID to cluster (optional)"),
     db: MemoryDB = Depends(get_db)
 ) -> dict:
@@ -335,6 +336,7 @@ async def cluster_context(
         target_tokens: Target token count (default 5000)
         min_live_tokens: Minimum tokens to keep live (default 1000)
         max_gap: Max seconds between messages to cluster (default 30)
+        level: Summary level (1 = summary, 2 = summary of summaries, etc.)
         session: Optional session to cluster
         
     Returns:
@@ -342,7 +344,7 @@ async def cluster_context(
     """
     from context import Context
     ctx = Context(db)
-    return ctx.force_cluster(target_tokens, min_live_tokens, max_gap, session)
+    return ctx.force_cluster(target_tokens, min_live_tokens, max_gap, level, session)
 
 
 @app.post("/memories/summary")

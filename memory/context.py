@@ -246,7 +246,10 @@ class Context:
         total = 0
         for mem in results:
             props = mem.get("properties", {})
+            # Skip if already summarized (any level)
             if props.get("was_summarized") == "true":
+                continue
+            if props.get("summary_level"):
                 continue
             
             token_count = props.get("token_count", "0")
@@ -295,10 +298,17 @@ class Context:
         
         return self._summarize(unsummarized, session)
     
-    def _summarize(self, memories: list[dict], session: str = None) -> dict:
-        """Summarize the given memories."""
+    def _summarize(self, memories: list[dict], session: str = None, level: int = None) -> dict:
+        """Summarize the given memories at the specified level."""
         if not memories:
             return {"summarized": False}
+        
+        # Determine level: use provided level or calculate from input memories
+        if level is None:
+            existing_level = memories[0].get("properties", {}).get("summary_level")
+            level = (int(existing_level) + 1) if existing_level else 1
+        else:
+            level = int(level)
         
         combined = "\n\n".join(m["content"] for m in memories)
         llm = SummarizerLLM()
@@ -323,7 +333,7 @@ class Context:
             keywords=["context", "summary"],
             properties={
                 "role": "summary",
-                "is_summary": "true",
+                "summary_level": str(level),
                 "summarized_count": str(len(memories)),
                 "summarized_tokens": str(total_tokens)
             },
@@ -425,7 +435,7 @@ class Context:
         
         return groups
     
-    def force_cluster(self, target_tokens: int = 5000, min_live_tokens: int = 1000, max_gap: int = 30, session: str = None) -> dict:
+    def force_cluster(self, target_tokens: int = 5000, min_live_tokens: int = 1000, max_gap: int = 30, level: int = 1, session: str = None) -> dict:
         """Force temporal clustering to reduce context to target token count.
         
         Groups messages by temporal proximity (within max_gap seconds) and summarizes
@@ -435,6 +445,7 @@ class Context:
             target_tokens: Target token count for summarized context (default 5000)
             min_live_tokens: Minimum tokens to keep unsummarized (default 1000)
             max_gap: Max seconds between messages to cluster together (default 30)
+            level: Summary level to create (1 = summary, 2 = summary of summaries, etc.)
             session: Optional session to cluster
             
         Returns:
@@ -482,8 +493,8 @@ class Context:
             if len(to_summarize) < 2:
                 break
             
-            # Summarize these
-            result = self._summarize(to_summarize, session)
+            # Summarize these at the specified level
+            result = self._summarize(to_summarize, session, level)
             
             if not result.get("summarized"):
                 break
