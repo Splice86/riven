@@ -154,11 +154,9 @@ def main():
                 print(f"✓ Session cleared. New session: {session[:8]}")
                 continue
             
-            # Send message with streaming
+            # Send message with streaming (client prints during stream)
             try:
-                raw = client.stream_message(user_input)
-                if raw:
-                    print_streamed(raw)
+                client.stream_message(user_input)
             except Exception as e:
                 print(f"\n{RED}Error: {e}{RESET}\n")
     
