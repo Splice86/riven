@@ -269,6 +269,8 @@ class Core:
                                 "tool",
                                 f"{tr['tool']}: {tr['result']}"
                             )
+                        # Add newline at end of output
+                        print(flush=True)
                         # Return result but don't print - already streamed above
                         return event.result
                         

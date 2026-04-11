@@ -19,14 +19,17 @@ async def main():
     args = parser.parse_args()
     
     core = get_core(args.core)
-    print(f"Using core: {args.core}")
+    core_name = args.core
+    prompt_prefix = f"\033[96m[{core_name}]\033[0m"  # Cyan color
+    
+    print(f"Using core: {core_name}")
     print(f"Tools loaded: {list(core._modules.all().keys())}")
     print(f"Memory DB: {core.db_name}")
     print("Riven agent ready. Type 'quit' or 'exit' to stop.\n")
     
     while True:
         try:
-            prompt = input("> ").strip()
+            prompt = input(f"{prompt_prefix} > ").strip()
             
             if prompt.lower() in ('quit', 'exit'):
                 print("Goodbye!")
