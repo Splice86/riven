@@ -286,6 +286,10 @@ class Core:
                         # Return result but don't print - already streamed above
                         return event.result
                         
+            except asyncio.CancelledError:
+                # Handle Ctrl+C interruption gracefully
+                logger.info("Operation cancelled")
+                return None
             except Exception as e:
                 last_error = e
                 

@@ -59,7 +59,7 @@ async def main():
                 continue
             
             # Result is already streamed to terminal, just run it
-            await core.run(prompt)
+            result = await core.run(prompt)
             _processing = False
             
         except KeyboardInterrupt:
