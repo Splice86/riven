@@ -455,26 +455,41 @@ class Context:
         """Get the appropriate max_gap for a given summary level."""
         return self.MAX_GAP_BY_LEVEL.get(level, 86400)  # default to 1 day
     
-    def _get_lower_level_in_time_window(self, max_level: int, max_gap: int, session: str = None) -> list[dict]:
-        """Get unsummarized memories from lower levels that are within the time window.
+    def _get_lower_level_in_time_window(self, primary_memories: list[dict], max_gap: int) -> list[dict]:
+        """Get unsummarized memories from lower levels that are OLDER than the oldest primary memory.
         
-        This pulls in older unsummarized memories from levels below max_level
-        that are within the time window, ensuring they get clustered.
+        This pulls in older unsummarized memories that are within the time window
+        of the oldest primary memory, ensuring old memories get clustered first.
         
         Args:
-            max_level: The highest level to consider (exclusive)
+            primary_memories: The primary memories being clustered (from level-1)
             max_gap: Time window in seconds
-            session: Optional session filter
             
         Returns:
-            List of unsummarized memories from lower levels in time window
+            List of older unsummarized memories from lower levels in time window
         """
         from datetime import datetime, timedelta
         
-        if max_level <= 1:
+        if not primary_memories:
             return []
         
-        # Get all unsummarized context memories (role != summary)
+        # Get the oldest primary memory's timestamp
+        oldest_primary = min(primary_memories, key=lambda m: m.get("created_at", ""))
+        oldest_ts_str = oldest_primary.get("created_at", "")
+        
+        if not oldest_ts_str:
+            return []
+        
+        try:
+            if "+" in oldest_ts_str or oldest_ts_str.endswith("Z"):
+                oldest_ts = datetime.fromisoformat(oldest_ts_str.replace("Z", "+00:00"))
+            else:
+                oldest_ts = datetime.fromisoformat(oldest_ts_str)
+        except (ValueError, TypeError):
+            return []
+        
+        # Get all unsummarized context memories
+        session = primary_memories[0].get("properties", {}).get("session")
         query_parts = ["k:context"]
         if session:
             query_parts.append(f"p:session={session}")
@@ -482,7 +497,6 @@ class Context:
         results = self.db.search(query, limit=10000)
         
         memories = []
-        now = datetime.now()
         
         for mem in results:
             props = mem.get("properties", {})
@@ -491,24 +505,24 @@ class Context:
             if props.get("was_summarized") == "true":
                 continue
             
-            # Skip if this IS a summary (we only want original messages from lower levels)
+            # Skip if this IS a summary
             if props.get("role") == "summary":
                 continue
             
-            # Parse timestamp and check if within time window
             created_at_str = mem.get("created_at", "")
             if not created_at_str:
                 continue
             
             try:
-                # Handle both with and without timezone
                 if "+" in created_at_str or created_at_str.endswith("Z"):
                     created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
                 else:
                     created_at = datetime.fromisoformat(created_at_str)
-                    
-                # Check if within max_gap seconds from now
-                if (now - created_at).total_seconds() <= max_gap:
+                
+                # Only pull in OLDER memories (before the oldest primary memory)
+                # and within the time window
+                time_diff = (oldest_ts - created_at).total_seconds()
+                if 0 < time_diff <= max_gap:
                     memories.append({
                         "id": mem["id"],
                         "role": props.get("role", "unknown"),
@@ -603,7 +617,7 @@ class Context:
                 
                 # Also pull in older unsummarized memories from lower levels that are in time window
                 lower_level_memories = self._get_lower_level_in_time_window(
-                    level - 1, max_gap, session
+                    primary_memories, max_gap
                 )
                 
                 # Combine primary + lower level memories
