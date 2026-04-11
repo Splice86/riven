@@ -520,8 +520,11 @@ close_file("main.py")
         if not open_files:
             return instructions + "\n\nNo files currently open"
         
+        # Sort by modification time (oldest first = most recently modified at bottom)
+        sorted_files = sorted(open_files, key=lambda p: os.path.getmtime(p))
+        
         lines = [instructions, "", "Currently open files with content:"]
-        for path in open_files:
+        for path in sorted_files:
             doc = manager._documents[path]
             lines.append(f"\n=== {os.path.basename(path)} ===")
             lines.append(''.join(doc.lines))
