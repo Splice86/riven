@@ -487,7 +487,7 @@ def get_module():
         return "\n".join(lines)
     
     def get_file_context() -> str:
-        """Return info about currently open files and tool usage instructions."""
+        """Return info about currently open files with their content."""
         # Tool usage instructions
         instructions = """## File Tools Usage
 
@@ -508,7 +508,6 @@ You should use this context instead of calling get_lines() or re-opening files.
 - Don't re-open files - they're already in your context
 - replace_text uses fuzzy matching - just give it the text to find
 - Always save_file after edits before closing
-
 ### Example
 ```
 open_file("main.py")
@@ -521,10 +520,12 @@ close_file("main.py")
         if not open_files:
             return instructions + "\n\nNo files currently open"
         
-        lines = [instructions, "", "Currently open files:"]
+        lines = [instructions, "", "Currently open files with content:"]
         for path in open_files:
             doc = manager._documents[path]
-            lines.append(f"  - {os.path.basename(path)} ({len(doc.lines)} lines)")
+            lines.append(f"\n=== {os.path.basename(path)} ===")
+            lines.append(''.join(doc.lines))
+        return "\n".join(lines)
         return "\n".join(lines)
     
     return Module(
