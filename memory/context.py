@@ -371,7 +371,8 @@ class Context:
                 "id": mem["id"],
                 "role": props.get("role", "unknown"),
                 "content": mem["content"],
-                "created_at": mem["created_at"]
+                "created_at": mem["created_at"],
+                "properties": {"token_count": props.get("token_count", "0")}
             })
         
         unsummarized.sort(key=lambda m: m["created_at"])
