@@ -62,21 +62,6 @@ def _load_config() -> dict:
 CONFIG = _load_config()
 
 
-def _load_secrets() -> dict:
-    """Load secrets from secrets.yaml, falling back to template if not found."""
-    # Try secrets.yaml first (gitignored, for local overrides)
-    if os.path.exists("secrets.yaml"):
-        with open("secrets.yaml") as f:
-            return yaml.safe_load(f) or {}
-    
-    # Fall back to template
-    if os.path.exists("secrets_template.yaml"):
-        with open("secrets_template.yaml") as f:
-            return yaml.safe_load(f) or {}
-    
-    return {}
-
-
 from secrets import get_secret, get_llm_config, get_memory_api
 
 # Legacy env/import fallback
