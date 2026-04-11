@@ -14,7 +14,7 @@ def get_prompt_prefix(core_name: str) -> str:
     return f"\033[96mRiven - {core_name}\033[0m"
 
 
-TAGLINE = "Breaking Things | Code Weapon"
+TAGLINE = "/// S̷E̴G̵F̶A̷U̷L̶T̶ ///"
 
 
 def print_banner() -> None:
@@ -59,7 +59,7 @@ def print_banner() -> None:
         
         # Tagline
         print(f"{CYAN}┌{'─' * 40}┐{RESET}")
-        print(f"{CYAN}│{RESET}  {RED}Breaking Things{PURPLE} | {MAGENTA}Code Weapon{CYAN}         {RESET}{CYAN}│{RESET}")
+        print(f"{CYAN}│{RESET}  {RED}C̶O̶D̶E̶ ̷H̶A̵M̴M̷E̸R̶̶{PURPLE} | {MAGENTA}CORE FAULT{CYAN}         {RESET}{CYAN}│{RESET}")
         print(f"{CYAN}└{'─' * 40}┘{RESET}")
         
     except ImportError:
