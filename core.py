@@ -145,6 +145,7 @@ class Core:
             self.tool_timeout = config.get('tool_timeout', 20)
             self.strip_thinking = config.get('strip_thinking', False)
             self.store_tool_results = config.get('store_tool_results', 0)  # 0=skip, N=store last N lines
+            self.show_line_numbers = config.get('show_line_numbers', True)
         else:
             self.model = model or LLM_MODEL
             self.llm_url = llm_url or LLM_URL
@@ -155,6 +156,7 @@ class Core:
             self.tool_timeout = tool_timeout
             self.strip_thinking = strip_thinking
             self.store_tool_results = store_tool_results  # 0=skip, N=store last N lines
+            self.show_line_numbers = True
         
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -179,6 +181,10 @@ class Core:
                 self._modules.register(module)
             elif module.name in self._tool_filter:
                 self._modules.register(module)
+        
+        # Configure file module
+        from modules.file import set_config as set_file_config
+        set_file_config(self.show_line_numbers)
     
     def cancel(self) -> None:
         """Cancel any ongoing operation."""

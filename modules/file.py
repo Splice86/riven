@@ -353,14 +353,22 @@ class DocumentManager:
         return list(self._documents.keys())
 
 
+# Global config
+_show_line_numbers = True
+
+
+def set_config(show_line_numbers: bool = True) -> None:
+    """Configure the file module."""
+    global _show_line_numbers
+    _show_line_numbers = show_line_numbers
+
+
 def get_module():
     """Get the file module."""
     manager = DocumentManager()
     
     async def open_file(
         path: str,
-        show_line_numbers: bool = True,
-        max_lines: Optional[int] = None
     ) -> str:
         """Open a file and add it to the context.
         
@@ -527,9 +535,12 @@ close_file("main.py")
         for path in sorted_files:
             doc = manager._documents[path]
             lines.append(f"\n=== {os.path.basename(path)} ({len(doc.lines)} lines) ===")
-            # Add line numbers
-            for i, line in enumerate(doc.lines, 1):
-                lines.append(f"{i:4d}  {line.rstrip()}")
+            # Add line numbers if configured
+            if _show_line_numbers:
+                for i, line in enumerate(doc.lines, 1):
+                    lines.append(f"{i:4d}  {line.rstrip()}")
+            else:
+                lines.append(''.join(doc.lines))
         return "\n".join(lines)
     
     return Module(
