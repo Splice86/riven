@@ -537,10 +537,10 @@ class Context:
             group_tokens = sum(int(m.get("properties", {}).get("token_count", "0")) for m in to_summarize)
             remaining_tokens = current_tokens - group_tokens
             
-            # Only enforce min_live if there will be more groups to process after this
-            # If this is the last group and we're above target, allow it
-            more_groups = len(groups) > 1
-            if more_groups and remaining_tokens < min_live_tokens:
+            # Only enforce min_live if there will be more unsummarized memories after this
+            # If we're at the last group and above target, allow summarization anyway
+            remaining_count = len(memories) - len(to_summarize)
+            if remaining_count > 0 and remaining_tokens < min_live_tokens:
                 break
             
             # Summarize these at the specified level
