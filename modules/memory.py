@@ -217,6 +217,43 @@ def get_module():
         result = resp.json()
         return f"Updated memory #{memory_id}"
     
+    async def execute_sql(sql: str, params: Optional[list] = None) -> str:
+        """Execute raw SQL against the memory database.
+        
+        WARNING: This is powerful and potentially dangerous. Use only for debugging
+        or direct database inspection.
+        
+        Args:
+            sql: SQL statement to execute (SELECT, INSERT, UPDATE, DELETE, etc.)
+            params: Optional list of parameters for the SQL query
+            
+        Returns:
+            Query results or row count
+        """
+        import requests
+        resp = requests.post(
+            f"{MEMORY_API_URL}/db/execute",
+            params={"db_name": DEFAULT_DB},
+            json={"sql": sql, "params": params}
+        )
+        if resp.status_code != 200:
+            return f"SQL Error: {resp.json().get('detail', resp.text)}"
+        
+        result = resp.json()
+        if result.get("type") == "select":
+            rows = result.get("rows", [])
+            if not rows:
+                return "No results found."
+            # Format results
+            lines = [f"{result.get('count')} rows:"]
+            for row in rows[:10]:
+                lines.append(str(row))
+            if len(rows) > 10:
+                lines.append(f"... and {len(rows) - 10} more rows")
+            return "\n".join(lines)
+        else:
+            return f"Executed. {result.get('rows_affected')} rows affected."
+    
     async def get_recent_context(hours: int = 24, limit: int = 5) -> str:
         """Get recent memories for context."""
         import requests
@@ -249,6 +286,7 @@ def get_module():
             "add_link": add_link,
             "delete_memory": delete_memory,
             "update_memory": update_memory,
+            "execute_sql": execute_sql,
             "get_recent_context": get_recent_context,
         }
     )
