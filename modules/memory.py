@@ -23,7 +23,7 @@ DEFAULT_DB = os.environ.get("MEMORY_DB", CONFIG.get('memory_api', {}).get('db_na
 def get_module():
     """Get the memory module."""
     
-async def search_memories(query: str = "", limit: int = 50) -> str:
+    async def search_memories(query: str = "", limit: int = 50) -> str:
         """Search the memory database using a query DSL.
         
         Search Syntax:
@@ -72,7 +72,7 @@ async def search_memories(query: str = "", limit: int = 50) -> str:
         
         return "\n".join(lines)
     
-async def add_memory(
+    async def add_memory(
         content: str,
         keywords: Optional[list[str]] = None,
         properties: Optional[dict[str, str]] = None
@@ -96,7 +96,7 @@ async def add_memory(
         result = resp.json()
         return f"Added memory #{result.get('id')}: {result.get('content', '')[:50]}..."
     
-async def get_memory(memory_id: int) -> str:
+    async def get_memory(memory_id: int) -> str:
         """Get a specific memory by its ID.
         
         Use list_memories to find IDs, or search_memories to find relevant memories first.

@@ -37,7 +37,7 @@ class DocumentManager:
     def __init__(self):
         self._documents: dict[str, OpenDocument] = {}
     
-def open(
+    def open(
         self,
         path: str,
         show_line_numbers: bool = True,
@@ -293,7 +293,7 @@ def open(
         
         return f"Removed lines {start}-{end} from {os.path.basename(path)} ({num_removed} lines)"
     
-def save(self, path: str) -> str:
+    def save(self, path: str) -> str:
         """Save an open document's in-memory changes to disk.
         
         Writes the current in-memory content to the original file path.
@@ -319,7 +319,7 @@ def save(self, path: str) -> str:
         except Exception as e:
             return f"Error saving {abs_path}: {e}"
     
-    def save_all(self) -> str:
+    def save(self, path: str) -> str:
         """Save all open documents.
         
         Returns:
@@ -341,7 +341,6 @@ def save(self, path: str) -> str:
         return f"Saved {len(saved)} files: {', '.join(saved)}"
     
     def close(self, path: str) -> str:
-def close(self, path: str) -> str:
         """Close a document, remove from context.
         
         Removes the file from memory. If there are unsaved changes, they are lost.
