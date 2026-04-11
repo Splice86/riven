@@ -405,11 +405,12 @@ class Context:
                 break
             
             # Calculate current token count
-            current_tokens = sum(m.get("properties", {}).get("token_count", "0") for m in unsummarized)
-            try:
-                current_tokens = int(current_tokens)
-            except (ValueError, TypeError):
-                current_tokens = 0
+            current_tokens = 0
+            for m in unsummarized:
+                try:
+                    current_tokens += int(m.get("properties", {}).get("token_count", "0"))
+                except (ValueError, TypeError):
+                    pass
             
             # Check if we're below threshold
             if current_tokens <= target_tokens:
@@ -440,11 +441,12 @@ class Context:
         
         # Get final token count
         final_unsummarized = self._get_unsummarized(limit=10000, session=session)
-        final_tokens = sum(m.get("properties", {}).get("token_count", "0") for m in final_unsummarized)
-        try:
-            final_tokens = int(final_tokens)
-        except (ValueError, TypeError):
-            final_tokens = 0
+        final_tokens = 0
+        for m in final_unsummarized:
+            try:
+                final_tokens += int(m.get("properties", {}).get("token_count", "0"))
+            except (ValueError, TypeError):
+                pass
         
         return {
             "iterations": iterations,
