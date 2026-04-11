@@ -173,16 +173,6 @@ def get_module():
         
         return "\n".join(lines)
     
-    def get_context() -> str:
-        """Get memory stats for system prompt."""
-        import requests
-        try:
-            resp = requests.get(f"{MEMORY_API_URL}/stats", params={"db_name": DEFAULT_DB}, timeout=2)
-            count = resp.json().get("count", 0)
-            return f"Memory database: {count} memories"
-        except Exception:
-            return "Memory database: unavailable"
-    
     return Module(
         name="memory",
         enrollment=lambda: None,
@@ -193,7 +183,5 @@ def get_module():
             "list_memories": list_memories,
             "get_memory_stats": get_memory_stats,
             "get_recent_context": get_recent_context,
-        },
-        get_context=get_context,
-        tag="memory"
+        }
     )
