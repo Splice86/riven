@@ -213,7 +213,7 @@ class Core:
         """Get the current session_id."""
         return self._session_id
     
-    def _create_agent(self, system_prompt: str) -> Agent:
+    def _create_agent(self) -> Agent:
         """Create a pydantic_ai Agent."""
         client = AsyncOpenAI(base_url=self.llm_url, api_key=self.llm_api_key)
         provider = OpenAIProvider(openai_client=client)
@@ -223,11 +223,18 @@ class Core:
         module_funcs = self._modules.get_functions()
         tools = create_tools(module_funcs, self.tool_timeout)
         
-        return Agent(
+        agent = Agent(
             model=model,
-            system_prompt=system_prompt,
             tools=tools
         )
+        
+        # Register dynamic system prompt - runs before EVERY model request
+        # (including after every tool call), keeping context fresh
+        @agent.system_prompt(dynamic=True)
+        def build_dynamic_system_prompt() -> str:
+            return self._build_system_prompt()
+        
+        return agent
 
     def _build_system_prompt(self) -> str:
         """Build system prompt with module context."""
@@ -325,7 +332,8 @@ class Core:
         
         Yields dicts with 'token' key for SSE streaming.
         """
-        system_prompt = self._build_system_prompt()
+        # System prompt is now built dynamically via @agent.system_prompt(dynamic=True)
+        # so it refreshes after every tool call
         user_prompt, message_history = self._build_prompt(prompt)
         
         from pydantic_ai.messages import (
@@ -333,7 +341,7 @@ class Core:
             UserPromptPart, TextPart
         )
         
-        agent = self._create_agent(system_prompt)
+        agent = self._create_agent()
         _streamed_text = ""
         _thinking_buffer = ""
         pending_tool = None
