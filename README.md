@@ -1,7 +1,13 @@
 
 
 # Riven
-Riven is my testbed for ideas about AI and a space for me to creatively express myself. 
+
+> [!NOTE]
+> TODO: Update the features list!
+> Fix the session system. Part of the code pulls from the database system, the other part from local stuff in the manager
+> It should all be local!
+
+Riven is my testbed for ideas about AI and a space for me to creatively express myself.
 This is an art project, not a tool. 
 This is intended to entertain, outrage, delight, and offend.
 As such it comes with no warranty or support and may not be used for commercial purposes - whole or in part.
