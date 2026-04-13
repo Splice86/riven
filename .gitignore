@@ -31,3 +31,6 @@ debug_context_*.txt
 
 # Secrets (API keys, endpoints)
 secrets.yaml
+
+# PDF ingestion (contains sensitive docs)
+pdf_ingest/

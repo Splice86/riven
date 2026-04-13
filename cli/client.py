@@ -1,6 +1,7 @@
 """Riven API Client - connects to Riven API server."""
 
 import os
+import uuid
 import yaml
 import requests
 from typing import Optional, List, Dict
@@ -44,12 +45,17 @@ class RivenClient:
         return resp.json().get("cores", [])
     
     def create_session(self, core_name: str = None) -> Dict:
-        """Create a new session."""
-        data = {"core_name": core_name} if core_name else {}
+        """Create a new session with a client-generated session ID."""
+        # Generate session ID on client side
+        self.session_id = str(uuid.uuid4())
+        
+        data = {"session_id": self.session_id}
+        if core_name:
+            data["core_name"] = core_name
+        
         resp = requests.post(f"{self.base_url}/api/v1/sessions", json=data)
         resp.raise_for_status()
         result = resp.json()
-        self.session_id = result.get("session_id")
         return result
     
     def send_message(self, message: str, stream: bool = False) -> Dict:

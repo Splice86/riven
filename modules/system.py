@@ -144,21 +144,9 @@ def get_module():
         lines.append(f"Platform: {platform.platform()}")
         lines.append(f"Executable: {sys.executable}")
         
-        # System prompt from core
+        # System prompt - removed global, to be reworked
         lines.append("\n### SYSTEM PROMPT ###")
-        try:
-            # Late import to avoid circular imports
-            import core as core_module
-            if hasattr(core_module, '_current_system_prompt'):
-                prompt = core_module._current_system_prompt
-                if prompt:
-                    lines.append(prompt)
-                else:
-                    lines.append("(no prompt built yet - run a query first)")
-            else:
-                lines.append("(core not fully initialized)")
-        except Exception as e:
-            lines.append(f"Error getting system prompt: {e}")
+        lines.append("(system prompt captured at runtime - rework pending)")
         
         # Get module contexts
         lines.append("\n### MODULE CONTEXTS ###")

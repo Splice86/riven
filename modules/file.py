@@ -1,9 +1,7 @@
-"""File module for riven - session-aware file management with memory DB integration."""
+"""File module v2 for riven - simplified session-aware file management with memory DB."""
 
 import os
-import io
 import requests
-from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime
 
@@ -14,15 +12,6 @@ try:
 except ImportError:
     HAS_JELLYFISH = False
 
-# Load config
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
-try:
-    import yaml
-    with open(CONFIG_PATH) as f:
-        CONFIG = yaml.safe_load(f)
-except Exception:
-    CONFIG = {}
-
 from modules import Module
 from riven_secrets import get_memory_api, get_secret
 
@@ -30,6 +19,11 @@ from riven_secrets import get_memory_api, get_secret
 # Memory API configuration
 MEMORY_API_URL = os.environ.get("MEMORY_API_URL", get_memory_api())
 DEFAULT_DB = os.environ.get("MEMORY_DB", get_secret('memory_api', 'db_name', default="default"))
+
+
+def _count_tokens(text: str) -> int:
+    """Rough token count - ~4 chars per token."""
+    return len(text) // 4
 
 
 def _find_best_window(
@@ -63,127 +57,48 @@ def _find_best_window(
     return None, best_score
 
 
-def _count_tokens(text: str) -> int:
-    """Rough token count - ~4 chars per token."""
-    return len(text) // 4
+def _search_memories(session_id: str, query: str, limit: int = 50) -> list[dict]:
+    """Search memory DB and return results."""
+    try:
+        resp = requests.post(
+            f"{MEMORY_API_URL}/memories/search",
+            params={"db_name": DEFAULT_DB},
+            json={"query": f"k:{session_id} AND k:file AND {query}", "limit": limit},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            return resp.json().get("memories", [])
+    except Exception:
+        pass
+    return []
 
 
-class DocumentManager:
-    """Manages open documents with line-aware operations.
+def _delete_memory(memory_id: str) -> None:
+    """Delete a memory by ID."""
+    try:
+        requests.delete(
+            f"{MEMORY_API_URL}/memories/{memory_id}",
+            params={"db_name": DEFAULT_DB},
+            timeout=5
+        )
+    except Exception:
+        pass
+
+
+def get_module(session_id: str):
+    """Get the file module.
     
-    session_id_getter: callable that returns the current session_id from the Module.
+    Args:
+        session_id: The session ID passed during enrollment
     """
     
-    def __init__(self, session_id_getter: callable = None):
-        self._session_id_getter = session_id_getter
-    
-    def _get_session_id(self) -> str:
-        """Get session_id from the Module."""
-        if self._session_id_getter:
-            return self._session_id_getter()
-        raise ValueError("No session_id_getter set on DocumentManager")
-    
-    def _get_memory_db(self) -> str:
-        """Get the memory DB name."""
-        return DEFAULT_DB
-    
-    def _save_to_memory(self, path: str, line_start: int = 0, line_end: Optional[int] = None) -> None:
-        """Save file record to memory DB."""
-        session_id = self._get_session_id()
-        
-        abs_path = os.path.abspath(path)
-        filename = os.path.basename(abs_path)
-        line_end_str = str(line_end) if line_end else ""
-        
-        # Content: filename,line_start,line_end
-        content = f"{filename},{line_start},{line_end_str}"
-        
-        try:
-            requests.post(
-                f"{MEMORY_API_URL}/memories",
-                params={"db_name": self._get_memory_db()},
-                json={
-                    "content": content,
-                    "keywords": [session_id, "file_record"],
-                    "properties": {"path": abs_path, "session": session_id}
-                },
-                timeout=5
-            )
-        except Exception:
-            pass  # Non-critical if memory save fails
-    
-    def _delete_from_memory(self, path: str) -> None:
-        """Delete file record from memory DB."""
-        session_id = self._get_session_id()
-        
-        abs_path = os.path.abspath(path)
-        
-        try:
-            # Search for this file record and delete it
-            resp = requests.post(
-                f"{MEMORY_API_URL}/memories/search",
-                params={"db_name": self._get_memory_db()},
-                json={
-                    "query": f"k:{self._get_session_id()} AND k:file_record AND path:{abs_path}",
-                    "limit": 10
-                },
-                timeout=5
-            )
-            if resp.status_code == 200:
-                results = resp.json().get("memories", [])
-                for mem in results:
-                    requests.delete(
-                        f"{MEMORY_API_URL}/memories/{mem['id']}",
-                        params={"db_name": self._get_memory_db()},
-                        timeout=5
-                    )
-        except Exception:
-            pass  # Non-critical
-    
-    def _load_from_memory(self) -> list[tuple[str, int, Optional[int]]]:
-        """Load open files from memory DB. Returns list of (path, line_start, line_end)."""
-        session_id = self._get_session_id()
+    # --- Tool Functions ---
 
-        try:
-            resp = requests.post(
-                f"{MEMORY_API_URL}/memories/search",
-                params={"db_name": self._get_memory_db()},
-                json={
-                    "query": f"p:session={session_id} AND k:file_record",
-                    "limit": 50
-                },
-                timeout=5
-            )
-            if resp.status_code != 200:
-                return []
-            
-            results = resp.json().get("memories", [])
-            files = []
-            for mem in results:
-                props = mem.get("properties", {})
-                path = props.get("path")
-                if not path:
-                    continue
-                
-                # Parse content: filename,line_start,line_end
-                content = mem.get("content", "")
-                parts = content.split(",")
-                try:
-                    line_start = int(parts[1]) if len(parts) > 1 else 0
-                    line_end = int(parts[2]) if len(parts) > 2 and parts[2] else None
-                except (ValueError, IndexError):
-                    line_start, line_end = 0, None
-                
-                files.append((path, line_start, line_end))
-            return files
-        except Exception:
-            return []
-    
-    def open(self, path: str, line_start: int = None, line_end: int = None) -> str:
-        """Open a file and add record to memory DB.
+    async def open_file(path: str, line_start: int = None, line_end: int = None) -> str:
+        """Open a file and add it to the file context.
         
         Args:
-            path: Path to the file
+            path: Path to the file to open.
             line_start: Start line for partial opening (0-indexed, None = from start)
             line_end: End line for partial opening (None = to end)
             
@@ -195,25 +110,21 @@ class DocumentManager:
         if not os.path.exists(abs_path):
             return f"Error: File {abs_path} not found"
         
-        session_id = self._get_session_id()
-        
         filename = os.path.basename(abs_path)
-        line_start_str = str(line_start) if line_start is not None else "0"
-        line_end_str = str(line_end) if line_end is not None else ""
         
+        # Save file record to memory DB
         try:
             requests.post(
                 f"{MEMORY_API_URL}/memories",
-                params={"db_name": self._get_memory_db()},
+                params={"db_name": DEFAULT_DB},
                 json={
                     "content": f"open: {filename}",
-                    "keywords": ["file_record"],
+                    "keywords": [session_id, "file"],
                     "properties": {
-                        "session": session_id,
                         "path": abs_path,
                         "filename": filename,
-                        "line_start": line_start_str,
-                        "line_end": line_end_str
+                        "line_start": str(line_start) if line_start is not None else "0",
+                        "line_end": str(line_end) if line_end is not None else ""
                     }
                 },
                 timeout=5
@@ -233,18 +144,22 @@ class DocumentManager:
             line_info = f" (lines {line_start or 0}-{line_end or 'end'})"
         
         return f"Opened {filename} ({total_lines} lines){line_info}"
-    
-    def replace_text(
-        self,
-        path: str,
-        old_text: str,
-        new_text: str,
-        threshold: float = 0.95,
-    ) -> str:
-        """Replace text anywhere in file using fuzzy matching (works directly on disk)."""
+
+    async def replace_text(path: str, old_text: str, new_text: str, threshold: float = 0.95) -> str:
+        """Replace text in a file using fuzzy matching (auto-saves).
+        
+        Args:
+            path: Path to the file
+            old_text: Text to find and replace
+            new_text: Replacement text
+            threshold: Fuzzy match threshold (0.0-1.0), default 0.95
+            
+        Returns:
+            Confirmation message or error
+        """
         abs_path = os.path.abspath(path)
         
-        # Read file directly from disk
+        # Read file from disk
         try:
             with open(abs_path, 'r') as f:
                 content = f.read()
@@ -263,7 +178,7 @@ class DocumentManager:
             lines[start:end] = new_lines
             new_content = ''.join(lines)
             
-            # Save directly to disk
+            # Save to disk
             try:
                 with open(abs_path, 'w') as f:
                     f.write(new_content)
@@ -281,77 +196,49 @@ class DocumentManager:
                 f"Tip: Lower threshold if needed."
             )
 
-    def close(self, filename_or_all: str, all_flag: bool = False) -> str:
-        """Close a file by name, or close all files if all_flag=True.
+    async def close_file(filename: str) -> str:
+        """Close a file by removing its record from memory DB.
         
         Args:
-            filename_or_all: Filename to close, or "all" if using all_flag
-            all_flag: If True, close all files for this session
+            filename: Filename to close (can be full path or just name)
             
         Returns:
             Confirmation message
         """
-        session_id = self._get_session_id()
+        name = os.path.basename(filename)
         
-        if all_flag:
-            # Close all files for this session
-            try:
-                resp = requests.post(
-                    f"{MEMORY_API_URL}/memories/search",
-                    params={"db_name": self._get_memory_db()},
-                    json={
-                        "query": f"k:file_record AND p:session={session_id}",
-                        "limit": 100
-                    },
-                    timeout=5
-                )
-                if resp.status_code == 200:
-                    memories = resp.json().get("memories", [])
-                    count = 0
-                    for mem in memories:
-                        requests.delete(
-                            f"{MEMORY_API_URL}/memories/{mem['id']}",
-                            params={"db_name": self._get_memory_db()},
-                            timeout=5
-                        )
-                        count += 1
-                    return f"Closed {count} open files"
-            except Exception as e:
-                return f"Error: {e}"
-        else:
-            # Close specific file
-            filename = os.path.basename(filename_or_all)
+        memories = _search_memories(session_id, f"p:filename={name}", limit=1)
+        
+        if memories:
+            _delete_memory(memories[0]['id'])
+            return f"Closed {name}"
+        
+        return f"File {name} not open"
+
+    async def close_all_files() -> str:
+        """Close all open files for this session.
+        
+        Returns:
+            Confirmation message with count
+        """
+        memories = _search_memories(session_id, "k:file", limit=100)
+        
+        count = 0
+        for mem in memories:
+            _delete_memory(mem['id'])
+            count += 1
+        
+        return f"Closed {count} open files"
+
+    async def file_info(path: str) -> dict:
+        """Get file metadata without loading content.
+        
+        Args:
+            path: Path to the file
             
-            try:
-                resp = requests.post(
-                    f"{MEMORY_API_URL}/memories/search",
-                    params={"db_name": self._get_memory_db()},
-                    json={
-                        "query": f"k:file_record AND p:session={session_id} AND p:filename={filename}",
-                        "limit": 1
-                    },
-                    timeout=5
-                )
-                if resp.status_code == 200:
-                    memories = resp.json().get("memories", [])
-                    if memories:
-                        requests.delete(
-                            f"{MEMORY_API_URL}/memories/{memories[0]['id']}",
-                            params={"db_name": self._get_memory_db()},
-                            timeout=5
-                        )
-                        return f"Closed {filename}"
-                    return f"File {filename} not open"
-            except Exception as e:
-                return f"Error: {e}"
-    
-    def list_open(self) -> list[str]:
-        """List all open document paths from memory DB."""
-        files = self._load_from_memory()
-        return [f[0] for f in files]
-    
-    def info(self, path: str) -> dict:
-        """Get file metadata without loading content."""
+        Returns:
+            Dict with file metadata
+        """
         abs_path = os.path.abspath(path)
         
         if not os.path.exists(abs_path):
@@ -359,7 +246,6 @@ class DocumentManager:
         
         stat = os.stat(abs_path)
         
-        # Count lines
         try:
             with open(abs_path, 'r') as f:
                 content = f.read()
@@ -379,180 +265,78 @@ class DocumentManager:
             "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
         }
 
-
-# Global state for file context refresh
-_file_context_dirty = False
-_manager: Optional[DocumentManager] = None
-
-
-def set_manager(manager: DocumentManager) -> None:
-    """Set the global document manager (used by core to pass session_id)."""
-    global _manager
-    _manager = manager
-
-def get_module():
-    """Get the file module.
-    
-    Session ID is set on the Module via registry.register(module, session_id).
-    The manager accesses it at runtime via a callable.
-    """
-    global _manager
-    
-    # Placeholder - will be set when module is registered
-    _module_holder = {'module': None}
-    
-    def _get_session_from_module():
-        if _module_holder['module'] is None:
-            raise ValueError("File module not registered - session ID not available")
-        return _module_holder['module']._session_id
-    
-    manager = DocumentManager(session_id_getter=_get_session_from_module)
-    set_manager(manager)
-    
-    async def open_file(
-        path: str,
-        line_start: int = None,
-        line_end: int = None,
-    ) -> str:
-        """Open a file and add it to the context.
-        
-        Args:
-            path: Path to the file to open.
-            line_start: Start line for partial opening (0-indexed, None = from start)
-            line_end: End line for partial opening (None = to end)
-            
-        Returns:
-            Confirmation message
-        """
-        return manager.open(path, line_start, line_end)
-    
-    async def replace_text(path: str, old_text: str, new_text: str, threshold: float = 0.95) -> str:
-        """Replace text anywhere in file using fuzzy matching (auto-saves)."""
-        result = manager.replace_text(path, old_text, new_text, threshold)
-        return result
-    
-    async def close_file(filename_or_all: str, all: bool = False) -> str:
-        """Close a file by name, or close all files if all=True.
-        
-        Args:
-            filename_or_all: Filename to close, or "all" to close everything
-            all: If True, close all open files for this session
-        """
-        result = manager.close(filename_or_all, all_flag=all)
-        return result
-    
-    async def file_info(path: str) -> dict:
-        """Get file metadata: line count, token count, size, dates.
-        
-        Args:
-            path: Path to the file
-            
-        Returns:
-            Dict with file metadata
-        """
-        return manager.info(path)
-    
     def get_context() -> str:
-        """Return info about currently open files with their content.
+        """Return currently open files with their content.
         
-        Loads open files from memory DB based on session_id, then reads from disk.
+        Queries memory DB for file records with session_id, then loads
+        the actual file content from disk.
         """
-        # Instructions
-        instructions = f"Sesh ID: {manager._get_session_id()}" + """
-## File Tools Usage
-### CRITICAL: Use System Prompt Context
-Open files are automatically included in your system prompt as {file}. 
-Use this context instead of re-opening files.
+        # Instructions for the AI
+        instructions = f"""## File Tools
 
-### Workflow: Open → Edit → Refresh → Close
-1. **open_file(path)**: Opens a file (do this first)
-2. **open_file(path, line_start, line_end)**: Open specific line range
-3. **file_info(path)**: Get file metadata without loading content
-4. **replace_text(path, old_text, new_text)**: Replace text anywhere using fuzzy matching (auto-saves)
-5. **refresh_file_context()**: Call this AFTER editing to get updated file content in context
-6. **close_file(path)**: Close the file
+### Workflow
+1. **open_file(path)** - Open a file into context
+2. **open_file(path, line_start, line_end)** - Open specific line range
+3. **replace_text(path, old_text, new_text)** - Replace text (auto-saves)
+4. **close_file(filename)** - Close a file
+5. **close_all_files()** - Close all open files
+6. **file_info(path)** - Get file metadata
 
 ### Important
-- After replace_text, ALWAYS call refresh_file_context() to update your context
-- The {file} section won't update automatically - you must request refresh
-- Don't re-open files - use refresh_file_context() instead
-### Example
-```
-open_file("main.py")
-replace_text("main.py", "old_function", "new_function")
-refresh_file_context()
-close_file("main.py")
-```
+- Open files are automatically included in your context below
+- Use replace_text() for edits - it saves automatically
+- Close files when done to keep context clean
+- Files not in context must be re-opened
 """
         
-        # Try to load from memory DB first
-        memory_files = manager._load_from_memory()
+        # Search memory DB for open files
+        memories = _search_memories(session_id, "k:file", limit=50)
         
-        open_files = manager.list_open()
-        
-        # If we have memory files but no loaded docs, load them
-        if memory_files and not open_files:
-            for path, line_start, line_end in memory_files:
-                if os.path.exists(path):
-                    manager.open(path, line_start, line_end)
-            open_files = manager.list_open()
-        
-        if not open_files:
+        if not memories:
             return instructions + "\n\nNo files currently open"
         
-        # Refresh content from disk for each open file
-        for path in open_files:
-            if os.path.exists(path):
-                try:
-                    with open(path, 'r') as f:
-                        content = f.read()
-                    abs_path = os.path.abspath(path)
-                    all_lines = content.splitlines(keepends=True)
-                    
-                    # Get the doc to see what line range was requested
-                    doc = manager._documents.get(abs_path)
-                    start = doc.line_start if doc else 0
-                    end = doc.line_end if doc else None
-                    
-                    if start > 0 or end:
-                        end = end or len(all_lines)
-                        content = ''.join(all_lines[start:end])
-                    else:
-                        content = content
-                    
-                    manager._documents[abs_path] = OpenDocument(
-                        path=abs_path, 
-                        content=content,
-                        line_start=start,
-                        line_end=end
-                    )
-                except Exception:
-                    pass
-        
-        # Sort by modification time
-        sorted_files = sorted(open_files, key=lambda p: os.path.getmtime(p))
-        
-        lines = [instructions, "", "Currently open files with content:"]
+        # Build context from disk
+        lines = [instructions, "", "=== Open Files ==="]
         total_tokens = 0
-        for path in sorted_files:
-            doc = manager._documents[path]
-            lines.append(f"\n=== {os.path.basename(path)} ===")
-            if doc.line_start > 0 or doc.line_end:
-                lines.append(f"[lines {doc.line_start}-{doc.line_end or 'end'}]")
-            file_content = ''.join(doc.lines)
-            lines.append(file_content)
-            total_tokens += _count_tokens(file_content)
         
-        # Add token count and warning
-        token_limit = CONFIG.get('file_context', {}).get('token_limit', 32000)
+        for mem in memories:
+            props = mem.get("properties", {})
+            path = props.get("path")
+            
+            if not path or not os.path.exists(path):
+                continue
+            
+            try:
+                with open(path, 'r') as f:
+                    content = f.read()
+                
+                # Apply line range if specified
+                line_start = props.get("line_start", "0")
+                line_end = props.get("line_end", "")
+                
+                start = int(line_start) if line_start != "0" else 0
+                if line_end:
+                    end = int(line_end)
+                    content_lines = content.splitlines(keepends=True)
+                    content = ''.join(content_lines[start:end])
+                
+                filename = os.path.basename(path)
+                lines.append(f"\n=== {filename} ===")
+                if start > 0 or line_end:
+                    lines.append(f"[lines {start}-{line_end or 'end'}]")
+                lines.append(content)
+                total_tokens += _count_tokens(content)
+                
+            except Exception:
+                continue
+        
+        # Token count
         lines.append(f"\n\n--- File Context Stats ---")
         lines.append(f"Total open file tokens: {total_tokens:,}")
-        if total_tokens > token_limit:
-            lines.append(f"⚠️  WARNING: Token count exceeds {token_limit:,} limit! Consider closing some files.")
         
         return "\n".join(lines)
-    
-    # Create module and set holder reference
+
+    # Create module
     module = Module(
         name="file",
         enrollment=lambda: None,
@@ -560,11 +344,11 @@ close_file("main.py")
             "open_file": open_file,
             "replace_text": replace_text,
             "close_file": close_file,
+            "close_all_files": close_all_files,
             "file_info": file_info,
-            "refresh_file_context": lambda: "File context will be refreshed on next prompt",
         },
         get_context=get_context,
         tag="file"
     )
-    _module_holder['module'] = module
+    
     return module

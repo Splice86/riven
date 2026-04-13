@@ -13,4 +13,4 @@ memory_api:
 
 # File context settings
 file_context:
-  token_limit: 64000  # Max tokens before showing warning (default 32K)
+  token_limit: 48000  # Max tokens before showing warning (default 32K)

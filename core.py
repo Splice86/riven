@@ -9,8 +9,6 @@ from typing import Any
 import requests
 import yaml
 
-# Global to store the last built system prompt (for debug/diagnostics)
-_current_system_prompt: str = ""
 from pydantic_ai import Agent
 from pydantic_ai import AgentStreamEvent, AgentRunResultEvent
 from pydantic_ai.messages import (
@@ -88,20 +86,10 @@ def _resolve_core_config(core_config: dict) -> dict:
 class MemoryClient:
     """Simple client for memory API context endpoints."""
     
-    def __init__(self, db_name: str = "default", base_url: str = MEMORY_API_URL):
+    def __init__(self, db_name: str = "default", base_url: str = MEMORY_API_URL, session_id: str = None):
         self.db_name = db_name or DEFAULT_DB
         self.base_url = base_url
-        self.session_id = None  # Current session ID
-    
-    def new_session(self) -> str:
-        """Create a new session and return the session."""
-        resp = requests.post(
-            f"{self.base_url}/session/new",
-            params={"db_name": self.db_name}
-        )
-        resp.raise_for_status()
-        self.session_id = resp.json().get("session")
-        return self.session_id
+        self.session_id = session_id  # Set from caller
     
     def add_context(self, role: str, content: str, created_at: str = None, session: str = None) -> dict:
         """Add a context message."""
@@ -146,7 +134,8 @@ class Core:
         tools: list = None,
         tool_timeout: int = 20,
         strip_thinking: bool = False,
-        store_tool_results: int = 0  # 0=skip, N=store last N lines
+        store_tool_results: int = 0,  # 0=skip, N=store last N lines
+        session_id: str = None  # Must be provided by caller
     ):
         # Load from config if provided
         if config:
@@ -176,10 +165,12 @@ class Core:
         self._cancelled = False
 
         self._modules = ModuleRegistry()
-        self._memory = MemoryClient(db_name=self.db_name, base_url=MEMORY_API_URL)
         
-        # Initialize session - create new one on start
-        self._session_id = self._memory.new_session()
+        # Session ID must be provided by caller (from client)
+        if not session_id:
+            raise ValueError("session_id is required - must be provided by client")
+        self._session_id = session_id
+        self._memory = MemoryClient(db_name=self.db_name, base_url=MEMORY_API_URL, session_id=session_id)
         
         # Register modules based on tool filter
         self._register_modules()
@@ -199,20 +190,7 @@ class Core:
     def cancel(self) -> None:
         """Cancel any ongoing operation."""
         self._cancelled = True
-    
-    def clear_session(self) -> str:
-        """Clear current session and create a new one.
-        
-        Returns:
-            The new session_id
-        """
-        self._session_id = self._memory.new_session()
-        return self._session_id
-    
-    def get_session_id(self) -> str:
-        """Get the current session_id."""
-        return self._session_id
-    
+
     def _create_agent(self) -> Agent:
         """Create a pydantic_ai Agent."""
         client = AsyncOpenAI(base_url=self.llm_url, api_key=self.llm_api_key)
@@ -261,15 +239,8 @@ class Core:
                 if value is not None:
                     prompt = prompt.replace(f"{{{module.tag}}}", value)
         
-        # Store globally for debug access
-        global _current_system_prompt
-        _current_system_prompt = prompt
-        
         return prompt
 
-    def get_system_prompt() -> str:
-        """Get the current system prompt (for debug/diagnostics)."""
-        return _current_system_prompt
 
     def _build_prompt(self, user_input: str) -> tuple[str, list[ModelMessage]]:
         """Build prompt with memory context.
@@ -466,23 +437,23 @@ def get_core(name: str = "code_hammer", session_id: str = None) -> Core:
     
     Args:
         name: Name of the core in cores/ folder (default: "code_hammer")
-        session_id: Optional session ID for memory persistence
+        session_id: Session ID from client for memory persistence
     
     Returns:
         Configured Core instance
     
     Raises:
-        ValueError: If core name not found
+        ValueError: If core name not found or session_id not provided
     """
     cores = _load_cores()
     
     if name not in cores:
         raise ValueError(f"Core '{name}' not found. Available: {list(cores.keys())}")
     
-    core = Core(config=cores[name])
-    if session_id:
-        core._session_id = session_id  # Use provided session for memory
-    return core
+    if not session_id:
+        raise ValueError("session_id is required - must be provided by client")
+    
+    return Core(config=cores[name], session_id=session_id)
 
 
 
