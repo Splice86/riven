@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
-import uuid
+
 
 from database import MemoryDB, init_db
 from context import Context
@@ -304,18 +304,7 @@ async def get_context(
     return {"context": context, "count": len(context)}
 
 
-@app.post("/session/new")
-async def new_session(db: MemoryDB = Depends(get_db)) -> dict:
-    """Generate a new session ID.
-    
-    Returns a new UUID that can be used for session in context calls.
-    Use this when starting a new conversation or after clearing session context.
-    
-    Returns:
-        New session string
-    """
-    session = str(uuid.uuid4())
-    return {"session": session}
+
 
 
 @app.post("/context/cluster")
