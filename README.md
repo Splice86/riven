@@ -16,7 +16,7 @@ As such it comes with no warranty or support and may not be used for commercial 
 
 ## CodeHammer
 
-CodeHammer is my implementation of a theory about how to make AI coding assistants actually useful.
+CodeHammer is my implementation of a theory about AI coding assistants.
 
 ### The Theory
 
