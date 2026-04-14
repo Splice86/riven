@@ -122,20 +122,28 @@ def get_module(session_id: str = None):
             return f"Error: File {abs_path} not found"
         
         filename = os.path.basename(abs_path)
+        line_start = line_start if line_start is not None else 0
+        line_end = line_end if line_end is not None else "*"
+        line_range = f"{line_start}-{line_end}"  # e.g., "0-50" or "100-*"
         
-        # Save file record to memory DB
+        # Save file record to memory DB with range-aware keywords
         try:
             requests.post(
                 f"{MEMORY_API_URL}/memories",
                 params={"db_name": DEFAULT_DB},
                 json={
-                    "content": f"open: {filename}",
-                    "keywords": [_get_session_id(), "file"],
+                    "content": f"open: {filename} [{line_range}]",
+                    "keywords": [
+                        _get_session_id(),
+                        "file",
+                        f"file:{filename}",               # For closing all ranges of this file
+                        f"file:{filename}:{line_range}"    # For exact range match
+                    ],
                     "properties": {
                         "path": abs_path,
                         "filename": filename,
-                        "line_start": str(line_start) if line_start is not None else "0",
-                        "line_end": str(line_end) if line_end is not None else ""
+                        "line_start": str(line_start),
+                        "line_end": str(line_end)
                     }
                 },
                 timeout=5
@@ -207,22 +215,36 @@ def get_module(session_id: str = None):
                 f"Tip: Lower threshold if needed."
             )
 
-    async def close_file(filename: str) -> str:
+    async def close_file(filename: str, line_start: int = None, line_end: int = None) -> str:
         """Close a file by removing its record from memory DB.
         
         Args:
             filename: Filename to close (can be full path or just name)
+            line_start: Optional. Close only this specific range.
+            line_end: Optional. Close only this specific range.
             
         Returns:
             Confirmation message
         """
         name = os.path.basename(filename)
         
-        memories = _search_memories(_get_session_id(), f"p:filename={name}", limit=1)
+        if line_start is not None or line_end is not None:
+            # Exact range match - close specific range
+            ls = line_start if line_start is not None else 0
+            le = line_end if line_end is not None else "*"
+            range_key = f"file:{name}:{ls}-{le}"
+            memories = _search_memories(_get_session_id(), f"k:{range_key}", limit=10)
+        else:
+            # No range specified - close ALL ranges for this file
+            memories = _search_memories(_get_session_id(), f"k:file:{name}", limit=10)
         
         if memories:
-            _delete_memory(memories[0]['id'])
-            return f"Closed {name}"
+            count = 0
+            for mem in memories:
+                _delete_memory(mem['id'])
+                count += 1
+            range_desc = f" [{line_start or 0}-{line_end or '*'}]" if line_start is not None or line_end is not None else ""
+            return f"Closed {name}{range_desc} ({count} range{'s' if count > 1 else ''})")
         
         return f"File {name} not open"
 
@@ -323,18 +345,17 @@ def get_module(session_id: str = None):
                 
                 # Apply line range if specified
                 line_start = props.get("line_start", "0")
-                line_end = props.get("line_end", "")
+                line_end = props.get("line_end", "*")  # Default to "*" means no end
                 
                 start = int(line_start) if line_start != "0" else 0
-                if line_end:
+                if line_end and line_end != "*":
                     end = int(line_end)
                     content_lines = content.splitlines(keepends=True)
                     content = ''.join(content_lines[start:end])
                 
                 filename = os.path.basename(path)
-                lines.append(f"\n=== {filename} ===")
-                if start > 0 or line_end:
-                    lines.append(f"[lines {start}-{line_end or 'end'}]")
+                end_display = line_end if line_end != "*" else "end"
+                lines.append(f"\n=== {filename} [lines {line_start}-{end_display}] ===")
                 lines.append(content)
                 total_tokens += _count_tokens(content)
                 

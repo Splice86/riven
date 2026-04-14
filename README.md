@@ -15,10 +15,43 @@ As such it comes with no warranty or support and may not be used for commercial 
 
 
 ## CodeHammer
-A system of hierarchical context is enforced where the most volatile information is towards the bottom and static information is at the top.
-Files or file sections are kept live in context and are refreshed as the edits occur. 
-Conversation turns are kept to a bare minimum and unneeded data is trimmed from context.
-This is an idea I had that I am testing, its very WIP and not really very useful at the moment.
+
+CodeHammer is my implementation of a theory about how to make AI coding assistants actually useful.
+
+### The Theory
+
+The problem with traditional AI coding assistants: **multiple instances of the same data in context.**
+
+You open a file, then you do some work, then you open it again because you forgot it was open, and now you have two versions. Or you dump files in at the start, edit them, but the original dump is still in the conversation history creating confusion about "which version is the truth?"
+
+CodeHammer enforces **one instance of data in context**:
+
+```
+System Prompt
+├── Configuration (static)
+├── Module Context (semi-static)
+└── File Context (persistent, single source of truth)
+    └── Files stay open, content lives in ONE place
+    └── Edits update the content in-place
+    └── Close a file = gone from context entirely
+        
+Conversation History (tool calls, responses)
+└── No file dumps, no stale copies
+```
+
+**Key principles:**
+
+1. **Single source of truth** - A file exists in context exactly once. Open it, it's there. Edit it, the same instance updates. Close it, it's gone. No duplicates, no confusion.
+
+2. **Persistent state** - Files aren't dumped and forgotten each turn. They persist in memory until explicitly closed. The AI always knows what's open.
+
+3. **Edits update in-place** - When you use replace_text, the file content in context is updated immediately. The AI sees the new version instantly.
+
+4. **Close to clean up** - Closing a file removes it from context completely. Keeps things lean. Use close_all_files() for a fresh start.
+
+5. **Token efficiency** - Open only what you need. Line ranges let you work with specific sections of large files.
+
+This is an idea I am testing. It is very WIP and not really very useful at the moment.
 
 ### Cores
 
