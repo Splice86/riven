@@ -116,6 +116,7 @@ def get_module(session_id: str = None):
         Returns:
             Confirmation message
         """
+        path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
         
         if not os.path.exists(abs_path):
@@ -176,6 +177,7 @@ def get_module(session_id: str = None):
         Returns:
             Confirmation message or error
         """
+        path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
         
         # Read file from disk
@@ -272,6 +274,7 @@ def get_module(session_id: str = None):
         Returns:
             Dict with file metadata
         """
+        path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
         
         if not os.path.exists(abs_path):
