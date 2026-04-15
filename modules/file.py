@@ -307,6 +307,11 @@ def get_module(session_id: str = None):
         Queries memory DB for file records with session_id, then loads
         the actual file content from disk.
         """
+        import sys
+        from datetime import datetime
+        
+        session_id = _get_session_id()
+        
         # Instructions for the AI
         instructions = f"""## File Tools
 
@@ -326,20 +331,37 @@ def get_module(session_id: str = None):
 """
         
         # Search memory DB for open files
-        memories = _search_memories(_get_session_id(), "k:file", limit=50)
+        memories = _search_memories(session_id, "k:file", limit=50)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_lines = [f"[DEBUG] File context at {timestamp}",
+                       f"[DEBUG] Session ID: {session_id}",
+                       f"[DEBUG] Found {len(memories)} open files in memory DB"]
         
         if not memories:
-            return instructions + "\n\nNo files currently open"
+            result = instructions + "\n\nNo files currently open"
+            debug_lines.append("[DEBUG] Returning: 'No files currently open'")
+            print("\n".join(debug_lines), file=sys.stderr)
+            return result
         
         # Build context from disk
         lines = [instructions, "", "=== Open Files ==="]
         total_tokens = 0
+        files_included = []
         
         for mem in memories:
             props = mem.get("properties", {})
             path = props.get("path")
+            filename = props.get("filename", os.path.basename(path) if path else "unknown")
             
-            if not path or not os.path.exists(path):
+            debug_lines.append(f"[DEBUG] Checking file: {filename} at {path}")
+            
+            if not path:
+                debug_lines.append(f"[DEBUG]   -> No path in properties, skipping")
+                continue
+            
+            if not os.path.exists(path):
+                debug_lines.append(f"[DEBUG]   -> File does not exist, skipping")
                 continue
             
             try:
@@ -361,15 +383,23 @@ def get_module(session_id: str = None):
                 lines.append(f"\n=== {filename} [lines {line_start}-{end_display}] ===")
                 lines.append(content)
                 total_tokens += _count_tokens(content)
+                files_included.append(filename)
+                debug_lines.append(f"[DEBUG]   -> Included {len(content)} chars")
                 
-            except Exception:
+            except Exception as e:
+                debug_lines.append(f"[DEBUG]   -> Error: {e}")
                 continue
         
         # Token count
         lines.append(f"\n\n--- File Context Stats ---")
         lines.append(f"Total open file tokens: {total_tokens:,}")
         
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        debug_lines.append(f"[DEBUG] Files included in context: {files_included}")
+        debug_lines.append(f"[DEBUG] Total result size: {len(result)} chars")
+        print("\n".join(debug_lines), file=sys.stderr)
+        
+        return result
 
     # Create module with all fields at once (avoids __post_init__ validation issues)
     module = Module(

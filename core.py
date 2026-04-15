@@ -221,6 +221,16 @@ class Core:
         
         Replaces {module.tag} placeholders with each module's context.
         """
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_header = [
+            f"=== System Prompt Debug Info ===",
+            f"Timestamp: {timestamp}",
+            f"Session ID: {self._session_id}",
+            f"Modules providing context:"
+        ]
+        
         prompt = self.system_prompt
         
         # Add module context replacements
@@ -229,15 +239,16 @@ class Core:
                 value = module.get_context()
                 if value is not None:
                     prompt = prompt.replace(f"{{{module.tag}}}", value)
+                    debug_header.append(f"  - {module.name} (tag: {{{module.tag}}}) contributed {len(value)} chars")
         
         # Debug: save system prompt to disk if enabled
         if getattr(self, '_debug_system_prompt', False):
-            self._save_system_prompt(prompt)
+            self._save_system_prompt(prompt, debug_header)
         
         return prompt
     
-    def _save_system_prompt(self, prompt: str) -> None:
-        """Save system prompt to session debug file with timestamp."""
+    def _save_system_prompt(self, prompt: str, debug_header: list = None) -> None:
+        """Save system prompt to session debug file with timestamp and debug info."""
         import os
         from datetime import datetime
         
@@ -245,15 +256,24 @@ class Core:
         debug_dir = os.path.expanduser(f"~/.riven/sessions/{self._session_id}")
         os.makedirs(debug_dir, exist_ok=True)
         
+        # Build full debug output
+        debug_lines = debug_header or []
+        debug_lines.append(f"Total prompt size: {len(prompt)} chars")
+        debug_lines.append(f"=================================")
+        debug_lines.append("")
+        debug_lines.append(prompt)
+        
+        full_content = "\n".join(debug_lines)
+        
         filename = f"system_prompt_{timestamp}.txt"
         filepath = os.path.join(debug_dir, filename)
         with open(filepath, "w") as f:
-            f.write(prompt)
+            f.write(full_content)
         
         # Also save latest without timestamp for easy access
         latest_path = os.path.join(debug_dir, "system_prompt_latest.txt")
         with open(latest_path, "w") as f:
-            f.write(prompt)
+            f.write(full_content)
         
         import sys
         print(f"[DEBUG] Saved system prompt ({len(prompt)} chars) to {filepath}", file=sys.stderr)
