@@ -149,6 +149,7 @@ class Core:
             self.tool_timeout = config.get('tool_timeout', 20)
             self.strip_thinking = config.get('strip_thinking', False)
             self.store_tool_results = config.get('store_tool_results', 0)  # 0=skip, N=store last N lines
+            self._debug_system_prompt = config.get('debug_system_prompt', False)  # Save prompt to ~/.riven/sessions/
         else:
             self.model = model or LLM_MODEL
             self.llm_url = llm_url or LLM_URL
@@ -159,6 +160,7 @@ class Core:
             self.tool_timeout = tool_timeout
             self.strip_thinking = strip_thinking
             self.store_tool_results = store_tool_results  # 0=skip, N=store last N lines
+            self._debug_system_prompt = False  # Debug saving disabled by default
         
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -215,21 +217,10 @@ class Core:
         return agent
 
     def _build_system_prompt(self) -> str:
-        """Build system prompt with module context."""
-        # Check if file context needs refresh
-        try:
-            from modules.file import is_dirty as file_is_dirty, clear_dirty as file_clear_dirty
-            if file_is_dirty():
-                # Force refresh file context - pass session_id for session-aware file tracking
-                from modules.file import get_module as get_file_module
-                file_module = get_file_module(session_id=self._session_id)
-                if hasattr(file_module, 'get_context'):
-                    # This will trigger refresh and clear dirty flag
-                    _ = file_module.get_context()
-                file_clear_dirty()
-        except ImportError:
-            pass
+        """Build system prompt with module context.
         
+        Replaces {module.tag} placeholders with each module's context.
+        """
         prompt = self.system_prompt
         
         # Add module context replacements
@@ -239,7 +230,20 @@ class Core:
                 if value is not None:
                     prompt = prompt.replace(f"{{{module.tag}}}", value)
         
+        # Debug: save system prompt to disk if enabled
+        if getattr(self, '_debug_system_prompt', False):
+            self._save_system_prompt(prompt)
+        
         return prompt
+    
+    def _save_system_prompt(self, prompt: str) -> None:
+        """Save system prompt to session debug file."""
+        import os
+        debug_dir = os.path.expanduser(f"~/.riven/sessions/{self._session_id}")
+        os.makedirs(debug_dir, exist_ok=True)
+        with open(os.path.join(debug_dir, "system_prompt.txt"), "w") as f:
+            f.write(prompt)
+        logger.debug(f"Saved system prompt ({len(prompt)} chars) to {debug_dir}/system_prompt.txt")
 
 
     def _build_prompt(self, user_input: str) -> tuple[str, list[ModelMessage]]:
@@ -457,7 +461,11 @@ def get_core(name: str = "code_hammer", session_id: str = None) -> Core:
     if not session_id:
         raise ValueError("session_id is required - must be provided by client")
     
-    return Core(config=cores[name], session_id=session_id)
+    # Merge global config (from config.yaml) with core config
+    # Core config takes priority
+    merged_config = {**CONFIG, **cores[name]}
+    
+    return Core(config=merged_config, session_id=session_id)
 
 
 

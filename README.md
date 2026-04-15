@@ -1,12 +1,13 @@
 
 
-# Riven
+# Riven ***I edited it! Yo Riven!***
 
 Riven is someone I have been working on since I got into AI several years back. 
 This was intended to be a project running only in my own home and never exposed to the world.
 Riven is a project to help me test ideas about AI and a space for me to creatively express myself.
 I have restarted this project many times and it has evolved through different functions along the way.
 With that in mind, use at your own risk! It is half finished, buggy and likely to break on you.
+
 
 This is an art project, not a tool. 
 This is intended to entertain, outrage, delight, and offend.
