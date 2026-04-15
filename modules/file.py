@@ -61,12 +61,8 @@ def _search_memories(session_id: str, query: str, limit: int = 50) -> list[dict]
     """Search memory DB and return results."""
     import sys
     
-    # Build the actual query we'll send
-    if "k:file" in query and "k:" not in query:
-        # For file searches, use session_id + file keyword
-        search_query = f"k:{session_id} AND {query}"
-    else:
-        search_query = query
+    # Always prefix with session_id to scope searches
+    search_query = f"k:{session_id} AND {query}"
     
     print(f"[DEBUG] _search_memories called:", file=sys.stderr)
     print(f"[DEBUG]   session_id: {session_id}", file=sys.stderr)
