@@ -215,15 +215,19 @@ class Core:
             return self._build_system_prompt()
         
         return agent
-
     def _build_system_prompt(self) -> str:
         """Build system prompt with module context.
         
         Replaces {module.tag} placeholders with each module's context.
         """
+        import sys
         from datetime import datetime
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        print(f"[CORE] _build_system_prompt called at {timestamp}", file=sys.stderr)
+        print(f"[CORE] Session ID: {self._session_id}", file=sys.stderr)
+        print(f"[CORE] Registered modules: {list(self._modules.all().keys())}", file=sys.stderr)
+        
         debug_header = [
             f"=== System Prompt Debug Info ===",
             f"Timestamp: {timestamp}",
@@ -235,11 +239,16 @@ class Core:
         
         # Add module context replacements
         for module in self._modules.all().values():
+            print(f"[CORE] Checking module: {module.name}", file=sys.stderr)
             if module.get_context and module.tag:
+                print(f"[CORE]   Calling get_context for {module.name} (tag={{{module.tag}}})", file=sys.stderr)
                 value = module.get_context()
+                print(f"[CORE]   get_context returned {len(value) if value else 0} chars", file=sys.stderr)
                 if value is not None:
                     prompt = prompt.replace(f"{{{module.tag}}}", value)
                     debug_header.append(f"  - {module.name} (tag: {{{module.tag}}}) contributed {len(value)} chars")
+            else:
+                print(f"[CORE]   No get_context or tag - skipping", file=sys.stderr)
         
         # Debug: save system prompt to disk if enabled
         if getattr(self, '_debug_system_prompt', False):

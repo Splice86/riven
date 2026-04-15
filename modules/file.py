@@ -64,12 +64,10 @@ def _search_memories(session_id: str, query: str, limit: int = 50) -> list[dict]
     # Always prefix with session_id to scope searches
     search_query = f"k:{session_id} AND {query}"
     
-    print(f"[DEBUG] _search_memories called:", file=sys.stderr)
-    print(f"[DEBUG]   session_id: {session_id}", file=sys.stderr)
-    print(f"[DEBUG]   original query: {query}", file=sys.stderr)
-    print(f"[DEBUG]   actual search_query: {search_query}", file=sys.stderr)
-    print(f"[DEBUG]   MEMORY_API_URL: {MEMORY_API_URL}", file=sys.stderr)
-    print(f"[DEBUG]   DEFAULT_DB: {DEFAULT_DB}", file=sys.stderr)
+    print(f"[FILE] _search_memories called:", file=sys.stderr, flush=True)
+    print(f"[FILE]   session_id: {session_id}", file=sys.stderr, flush=True)
+    print(f"[FILE]   query: {query}", file=sys.stderr, flush=True)
+    print(f"[FILE]   search_query: {search_query}", file=sys.stderr, flush=True)
     
     try:
         resp = requests.post(
@@ -78,15 +76,15 @@ def _search_memories(session_id: str, query: str, limit: int = 50) -> list[dict]
             json={"query": search_query, "limit": limit},
             timeout=5
         )
-        print(f"[DEBUG]   Response status: {resp.status_code}", file=sys.stderr)
+        print(f"[FILE]   Response status: {resp.status_code}", file=sys.stderr, flush=True)
         if resp.status_code == 200:
             results = resp.json().get("memories", [])
-            print(f"[DEBUG]   Found {len(results)} memories", file=sys.stderr)
+            print(f"[FILE]   Found {len(results)} memories", file=sys.stderr, flush=True)
             return results
         else:
-            print(f"[DEBUG]   Response: {resp.text[:200]}", file=sys.stderr)
+            print(f"[FILE]   Response: {resp.text[:200]}", file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"[DEBUG]   Exception: {e}", file=sys.stderr)
+        print(f"[FILE]   Exception: {e}", file=sys.stderr, flush=True)
     return []
 
 
@@ -328,7 +326,19 @@ def get_module(session_id: str = None):
         from datetime import datetime
         
         session_id = _get_session_id()
-        print(f"[DEBUG] get_context called, session_id: {session_id}", file=sys.stderr)
+        
+        # DEBUG: Write to file immediately to verify function is called
+        try:
+            debug_dir = os.path.expanduser(f"~/.riven/sessions/{session_id}")
+            os.makedirs(debug_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            with open(os.path.join(debug_dir, f"get_context_called_{timestamp}.txt"), "w") as f:
+                f.write(f"get_context called at {timestamp}\n")
+                f.write(f"session_id: {session_id}\n")
+        except Exception as e:
+            print(f"[FILE] DEBUG FILE WRITE FAILED: {e}", file=sys.stderr, flush=True)
+        
+        print(f"[FILE] get_context called, session_id: {session_id}", file=sys.stderr, flush=True)
         
         # Instructions for the AI
         instructions = f"""## File Tools
@@ -415,7 +425,19 @@ def get_module(session_id: str = None):
         result = "\n".join(lines)
         debug_lines.append(f"[DEBUG] Files included in context: {files_included}")
         debug_lines.append(f"[DEBUG] Total result size: {len(result)} chars")
-        print("\n".join(debug_lines), file=sys.stderr)
+        print("\n".join(debug_lines), file=sys.stderr, flush=True)
+
+        # DEBUG: Write result to file
+        try:
+            debug_dir = os.path.expanduser(f"~/.riven/sessions/{session_id}")
+            os.makedirs(debug_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = os.path.join(debug_dir, f"file_module_{timestamp}.txt")
+            with open(filepath, "w") as f:
+                f.write(result)
+            print(f"[FILE] DEBUG: Wrote result to {filepath}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[FILE] DEBUG FILE WRITE FAILED: {e}", file=sys.stderr, flush=True)
         
         return result
 
