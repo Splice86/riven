@@ -2,15 +2,15 @@
 
 Precedence (highest wins):
     1. Env var (RV_* prefix, __ for nesting: RV_MEMORY_API__URL)
-    2. secrets.yaml (gitignored, user secrets)
-    3. secrets_template.yaml (committed baseline, falls back if no secrets.yaml)
-    4. config.yaml (application config)
+    2. Non-template YAML (secrets.yaml)  (user overrides)
+    3. config.yaml  (committed defaults)
+    4. Template YAML (secrets_template.yaml)  (fallback if no user file)
     5. Hardcoded default passed to get()
 
 Template convention:
-    If <name>_template.yaml exists, the system first looks for <name>.yaml.
-    If found, it wins; otherwise template is used as fallback.
-    Example: secrets_template.yaml → look for secrets.yaml first, fallback to template.
+    If <name>_template.yaml exists, it serves as fallback.
+    If <name>.yaml exists (without _template), it wins.
+    Example: secrets_template.yaml → check secrets.yaml first, fallback to template.
 """
 
 import os
@@ -132,17 +132,30 @@ class _Config:
     def load(self) -> None:
         """Load and merge all registered yaml files.
 
-        Each file is loaded in order; later files override earlier ones.
-        Template files use the resolve logic (non-template wins if present).
+        Template YAMLs are loaded first as fallback.
+        Each subsequent file overrides earlier ones.
         """
         if self._loaded:
             return
 
         merged = {}
         for path in self._search_paths:
-            resolved = self._resolve_template(path)
-            data = _load_yaml(resolved)
-            merged = _deep_merge(merged, data)
+            # For template files: load template first, then check for user override
+            if path.endswith("_template.yaml"):
+                # Load template as fallback
+                data = _load_yaml(path)
+                merged = _deep_merge(merged, data)
+                
+                # Check for user override (secrets.yaml overrides secrets_template.yaml)
+                base, ext = os.path.splitext(path)
+                user_path = base + ext  # e.g. secrets_template.yaml -> secrets.yaml
+                if os.path.exists(user_path):
+                    user_data = _load_yaml(user_path)
+                    merged = _deep_merge(merged, user_data)
+            else:
+                # Non-template YAMLs override everything
+                data = _load_yaml(path)
+                merged = _deep_merge(merged, data)
 
         self._merged = merged
         self._loaded = True
@@ -214,9 +227,10 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 config = _Config()
 
-# Register default config files in precedence order (later overrides earlier)
-config.register("secrets_template.yaml")  # Lowest precedence for secrets baseline
-config.register("config.yaml")            # Application config wins over template
+# Register default config files in load order (later overrides earlier).
+# Template YAMLs are loaded first as fallback only.
+config.register("secrets_template.yaml")  # Lowest: template fallback
+config.register("config.yaml")            # Overrides template defaults
 
 
 # --- Convenience accessors ---
@@ -227,5 +241,5 @@ def get(key: str, default: Any = None) -> Any:
 
 
 def reload() -> None:
-    """Reload all config files."""
+    """Reload all config files (useful after changing env vars or yaml files)."""
     config.reload()
