@@ -74,7 +74,6 @@ system_prompt: |
 
 tools: ["all"]
 llm_config: primary
-memory_db: "codehammer"
 tool_timeout: 60
 strip_thinking: true
 store_tool_results: 300  # 0=skip, N=store last N lines (truncates long output)

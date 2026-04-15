@@ -3,7 +3,6 @@
 import os
 import threading
 import sys
-from datetime import datetime
 from modules import Module, check_modules_changed, update_module_mtimes
 
 # Load config - same as core.py
@@ -101,7 +100,7 @@ def get_module():
     
     def get_system_info() -> str:
         """Get system information like Python version and platform.
-        
+
         Returns:
             System information string.
         """
@@ -110,80 +109,12 @@ def get_module():
         info += f"Platform: {platform.platform()}\n"
         info += f"Executable: {sys.executable}"
         return info
-    
-    def write_context(filename: str = None) -> str:
-        """Write current session context to a file for debugging.
-        
-        Dumps: system info, full system prompt, all module contexts (file, memory, time, etc.),
-        and all conversation turns from memory API.
-        
-        Args:
-            filename: Optional filename. Defaults to debug_context_YYYYMMDD_HHMMSS.txt
-            
-        Returns:
-            Path to the written file.
-        """
-        import requests
-        import platform
-        import yaml
-        
-        # Generate filename if not provided
-        if not filename:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"debug_context_{timestamp}.txt"
-        
-        lines = []
-        lines.append("=" * 60)
-        lines.append("RIVEN DEBUG CONTEXT DUMP")
-        lines.append(f"Generated: {datetime.now().isoformat()}")
-        lines.append("=" * 60)
-        
-        # System info
-        lines.append("\n### SYSTEM INFO ###")
-        lines.append(f"Python: {platform.python_version()}")
-        lines.append(f"Platform: {platform.platform()}")
-        lines.append(f"Executable: {sys.executable}")
-        
-        # System prompt - removed global, to be reworked
-        lines.append("\n### SYSTEM PROMPT ###")
-        lines.append("(system prompt captured at runtime - rework pending)")
-        
-        # Get module contexts
-        lines.append("\n### MODULE CONTEXTS ###")
-        from modules import get_all_modules
-        for module in get_all_modules():
-            if module.get_context:
-                context = module.get_context()
-                lines.append(f"\n--- {module.name} ---")
-                lines.append(str(context))
-        
-        # Get conversation history
-        lines.append("\n### CONVERSATION HISTORY ###")
-        try:
-            resp = requests.get(
-                f"{MEMORY_API_URL}/context",
-                params={"db_name": DEFAULT_DB, "limit": 100}
-            )
-            context = resp.json().get("context", [])
-            for msg in context:
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")
-                lines.append(f"\n[{role.upper()}]")
-                lines.append(content[:500] if len(content) > 500 else content)
-        except Exception as e:
-            lines.append(f"Error fetching context: {e}")
-        
-        # Write to file
-        with open(filename, "w") as f:
-            f.write("\n".join(lines))
-        
-        return f"Context written to: {filename}"
-    
+
     def get_system_context() -> str:
         """Get system context for prompt."""
         import platform
         return f"System: Python {platform.python_version()} on {platform.platform()}"
-    
+
     return Module(
         name="system",
         enrollment=lambda: None,
@@ -191,7 +122,6 @@ def get_module():
             "exit_session": exit_session,
             "check_reload_modules": check_reload_modules,
             "get_system_info": get_system_info,
-            "write_context": write_context,
             "list_cores": list_cores,
             "get_core_description": get_core_description,
             "core_exists": core_exists,

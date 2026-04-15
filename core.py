@@ -1,7 +1,6 @@
 """Core agentic loop - pydantic_ai implementation."""
 
 import asyncio
-import logging
 import os
 import re
 from typing import Any
@@ -32,8 +31,6 @@ from openai import AsyncOpenAI
 
 from modules import ModuleRegistry, get_all_modules
 from tools import create_tools
-
-logger = logging.getLogger(__name__)
 
 # Load configuration
 def _load_config() -> dict:
@@ -150,7 +147,7 @@ class Core:
             self.tool_timeout = config.get('tool_timeout', 20)
             self.strip_thinking = config.get('strip_thinking', False)
             self.store_tool_results = config.get('store_tool_results', 0)  # 0=skip, N=store last N lines
-            self._debug_system_prompt = config.get('debug_system_prompt', False)  # Save prompt to ~/.riven/sessions/
+
         else:
             self.model = model or LLM_MODEL
             self.llm_url = llm_url or LLM_URL
@@ -161,7 +158,7 @@ class Core:
             self.tool_timeout = tool_timeout
             self.strip_thinking = strip_thinking
             self.store_tool_results = store_tool_results  # 0=skip, N=store last N lines
-            self._debug_system_prompt = False  # Debug saving disabled by default
+
         
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -221,56 +218,21 @@ class Core:
         
         Replaces {module.tag} placeholders with each module's context.
         """
-        from datetime import datetime
-        
-        debug_header = None
-        if getattr(self, '_debug_system_prompt', False):
-            debug_header = [
-                f"=== System Prompt Debug Info ===",
-                f"Timestamp: {datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                f"Session ID: {self._session_id}",
-                f"Modules providing context:"
-            ]
-        
         prompt = self.system_prompt
         
         # Add module context replacements
         for module in self._modules.all().values():
             if module.get_context and module.tag:
-                value = module.get_context()
-                if value is not None:
-                    prompt = prompt.replace(f"{{{module.tag}}}", value)
-                    if debug_header is not None:
-                        debug_header.append(f"  - {module.name} contributed {len(value)} chars")
-        
-        # Debug: save system prompt to disk if enabled
-        if debug_header is not None:
-            self._save_system_prompt(prompt, debug_header)
+                try:
+                    value = module.get_context()
+                    if value is not None:
+                        placeholder = f"{{{module.tag}}}"
+                        if placeholder in prompt:
+                            prompt = prompt.replace(placeholder, value)
+                except Exception:
+                    pass
         
         return prompt
-    
-    def _save_system_prompt(self, prompt: str, debug_header: list = None) -> None:
-        """Save system prompt to session debug file with timestamp and debug info."""
-        import os
-        from datetime import datetime
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        debug_dir = os.path.expanduser(f"~/.riven/sessions/{self._session_id}")
-        os.makedirs(debug_dir, exist_ok=True)
-        
-        debug_lines = (debug_header or []).copy()
-        debug_lines.append(f"Total prompt size: {len(prompt)} chars")
-        debug_lines.append(f"=================================")
-        debug_lines.append("")
-        debug_lines.append(prompt)
-        
-        filepath = os.path.join(debug_dir, f"system_prompt_{timestamp}.txt")
-        with open(filepath, "w") as f:
-            f.write("\n".join(debug_lines))
-        
-        with open(os.path.join(debug_dir, "system_prompt_latest.txt"), "w") as f:
-            f.write("\n".join(debug_lines))
-
 
     def _build_prompt(self, user_input: str) -> tuple[str, list[ModelMessage]]:
         """Build prompt with memory context.

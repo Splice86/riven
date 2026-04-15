@@ -14,6 +14,3 @@ memory_api:
 # File context settings
 file_context:
   token_limit: 48000  # Max tokens before showing warning (default 32K)
-
-# Debug settings
-debug_system_prompt: true  # Save system prompt to ~/.riven/sessions/<session_id>/system_prompt.txt
