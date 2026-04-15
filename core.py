@@ -53,7 +53,8 @@ def _load_config() -> dict:
 CONFIG = _load_config()
 
 
-from riven_secrets import get_secret, get_llm_config, get_memory_api
+from riven_secrets import get_llm_config, get_memory_api
+from riven_secrets import get_secret  # LLM config only - memory API uses config.yaml
 
 # Legacy env/import fallback
 MEMORY_API_URL = os.environ.get("MEMORY_API_URL", get_memory_api())
@@ -86,7 +87,7 @@ def _resolve_core_config(core_config: dict) -> dict:
 class MemoryClient:
     """Simple client for memory API context endpoints."""
     
-    def __init__(self, db_name: str = "default", base_url: str = MEMORY_API_URL, session_id: str = None):
+    def __init__(self, db_name: str = None, base_url: str = MEMORY_API_URL, session_id: str = None):
         self.db_name = db_name or DEFAULT_DB
         self.base_url = base_url
         self.session_id = session_id  # Set from caller
@@ -220,38 +221,30 @@ class Core:
         
         Replaces {module.tag} placeholders with each module's context.
         """
-        import sys
         from datetime import datetime
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        print(f"[CORE] _build_system_prompt called at {timestamp}", file=sys.stderr)
-        print(f"[CORE] Session ID: {self._session_id}", file=sys.stderr)
-        print(f"[CORE] Registered modules: {list(self._modules.all().keys())}", file=sys.stderr)
-        
-        debug_header = [
-            f"=== System Prompt Debug Info ===",
-            f"Timestamp: {timestamp}",
-            f"Session ID: {self._session_id}",
-            f"Modules providing context:"
-        ]
+        debug_header = None
+        if getattr(self, '_debug_system_prompt', False):
+            debug_header = [
+                f"=== System Prompt Debug Info ===",
+                f"Timestamp: {datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                f"Session ID: {self._session_id}",
+                f"Modules providing context:"
+            ]
         
         prompt = self.system_prompt
         
         # Add module context replacements
         for module in self._modules.all().values():
-            print(f"[CORE] Checking module: {module.name}", file=sys.stderr)
             if module.get_context and module.tag:
-                print(f"[CORE]   Calling get_context for {module.name} (tag={{{module.tag}}})", file=sys.stderr)
                 value = module.get_context()
-                print(f"[CORE]   get_context returned {len(value) if value else 0} chars", file=sys.stderr)
                 if value is not None:
                     prompt = prompt.replace(f"{{{module.tag}}}", value)
-                    debug_header.append(f"  - {module.name} (tag: {{{module.tag}}}) contributed {len(value)} chars")
-            else:
-                print(f"[CORE]   No get_context or tag - skipping", file=sys.stderr)
+                    if debug_header is not None:
+                        debug_header.append(f"  - {module.name} contributed {len(value)} chars")
         
         # Debug: save system prompt to disk if enabled
-        if getattr(self, '_debug_system_prompt', False):
+        if debug_header is not None:
             self._save_system_prompt(prompt, debug_header)
         
         return prompt
@@ -265,27 +258,18 @@ class Core:
         debug_dir = os.path.expanduser(f"~/.riven/sessions/{self._session_id}")
         os.makedirs(debug_dir, exist_ok=True)
         
-        # Build full debug output
-        debug_lines = debug_header or []
+        debug_lines = (debug_header or []).copy()
         debug_lines.append(f"Total prompt size: {len(prompt)} chars")
         debug_lines.append(f"=================================")
         debug_lines.append("")
         debug_lines.append(prompt)
         
-        full_content = "\n".join(debug_lines)
-        
-        filename = f"system_prompt_{timestamp}.txt"
-        filepath = os.path.join(debug_dir, filename)
+        filepath = os.path.join(debug_dir, f"system_prompt_{timestamp}.txt")
         with open(filepath, "w") as f:
-            f.write(full_content)
+            f.write("\n".join(debug_lines))
         
-        # Also save latest without timestamp for easy access
-        latest_path = os.path.join(debug_dir, "system_prompt_latest.txt")
-        with open(latest_path, "w") as f:
-            f.write(full_content)
-        
-        import sys
-        print(f"[DEBUG] Saved system prompt ({len(prompt)} chars) to {filepath}", file=sys.stderr)
+        with open(os.path.join(debug_dir, "system_prompt_latest.txt"), "w") as f:
+            f.write("\n".join(debug_lines))
 
 
     def _build_prompt(self, user_input: str) -> tuple[str, list[ModelMessage]]:
@@ -478,8 +462,6 @@ def get_core_display_name(core_name: str) -> str:
     if core_name in cores:
         return cores[core_name].get('display_name', core_name)
     return core_name
-    
-    return cores
 
 
 def get_core(name: str = "code_hammer", session_id: str = None) -> Core:
