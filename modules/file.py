@@ -244,7 +244,7 @@ def get_module(session_id: str = None):
                 _delete_memory(mem['id'])
                 count += 1
             range_desc = f" [{line_start or 0}-{line_end or '*'}]" if line_start is not None or line_end is not None else ""
-            return f"Closed {name}{range_desc} ({count} range{'s' if count > 1 else ''})")
+            return f"Closed {name}{range_desc} ({count} range{'s' if count > 1 else ''})"
         
         return f"File {name} not open"
 

@@ -165,7 +165,7 @@ class CoreManager:
         print(f'[thread] Starting for {instance.session_id}', file=sys.stderr)
         try:
             print(f'[thread] Creating core {instance.core_name}', file=sys.stderr)
-            core = get_core(instance.core_name)
+            core = get_core(instance.core_name, session_id=instance.session_id)
             print(f'[thread] Core created: {core}', file=sys.stderr)
             instance.status = "running"
             print(f'[thread] Status set to running', file=sys.stderr)
@@ -223,7 +223,7 @@ class CoreManager:
         else:
             # Simple: create core, run, return
             try:
-                core = get_core(core_name)
+                core = get_core(core_name, session_id=session_id)
                 result = asyncio.run(core.run(message))
                 output = str(result.output) if result and hasattr(result, 'output') else str(result)
                 return {"ok": True, "output": output}
