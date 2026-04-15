@@ -77,8 +77,10 @@ def _search_memories(session_id: str, query: str, limit: int = 50) -> list[dict]
             timeout=5
         )
         print(f"[FILE]   Response status: {resp.status_code}", file=sys.stderr, flush=True)
+        print(f"[FILE]   Response body: {resp.text[:500]}", file=sys.stderr, flush=True)
         if resp.status_code == 200:
-            results = resp.json().get("memories", [])
+            data = resp.json()
+            results = data.get("memories", [])
             print(f"[FILE]   Found {len(results)} memories", file=sys.stderr, flush=True)
             return results
         else:
