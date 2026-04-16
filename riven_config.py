@@ -148,7 +148,9 @@ class _Config:
                 
                 # Check for user override (secrets.yaml overrides secrets_template.yaml)
                 base, ext = os.path.splitext(path)
-                user_path = base + ext  # e.g. secrets_template.yaml -> secrets.yaml
+                # Remove _template suffix to get user file name: secrets_template.yaml -> secrets.yaml
+                user_base = base.replace("_template", "")
+                user_path = user_base + ext
                 if os.path.exists(user_path):
                     user_data = _load_yaml(user_path)
                     merged = _deep_merge(merged, user_data)
