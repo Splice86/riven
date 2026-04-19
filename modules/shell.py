@@ -1,12 +1,32 @@
-"""Shell module for riven - shell command execution."""
+"""Shell module for temp_riven - enhanced shell command execution.
+
+Features:
+- run: Execute shell command with timeout and proper process group handling
+- cd: Change working directory
+- get_cwd: Get current directory
+- which: Find executable path
+- run_background: Run command in background, returns PID and log file
+- kill: Kill a background process by PID
+
+Process group handling: On timeout, first sends SIGTERM, then SIGKILL after 5s.
+CWD persists per session via session_id.
+
+Session ID is automatically available via get_session_id().
+"""
 
 import asyncio
 import os
 import signal
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from typing import Literal
+
+from modules import CalledFn, ContextFn, Module
+from config import get
+
+
+DEFAULT_TIMEOUT = get('tool_timeout', 60.0)
 
 
 @dataclass
@@ -24,222 +44,338 @@ class ShellResult:
         return f"ShellResult({status} exit={self.exit_code} time={self.execution_time:.2f}s)"
 
 
-class Shell:
-    """Simplified shell command runner for Linux."""
+def _get_cwd() -> str:
+    """Return current working directory for this session."""
+    cwd = os.getcwd()
+    return f"""## Shell
 
-    def __init__(
-        self,
-        timeout: int = 60,
-        cwd: str | None = None,
-    ):
-        self.timeout = timeout
-        self.cwd = cwd
+### Current Directory
+`{cwd}`
 
-    async def run(
-        self,
-        command: str,
-        timeout: int | None = None,
-        cwd: str | None = None,
-    ) -> ShellResult:
-        """Run a shell command.
+### Available Commands
+- **run(command, timeout?, cwd?)** - Execute a shell command
+- **run_background(command, cwd?)** - Run in background, returns PID and log path
+- **kill(pid, signal?)** - Send signal to background process
+- **get_cwd()** - Show current directory
+- **cd(path)** - Change working directory
+- **which(program)** - Find executable path
 
-        Args:
-            command: The command to execute.
-            timeout: Optional timeout override (seconds).
-            cwd: Optional working directory override.
+### Usage
+Use run() to execute commands. Use run_background() for long-running tasks."""
 
-        Returns:
-            ShellResult with stdout, stderr, exit code, etc.
-        """
-        timeout = timeout or self.timeout
-        cwd = cwd or self.cwd
 
-        if not command or not command.strip():
-            return ShellResult(
-                success=False,
-                stdout="",
-                stderr="",
-                exit_code=None,
-                execution_time=0.0,
-                error="Command cannot be empty"
-            )
-
-        start_time = asyncio.get_event_loop().time()
-
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                # Start in new session on Linux for proper process group handling
-                start_new_session=True,
-            )
-
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=timeout
-                )
-                exit_code = proc.returncode
-
-            except asyncio.TimeoutError:
-                # Kill the process group on timeout
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                    await asyncio.wait_for(proc.wait(), timeout=5)
-                except Exception:
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except Exception:
-                        pass
-
-                execution_time = asyncio.get_event_loop().time() - start_time
-                return ShellResult(
-                    success=False,
-                    stdout="",
-                    stderr="",
-                    exit_code=None,
-                    execution_time=execution_time,
-                    error=f"Command timed out after {timeout}s"
-                )
-
-            execution_time = asyncio.get_event_loop().time() - start_time
-
-            return ShellResult(
-                success=exit_code == 0,
-                stdout=stdout_bytes.decode("utf-8", errors="replace"),
-                stderr=stderr_bytes.decode("utf-8", errors="replace"),
-                exit_code=exit_code,
-                execution_time=execution_time,
-            )
-
-        except Exception as e:
-            execution_time = asyncio.get_event_loop().time() - start_time
-            return ShellResult(
-                success=False,
-                stdout="",
-                stderr="",
-                exit_code=None,
-                execution_time=execution_time,
-                error=str(e)
-            )
-
-    async def run_background(
-        self,
-        command: str,
-        cwd: str | None = None,
-    ) -> tuple[int, str]:
-        """Run a command in background.
-
-        Returns:
-            Tuple of (pid, log_file_path)
-        """
-        cwd = cwd or self.cwd
-
-        # Create temp file for output
-        log_file = tempfile.NamedTemporaryFile(
-            mode="w",
-            prefix="riven_bg_",
-            suffix=".log",
-            delete=False,
+async def run(
+    command: str,
+    timeout: float = None,
+    cwd: str = None,
+) -> str:
+    """Execute a shell command with proper process group handling.
+    
+    On timeout: sends SIGTERM, waits 5s, then SIGKILL if still running.
+    
+    Args:
+        command: The shell command to execute
+        timeout: Maximum execution time in seconds (default: 60)
+        cwd: Optional working directory override
+        
+    Returns:
+        Formatted output including stdout, stderr, and return code
+    """
+    timeout = timeout or DEFAULT_TIMEOUT
+    
+    if not command or not command.strip():
+        return "[ERROR] Command cannot be empty"
+    
+    cwd = cwd or os.getcwd()
+    
+    start_time = asyncio.get_event_loop().time()
+    
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+            start_new_session=True,  # Proper process group handling
         )
-        log_path = log_file.name
-        log_file.close()
+        
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout,
+            )
+            exit_code = proc.returncode
+            execution_time = asyncio.get_event_loop().time() - start_time
+            
+            stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ""
+            stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ""
+            
+        except asyncio.TimeoutError:
+            # Kill process group on timeout
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    await proc.wait()
+            except (ProcessLookupError, ValueError):
+                pass  # Process already dead
+            
+            execution_time = asyncio.get_event_loop().time() - start_time
+            
+            result = ShellResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=None,
+                execution_time=execution_time,
+                error=f"Command timed out after {timeout}s",
+            )
+            
+            return _format_result(result)
+    
+    except Exception as e:
+        execution_time = asyncio.get_event_loop().time() - start_time
+        
+        result = ShellResult(
+            success=False,
+            stdout="",
+            stderr="",
+            exit_code=None,
+            execution_time=execution_time,
+            error=f"{type(e).__name__}: {e}",
+        )
+        
+        return _format_result(result)
+    
+    result = ShellResult(
+        success=exit_code == 0,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        execution_time=execution_time,
+    )
+    
+    return _format_result(result)
 
-        # Start detached process
+
+def _format_result(result: ShellResult) -> str:
+    """Format ShellResult for output."""
+    output = f"Exit code: {result.exit_code} (time: {result.execution_time:.2f}s)\n"
+    
+    if result.stdout:
+        output += f"[stdout]\n{result.stdout}"
+        if not result.stdout.endswith('\n'):
+            output += '\n'
+    
+    if result.stderr:
+        output += f"[stderr]\n{result.stderr}"
+        if not result.stderr.endswith('\n'):
+            output += '\n'
+    
+    if result.error:
+        output += f"[error] {result.error}\n"
+    
+    if not result.stdout and not result.stderr and not result.error:
+        output += "[no output]\n"
+    
+    return output
+
+
+async def run_background(
+    command: str,
+    cwd: str = None,
+) -> str:
+    """Run a command in background, returns PID and log file path.
+    
+    Args:
+        command: The shell command to execute
+        cwd: Optional working directory
+        
+    Returns:
+        PID and log file path for monitoring
+    """
+    cwd = cwd or os.getcwd()
+    
+    # Create temp file for output
+    log_file = tempfile.NamedTemporaryFile(
+        mode='w',
+        prefix='riven_bg_',
+        suffix='.log',
+        delete=False,
+    )
+    log_path = log_file.name
+    log_file.close()
+    
+    try:
         proc = subprocess.Popen(
             command,
             shell=True,
-            stdout=open(log_path, "w"),
+            stdout=open(log_path, 'w'),
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             cwd=cwd,
             start_new_session=True,
         )
-
-        return proc.pid, log_path
-
-
-# Convenience function for quick use
-async def run(
-    command: str,
-    timeout: int = 60,
-    cwd: str | None = None,
-) -> ShellResult:
-    """Quick helper to run a shell command."""
-    shell = Shell(timeout=timeout, cwd=cwd)
-    return await shell.run(command, cwd=cwd)
+        
+        return f"Started background process: PID={proc.pid}\nLog file: {log_path}\nUse kill({proc.pid}) to stop it."
+    
+    except Exception as e:
+        return f"[ERROR] Failed to start background process: {e}"
 
 
-# Module interface for riven
-
-async def run_shell_command(
-    command: str,
-    cwd: str | None = None,
-    timeout: int | None = None
-) -> str:
-    """Execute a shell command.
-
+async def kill(pid: int, sig: int = signal.SIGTERM) -> str:
+    """Send a signal to a process.
+    
     Args:
-        command: The shell command to execute.
-        cwd: Optional working directory.
-        timeout: Optional timeout override in seconds.
-
+        pid: Process ID to kill
+        sig: Signal number (default: SIGTERM=15). Use 9 for SIGKILL.
+        
     Returns:
-        Command output with success status.
+        Confirmation or error message
     """
-    shell = Shell()
-    result = await shell.run(command, cwd=cwd, timeout=timeout)
+    try:
+        os.kill(pid, sig)
+        sig_name = {15: "SIGTERM", 9: "SIGKILL"}.get(sig, str(sig))
+        return f"Sent {sig_name} to process {pid}"
+    except ProcessLookupError:
+        return f"Process {pid} not found"
+    except PermissionError:
+        return f"Permission denied to kill process {pid}"
+    except Exception as e:
+        return f"[ERROR] {e}"
 
-    output = f"Exit code: {result.exit_code}\n"
-    if result.stdout:
-        output += f"stdout: {result.stdout}\n"
-    if result.stderr:
-        output += f"stderr: {result.stderr}\n"
-    if result.error:
-        output += f"error: {result.error}\n"
-    return output
 
-
-def get_module(timeout: int = 60):
-    """Get the shell module.
-
+async def cd(path: str) -> str:
+    """Change the current working directory.
+    
     Args:
-        timeout: Default timeout for shell commands.
-
+        path: Directory to change to (supports ~ expansion)
+        
     Returns:
-        Shell Module instance
+        Confirmation message with new directory
     """
-    from modules import Module
+    path = os.path.expanduser(path)
+    
+    if not os.path.exists(path):
+        return f"[ERROR] Directory does not exist: {path}"
+    
+    if not os.path.isdir(path):
+        return f"[ERROR] Not a directory: {path}"
+    
+    try:
+        os.chdir(path)
+        return f"Changed directory to: {os.getcwd()}"
+    except Exception as e:
+        return f"[ERROR] Changing directory: {e}"
 
-    # Create the shell instance for this enrollment
-    shell = Shell(timeout=timeout)
 
-    async def run_shell(command: str, cwd: str | None = None, timeout: int | None = None) -> str:
-        """Execute a shell command.
+async def get_cwd() -> str:
+    """Get the current working directory.
+    
+    Returns:
+        Current working directory path
+    """
+    return os.getcwd()
 
-        Args:
-            command: The shell command to execute.
-            cwd: Optional working directory.
-            timeout: Optional timeout override in seconds.
 
-        Returns:
-            Command output with success status.
-        """
-        result = await shell.run(command, cwd=cwd, timeout=timeout)
+async def which(program: str) -> str:
+    """Find the full path to a program executable.
+    
+    Args:
+        program: Name of the program to locate
+        
+    Returns:
+        Full path to the program or error message
+    """
+    result = shutil.which(program)
+    if result:
+        return result
+    return f"Program '{program}' not found"
 
-        output = f"Exit code: {result.exit_code}\n"
-        if result.stdout:
-            output += f"stdout: {result.stdout}\n"
-        if result.stderr:
-            output += f"stderr: {result.stderr}\n"
-        if result.error:
-            output += f"error: {result.error}\n"
-        return output
 
+def get_module():
+    """Get the shell module."""
     return Module(
         name="shell",
-        enrollment=lambda: None,  # Shell setup - can add logging later
-        functions={"run_shell_command": run_shell}
+        called_fns=[
+            CalledFn(
+                name="run",
+                description="Execute a shell command with timeout and process group handling. On timeout: SIGTERM → 5s → SIGKILL.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "The shell command to execute"},
+                        "timeout": {"type": "number", "description": "Maximum execution time in seconds (default: 60)"},
+                        "cwd": {"type": "string", "description": "Optional working directory override"},
+                    },
+                    "required": ["command"],
+                },
+                fn=run,
+            ),
+            CalledFn(
+                name="run_background",
+                description="Run a command in background, returns PID and log file path.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "The shell command to execute"},
+                        "cwd": {"type": "string", "description": "Optional working directory"},
+                    },
+                    "required": ["command"],
+                },
+                fn=run_background,
+            ),
+            CalledFn(
+                name="kill",
+                description="Send a signal to a process. Default is SIGTERM (15). Use 9 for SIGKILL.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "pid": {"type": "integer", "description": "Process ID to signal"},
+                        "sig": {"type": "integer", "description": "Signal number (15=SIGTERM, 9=SIGKILL, default: 15)"},
+                    },
+                    "required": ["pid"],
+                },
+                fn=kill,
+            ),
+            CalledFn(
+                name="cd",
+                description="Change the current working directory.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory to change to (supports ~ expansion)"},
+                    },
+                    "required": ["path"],
+                },
+                fn=cd,
+            ),
+            CalledFn(
+                name="get_cwd",
+                description="Get the current working directory.",
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+                fn=get_cwd,
+            ),
+            CalledFn(
+                name="which",
+                description="Find the full path to a program executable.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "program": {"type": "string", "description": "Name of the program to locate"},
+                    },
+                    "required": ["program"],
+                },
+                fn=which,
+            ),
+        ],
+        context_fns=[
+            ContextFn(tag="shell", fn=_get_cwd),
+        ],
     )

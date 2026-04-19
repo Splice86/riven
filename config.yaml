@@ -1,16 +1,40 @@
-# Riven Configuration
-# This file is gitignored - add local overrides to config_local.yaml
-#
-# Shards are loaded from the shards/ folder
-# Each .yaml file in cores/ defines a core
-
-# Default core to use
-default_core: code_hammer
+# Riven Core Configuration
+# This file is committed - use for default values
+# Override with secrets.yaml or env vars
 
 # Memory API settings
 memory_api:
   db_name: "riven"
+  url: "http://127.0.0.1:8030"  # Template fallback
 
-# File context settings
-file_context:
-  token_limit: 48000  # Max tokens before showing warning (default 32K)
+# Named LLM configs (URLs here are templates, secrets in secrets.yaml)
+# Shards reference these by name: llm_config: primary
+llm:
+  primary:
+    url: "http://127.0.0.1:8000/v1"
+    model: "MiniMax-M2.7"
+    timeout: 120
+  alternate:
+    url: "http://127.0.0.1:8000/v1"
+    model: "lukealonso/MiniMax-M2.7-NVFP4"
+    timeout: 120
+
+# Tool execution
+tool_timeout: 60
+
+# Max function calls per run
+max_function_calls: 20
+
+# System prompt template (shards can override)
+system: "You are a helpful assistant."
+
+# Default shard to use
+default_shard: code_hammer
+
+# Modules available globally
+modules:
+  - time
+  - file
+  - shell
+  - memory
+  - web

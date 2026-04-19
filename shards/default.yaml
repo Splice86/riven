@@ -1,0 +1,23 @@
+name: default
+display_name: Default Assistant
+
+# System prompt template
+system: |
+  You are a helpful AI assistant.
+  
+  {time}
+  {shell}
+
+# Modules to load
+modules:
+  - time
+  - shell
+
+# Tool execution
+tool_timeout: 60
+max_function_calls: 20
+
+# Memory API - loaded from config (secrets.yaml), not needed here
+
+# Debug output
+debug_dir: debug/

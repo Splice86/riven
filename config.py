@@ -132,31 +132,34 @@ class _Config:
     def load(self) -> None:
         """Load and merge all registered yaml files.
 
-        Template YAMLs are loaded first as fallback.
-        Each subsequent file overrides earlier ones.
+        Files are loaded in reverse registration order (highest priority first).
+        
+        Template convention: *_template.yaml is the fallback. If the associated
+        non-template file (e.g. secrets.yaml) exists, it overrides the template.
+        This works correctly because user files should override template defaults.
         """
         if self._loaded:
             return
 
         merged = {}
-        for path in self._search_paths:
-            # For template files: load template first, then check for user override
+        # Load in reverse order so later registrations win
+        for path in reversed(self._search_paths):
             if path.endswith("_template.yaml"):
-                # Load template as fallback
+                # Template is the FALLBACK - load template first
                 data = _load_yaml(path)
-                merged = _deep_merge(merged, data)
                 
-                # Check for user override (secrets.yaml overrides secrets_template.yaml)
+                # Then check if user override exists - it should override template
                 base, ext = os.path.splitext(path)
-                # Remove _template suffix to get user file name: secrets_template.yaml -> secrets.yaml
                 user_base = base.replace("_template", "")
                 user_path = user_base + ext
                 if os.path.exists(user_path):
                     user_data = _load_yaml(user_path)
-                    merged = _deep_merge(merged, user_data)
+                    data = _deep_merge(data, user_data)  # user overrides template
             else:
-                # Non-template YAMLs override everything
+                # Non-template YAMLs load as-is
                 data = _load_yaml(path)
+            
+            if data:
                 merged = _deep_merge(merged, data)
 
         self._merged = merged
@@ -171,7 +174,7 @@ class _Config:
             3. Default passed here
 
         Args:
-            key: Dot-separated key path (e.g. "memory_api.url", "embedding.model_size")
+            key: Dot-separated key path (e.g. "memory_api.url", "llm.model")
             default: Fallback if key not found anywhere
 
         Returns:
@@ -194,6 +197,12 @@ class _Config:
             else:
                 return default
         return current
+
+    def get_all(self) -> dict:
+        """Get the entire merged config dict."""
+        if not self._loaded:
+            self.load()
+        return _deep_copy_dict(self._merged)
 
     def reload(self) -> None:
         """Force a reload of all config files."""
@@ -242,6 +251,50 @@ def get(key: str, default: Any = None) -> Any:
     return config.get(key, default)
 
 
+def get_all() -> dict:
+    """Get the entire merged config dict."""
+    return config.get_all()
+
+
 def reload() -> None:
     """Reload all config files (useful after changing env vars or yaml files)."""
     config.reload()
+
+
+def get_llm_config(name: str = "primary") -> dict:
+    """Get a named LLM config with secrets applied.
+    
+    Args:
+        name: The LLM config name (e.g., "primary", "alternate")
+    
+    Returns:
+        Dict with url, model, api_key, timeout merged from config + secrets.
+        Secrets (url, api_key) override config templates.
+    
+    Example:
+        # config.yaml has llm.primary.model = "MiniMax-M2.7"
+        # secrets.yaml has llm.primary.url = "http://100.90.58.38:8000/v1"
+        # get_llm_config("primary") returns both merged
+    """
+    if not config._loaded:
+        config.load()
+    
+    # Get template from config.yaml
+    template = config.get(f"llm.{name}", {})
+    
+    # Check for env override: RV_LLM__<NAME>__URL, RV_LLM__<NAME>__MODEL, etc.
+    env_prefix = f"RV_LLM__{name.upper()}__"
+    result = _deep_copy_dict(template)
+    
+    for env_key, env_val in os.environ.items():
+        if env_key.startswith(env_prefix):
+            key = env_key[len(env_prefix):].lower()
+            result[key] = _coerce(env_val)
+    
+    # Ensure required fields with defaults
+    result.setdefault("url", "http://127.0.0.1:8000/v1")
+    result.setdefault("model", "MiniMax-M2.7")
+    result.setdefault("api_key", "sk-dummy")
+    result.setdefault("timeout", 120)
+    
+    return result

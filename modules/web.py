@@ -1,10 +1,23 @@
-"""Web crawler module using lynx."""
+"""Web module for temp_riven - fetches web pages using lynx.
 
+Provides web access capabilities:
+- fetch_page: Get page content as text via lynx
+- fetch_page_links: Extract links from a page
+- web_search: Search DuckDuckGo lite
+"""
+
+import re
 import subprocess
-from modules import Module
+from typing import Optional
+
+from modules import CalledFn, ContextFn, Module
 
 
-def fetch_page(url: str) -> str:
+DEFAULT_TIMEOUT = 30
+MAX_CONTENT_LENGTH = 10000
+
+
+async def fetch_page(url: str) -> str:
     """Fetch a web page using lynx and return text content.
     
     Args:
@@ -14,35 +27,39 @@ def fetch_page(url: str) -> str:
         Text content of the page
     """
     if not url.startswith(('http://', 'https://')):
-        return f"Error: URL must start with http:// or https://"
+        return f"[ERROR] URL must start with http:// or https://"
     
     try:
         result = subprocess.run(
             ['lynx', '-dump', '-nolist', '-width=200', url],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=DEFAULT_TIMEOUT,
         )
+        
         if result.returncode != 0:
-            return f"Error fetching {url}: {result.stderr}"
+            return f"[ERROR] Failed to fetch {url}: {result.stderr}"
         
         content = result.stdout.strip()
+        
         if not content:
-            return f"Error: No content found at {url}"
+            return f"[ERROR] No content found at {url}"
         
         # Truncate very long pages
-        if len(content) > 10000:
-            content = content[:10000] + f"\n\n... (truncated, {len(content)} total chars)"
+        if len(content) > MAX_CONTENT_LENGTH:
+            content = content[:MAX_CONTENT_LENGTH] + f"\n\n... (truncated, {len(result.stdout)} total chars)"
         
         return content
     
     except subprocess.TimeoutExpired:
-        return f"Error: Timeout fetching {url}"
+        return f"[ERROR] Timeout fetching {url}"
+    except FileNotFoundError:
+        return "[ERROR] lynx not installed. Install with: apt install lynx"
     except Exception as e:
-        return f"Error: {e}"
+        return f"[ERROR] {e}"
 
 
-def fetch_page_links(url: str) -> str:
+async def fetch_page_links(url: str) -> str:
     """Fetch a web page and return just the links.
     
     Args:
@@ -52,25 +69,28 @@ def fetch_page_links(url: str) -> str:
         List of links from the page
     """
     if not url.startswith(('http://', 'https://')):
-        return f"Error: URL must start with http:// or https://"
+        return f"[ERROR] URL must start with http:// or https://"
     
     try:
         result = subprocess.run(
             ['lynx', '-dump', '-nolist', url],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=DEFAULT_TIMEOUT,
         )
-        if result.returncode != 0:
-            return f"Error fetching {url}: {result.stderr}"
         
-        # Extract links (lines starting with numbers followed by URL)
+        if result.returncode != 0:
+            return f"[ERROR] Failed to fetch {url}: {result.stderr}"
+        
+        # Extract links (lines starting with http)
         lines = result.stdout.strip().split('\n')
         links = []
+        
         for line in lines:
-            # Links in lynx dump are typically in format: "  1. http://..."
-            if line.strip().startswith(('http://', 'https://')):
-                links.append(line.strip())
+            line = line.strip()
+            # Links in lynx dump are typically standalone URLs
+            if line.startswith(('http://', 'https://')):
+                links.append(line)
         
         if not links:
             return f"No links found at {url}"
@@ -78,12 +98,14 @@ def fetch_page_links(url: str) -> str:
         return "Links found:\n" + "\n".join(f"  - {link}" for link in links[:50])
     
     except subprocess.TimeoutExpired:
-        return f"Error: Timeout fetching {url}"
+        return f"[ERROR] Timeout fetching {url}"
+    except FileNotFoundError:
+        return "[ERROR] lynx not installed. Install with: apt install lynx"
     except Exception as e:
-        return f"Error: {e}"
+        return f"[ERROR] {e}"
 
 
-def web_search(query: str, num_results: int = 10) -> str:
+async def web_search(query: str, num_results: int = 10) -> str:
     """Search the web using DuckDuckGo lite.
     
     Args:
@@ -93,32 +115,33 @@ def web_search(query: str, num_results: int = 10) -> str:
     Returns:
         Search results with titles and URLs
     """
-    import re
     try:
         # Use DuckDuckGo HTML version
-        url = f"https://lite.duckduckgo.com/lite/?q={query.replace(' ', '+')}"
+        search_url = f"https://lite.duckduckgo.com/lite/?q={query.replace(' ', '+')}"
+        
         result = subprocess.run(
-            ['lynx', '-dump', '-nolist', '-width=200', url],
+            ['lynx', '-dump', '-nolist', '-width=200', search_url],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=DEFAULT_TIMEOUT,
         )
         
         if result.returncode != 0:
-            return f"Error searching: {result.stderr}"
+            return f"[ERROR] Search failed: {result.stderr}"
         
         lines = result.stdout.strip().split('\n')
         results = []
         
-        # Parse results: numbered entries followed by description, then URL
+        # Parse results: numbered entries followed by description and URL
         current_result = None
         
         for line in lines:
             line = line.strip()
             
-            # Skip header and navigation
             if not line:
                 continue
+            
+            # Skip header and navigation
             if 'DuckDuckGo' in line or 'Next Page' in line:
                 continue
             if line.startswith('__'):
@@ -129,20 +152,17 @@ def web_search(query: str, num_results: int = 10) -> str:
             if match:
                 if current_result and current_result not in results:
                     results.append(current_result)
-                # Start new result
                 title = match.group(2).strip()
                 current_result = title
                 continue
             
-            # If we have a current result, append description lines
+            # If we have a current result, parse description and URL
             if current_result:
-                # URL lines (start with http)
                 if line.startswith(('http://', 'https://')):
                     current_result += f" | {line}"
                     if current_result not in results:
                         results.append(current_result)
                     current_result = None
-                # Description lines
                 elif len(line) > 10 and 'duckduckgo' not in line.lower():
                     current_result += f" - {line}"
             
@@ -163,19 +183,69 @@ def web_search(query: str, num_results: int = 10) -> str:
         return '\n'.join(output)
     
     except subprocess.TimeoutExpired:
-        return "Error: Search timeout"
+        return "[ERROR] Search timeout"
+    except FileNotFoundError:
+        return "[ERROR] lynx not installed. Install with: apt install lynx"
     except Exception as e:
-        return f"Error: {e}"
+        return f"[ERROR] {e}"
+
+
+def _web_context() -> str:
+    """Return web module context info."""
+    return """## Web Tools
+
+Access web content using these tools:
+- **fetch_page(url)** - Get page content as text via lynx
+- **fetch_page_links(url)** - Extract all links from a page
+- **web_search(query, num_results?)** - Search DuckDuckGo
+
+Note: Requires lynx to be installed (`apt install lynx`)."""
 
 
 def get_module() -> Module:
-    """Create the web module."""
+    """Get the web module."""
     return Module(
         name="web",
-        enrollment=lambda: None,
-        functions={
-            "fetch_page": fetch_page,
-            "fetch_page_links": fetch_page_links,
-            "web_search": web_search,
-        }
+        called_fns=[
+            CalledFn(
+                name="fetch_page",
+                description="Fetch a web page using lynx and return text content.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "URL to fetch (must start with http:// or https://)"},
+                    },
+                    "required": ["url"],
+                },
+                fn=fetch_page,
+            ),
+            CalledFn(
+                name="fetch_page_links",
+                description="Fetch a web page and return just the links.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "URL to fetch links from"},
+                    },
+                    "required": ["url"],
+                },
+                fn=fetch_page_links,
+            ),
+            CalledFn(
+                name="web_search",
+                description="Search the web using DuckDuckGo lite.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "num_results": {"type": "integer", "description": "Number of results to return (default: 10)"},
+                    },
+                    "required": ["query"],
+                },
+                fn=web_search,
+            ),
+        ],
+        context_fns=[
+            ContextFn(tag="web", fn=_web_context),
+        ],
     )

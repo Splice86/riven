@@ -1,20 +1,125 @@
 """The core loop - simple, direct LLM calls with function execution.
 
-No pydantic_ai, no dynamic decorators, no framework abstractions.
-Just a clean loop: call → parse → execute → repeat.
+Architecture:
+- Memory API: stores conversation history (user, assistant, tool messages)
+- Core: only takes session_id, gets history from Memory, runs loop, stores responses to Memory
+- Harness: orchestrates - stores user message to Memory before calling Core
 
-The Manager owns the database. Core is stateless and session-agnostic.
+Flow:
+  prompt -> memory api + activate core with session ID
+  -> context built from memory API
+  -> thinking
+  -> add context
+  -> tool call
+  -> add context
+  -> rebuild context in core
+  -> think
+  -> add context
+  -> final output
+  -> add to context
 """
 
 import asyncio
 import inspect
 import json
+import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, AsyncIterator
 
 from openai import AsyncOpenAI
+from modules import registry, Module, CalledFn, ContextFn, _session_id
 
-from riven_config import config
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def _json_safe(obj):
+    """Convert an object to JSON-safe Python types.
+    
+    Recursively converts pydantic models, dataclasses, etc. to plain dicts/lists.
+    Handles Undefined and other non-serializable types.
+    """
+    if obj is None:
+        return None
+    
+    # Handle pydantic Undefined explicitly - it serializes as Undefined type
+    try:
+        from pydantic import Undefined
+        if obj is Undefined:
+            return None
+    except ImportError:
+        pass
+    
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, list):
+        return [_json_safe(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    # Handle pydantic models
+    if hasattr(obj, 'model_dump'):
+        return _json_safe(obj.model_dump())
+    if hasattr(obj, '__dict__'):
+        return _json_safe(obj.__dict__)
+    # Fallback: convert to string
+    return str(obj)
+
+
+# =============================================================================
+# Memory API Client
+# =============================================================================
+
+MEMORY_API_URL = os.environ.get('MEMORY_API_URL', 'http://127.0.0.1:8030') #USER: Make sure this pulls from the config system
+
+
+class MemoryClient:
+    """Client for remote memory API - stores conversation context by session.
+    
+    Note: Memory API must be running for Core to function. If not available,
+    Core will fail gracefully with clear error.
+    """
+    
+    def __init__(self, base_url: str = MEMORY_API_URL, session_id: str = None):
+        self.base_url = base_url
+        self.session_id = session_id
+    
+    def add_context(self, role: str, content: str, session: str = None, 
+                    tool_call_id: str = None, function: str = None) -> dict:
+        """Add a context message to memory.
+        
+        Args:
+            role: Message role (user, assistant, system, tool)
+            content: Message content
+            session: Session ID
+            tool_call_id: Tool call ID for linking tool results to their request
+            function: Function name (for tool results to store as proper property)
+        """
+        import requests
+        session = session or self.session_id
+        payload = {"role": role, "content": content, "session": session}
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
+        if function:
+            payload["function"] = function
+        resp = requests.post(
+            f"{self.base_url}/context",
+            json=payload
+        )
+        resp.raise_for_status()
+        return resp.json()
+    
+    def get_context(self, limit: int = 100, session: str = None) -> list[dict]:
+        """Get conversation history from memory."""
+        import requests
+        session = session or self.session_id
+        resp = requests.get(
+            f"{self.base_url}/context",
+            params={"limit": limit, "session": session}
+        )
+        resp.raise_for_status()
+        return resp.json().get("context", [])
 
 
 # =============================================================================
@@ -23,11 +128,7 @@ from riven_config import config
 
 @dataclass
 class Function:
-    """A callable function exposed to the LLM.
-
-    No decorators, no Pydantic models. Just: name, description,
-    a JSON schema for the parameters, and the actual callable.
-    """
+    """A callable function exposed to the LLM."""
     name: str
     description: str
     parameters: dict  # JSON schema
@@ -40,7 +141,9 @@ class Function:
         name = fn.__name__
         desc = (fn.__doc__ or "").strip()
         if desc:
-            desc = desc.split("\n")[0]
+            # Take first paragraph (not just first line)
+            paragraphs = desc.split("\n\n")
+            desc = paragraphs[0].replace("\n", " ")
 
         sig = inspect.signature(fn)
         props = {}
@@ -59,11 +162,25 @@ class Function:
                 elif param.annotation in (bool,):
                     param_type = "boolean"
 
+            # Try to get param description from docstring
+            param_desc = ""
+            if fn.__doc__:
+                doc_lines = fn.__doc__.split("\n")
+                for line in doc_lines:
+                    if pname in line and ":" in line:
+                        param_desc = line.split(":", 1)[1].strip()
+                        break
+
             props[pname] = {"type": param_type}
+            if param_desc:
+                props[pname]["description"] = param_desc
             if param.default is inspect.Parameter.empty:
                 required.append(pname)
 
-        schema = {"type": "object", "properties": props, "required": required}
+        # Only include 'required' if there are actually required params
+        schema = {"type": "object", "properties": props}
+        if required:
+            schema["required"] = required
         return cls(name=name, description=desc, parameters=schema, fn=fn, timeout=timeout)
 
 
@@ -93,66 +210,217 @@ class FunctionResult:
 # =============================================================================
 
 class Core:
-    """Pure agentic loop. Stateless, session-agnostic.
+    """Pure agentic loop.
 
-    The Manager owns the database and calls Core with a context_callback
-    that builds the full API payload on every LLM call. Core executes
-    tools, yields events, and repeats — nothing else.
+    Takes a shard config that describes:
+    - System prompt template (with context tags like {time})
+    - Modules to load
+    - Memory settings
 
-    Flow per turn:
-        context_callback() -> {system, messages}
-            LLM called
-                yields tokens
-                if tool_call -> execute -> yield result
-                -> next LLM call (callback called again with updated context)
-            if no tool_calls -> yield done
+    And an LLM config dict:
+    - url, model, api_key, timeout
+
+    Session ID is passed per-call and automatically available to all
+    module functions via context_var.
+    
+    IMPORTANT: Memory API must be running. User's prompt should be stored
+    to Memory API BEFORE calling run_stream(). This method only takes session_id.
     """
 
     def __init__(
         self,
-        llm_url: str,
-        llm_model: str,
-        llm_api_key: str,
-        functions: list[Function],
+        shard: dict,  # Shard config dict (tools, system, memory)
+        llm: dict = None,  # LLM config dict with url, model, api_key, timeout
         max_function_calls: int = 20,
-        tool_timeout: float = 20.0,
+        tool_timeout: float = None,  # Override from shard if not provided
     ):
-        self._client = AsyncOpenAI(base_url=llm_url, api_key=llm_api_key)
-        self._llm_model = llm_model
-        self._functions = functions
+        # LLM settings from explicit config (not from shard)
+        self._llm_url = llm.get('url', 'http://127.0.0.1:8000/v1') if llm else 'http://127.0.0.1:8000/v1'
+        self._llm_model = llm.get('model', 'MiniMax-M2.7') if llm else 'MiniMax-M2.7'
+        self._llm_api_key = llm.get('api_key', 'sk-dummy') if llm else 'sk-dummy'
+        
+        # Shard settings
+        self._system_template = shard.get('system', '')
+        self._module_names = shard.get('modules', [])
         self._max_function_calls = max_function_calls
-        self._tool_timeout = tool_timeout
+        self._tool_timeout = shard.get('tool_timeout', tool_timeout or 20.0)
         self._cancelled = False
-        self._func_index: dict[str, Function] = {f.name: f for f in functions}
-        self._tools = self._build_tools()
+        self._client = AsyncOpenAI(base_url=self._llm_url, api_key=self._llm_api_key)
+
+        # Memory API settings from shard
+        memory_api = shard.get('memory_api', {})
+        self._memory_url = memory_api.get('url', MEMORY_API_URL)
+
+        # Debug settings
+        self._debug_dir = shard.get('debug_dir')
+        self._debug_call_count = 0
+
+        # Register modules from shard config
+        self._load_modules()
+
+    def _load_modules(self) -> None:
+        """Load modules listed in shard."""
+        registry._modules.clear()
+        for name in self._module_names:
+            try:
+                mod = __import__(f'modules.{name}', fromlist=['get_module'])
+                if hasattr(mod, 'get_module'):
+                    module = mod.get_module()
+                    registry.register(module)
+            except Exception as e:
+                print(f"Warning: Failed to load module {name}: {e}")
+
+    def _get_functions(self) -> list[Function]:
+        """Convert registry called_fns to Core Functions."""
+        funcs = []
+        for mod in registry.all_modules():
+            for cf in mod.called_fns:
+                effective_timeout = cf.timeout if cf.timeout is not None else self._tool_timeout
+                funcs.append(Function(
+                    name=cf.name,
+                    description=cf.description,
+                    parameters=cf.parameters,
+                    fn=cf.fn,
+                    timeout=effective_timeout,
+                ))
+        return funcs
+
+    def _build_context(self) -> dict[str, str]:
+        """Build context from context functions."""
+        return registry.build_context()
+
+    def _reorder_messages(self, messages: list[dict]) -> list[dict]:
+        """Reorder messages so tool results follow their assistant message.
+        
+        Handles cases where memory API returns messages in wrong order.
+        Also parses embedded [tool_calls]...[/tool_calls] in content back to proper field.
+        """
+        if not messages:
+            return messages
+        
+        result = []
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            
+            # Parse embedded tool_calls from content if present
+            if msg.get('role') == 'assistant' and msg.get('content') and '[tool_calls]' in msg.get('content', ''):
+                import re
+                content = msg['content']
+                # Extract tool_calls JSON from content
+                tc_match = re.search(r'\[tool_calls\](.+?)\[/tool_calls\]', content)
+                if tc_match:
+                    try:
+                        tool_calls = json.loads(tc_match.group(1))
+                        msg['tool_calls'] = tool_calls
+                        # Remove the embedded part from content
+                        msg['content'] = re.sub(r'\[tool_calls\].+?\[/tool_calls\]\s*', '', content).strip()
+                        if not msg['content']:
+                            del msg['content']
+                    except json.JSONDecodeError:
+                        pass  # Leave as-is if parsing fails
+            
+            # If this is a tool message, find its matching assistant and insert after it
+            if msg.get('role') == 'tool':
+                tool_call_id = msg.get('tool_call_id', '')
+                if tool_call_id:
+                    # Look backwards in result for matching assistant with tool_calls
+                    inserted = False
+                    for j, existing_msg in enumerate(result):
+                        if existing_msg.get('role') == 'assistant':
+                            tcs = existing_msg.get('tool_calls', [])
+                            for tc in tcs:
+                                if tc.get('id') == tool_call_id:
+                                    # Insert this tool result right after this assistant
+                                    result.insert(j + 1, msg)
+                                    inserted = True
+                                    break
+                            if inserted:
+                                break
+                    if not inserted:
+                        result.append(msg)
+                else:
+                    result.append(msg)
+            else:
+                result.append(msg)
+            i += 1
+        
+        return result
+
+    def _build_system_prompt(self) -> str:
+        """Build system prompt by replacing {tag} placeholders with context."""
+        ctx = self._build_context()
+        system = self._system_template
+        for tag, content in ctx.items():
+            placeholder = f"{{{tag}}}"
+            system = system.replace(placeholder, content)
+        return system
+
+    def _debug_save(self, stage: str, system_prompt: str, api_messages: list[dict], 
+                    context_data: dict = None) -> None:
+        """Save debug dump of context before LLM call."""
+        if not self._debug_dir:
+            return
+        
+        self._debug_call_count += 1
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"call_{self._debug_call_count:03d}_{stage}_{timestamp}.json"
+        
+        os.makedirs(self._debug_dir, exist_ok=True)
+        filepath = os.path.join(self._debug_dir, filename)
+        
+        debug_data = {
+            "timestamp": timestamp,
+            "stage": stage,
+            "call_number": self._debug_call_count,
+            "session_id": _session_id.get(),
+            "context_data": context_data or {},
+            "system_prompt": system_prompt,
+            "messages": api_messages,
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(debug_data, f, indent=2, default=str)
+
+    def _save_context_snapshot(self, raw_context: list[dict], label: str, session_id: str = None) -> None:
+        """Save raw context snapshot to a file for debugging.
+        
+        Args:
+            raw_context: The context as returned from memory.get_context()
+            label: Descriptive label for this snapshot (e.g., 'initial', 'after_tool_call')
+            session_id: Session ID if available
+        """
+        # Use shard's debug_dir if set, otherwise use context_debug in cwd
+        debug_dir = self._debug_dir or 'context_debug'
+        os.makedirs(debug_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{label}_{timestamp}.json"
+        filepath = os.path.join(debug_dir, filename)
+        
+        snapshot = {
+            "timestamp": timestamp,
+            "label": label,
+            "session_id": session_id or _session_id.get(),
+            "message_count": len(raw_context),
+            "messages": raw_context,
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(snapshot, f, indent=2, default=str)
+        
+        print(f"[CONTEXT SNAPSHOT] Saved {len(raw_context)} messages to {filepath}")
 
     def cancel(self) -> None:
         """Cancel the current run."""
         self._cancelled = True
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _build_tools(self) -> list[dict]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": f.name,
-                    "description": f.description,
-                    "parameters": f.parameters,
-                },
-            }
-            for f in self._functions
-        ]
 
     def _parse_calls(self, msg: dict) -> list[FunctionCall]:
         """Extract function calls from an assistant message."""
         calls = []
         for tc in msg.get("tool_calls", []) or []:
             fn = tc.get("function", {})
-            raw_args = fn.get("arguments", "{}")
+            raw_args = fn.get("arguments", "{}") or "{}"
             arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             calls.append(FunctionCall(
                 id=tc.get("id", ""),
@@ -161,9 +429,9 @@ class Core:
             ))
         return calls
 
-    async def _execute(self, call: FunctionCall) -> FunctionResult:
+    async def _execute(self, call: FunctionCall, func_index: dict) -> FunctionResult:
         """Execute a single function call with timeout."""
-        func = self._func_index.get(call.name)
+        func = func_index.get(call.name)
         if not func:
             return FunctionResult(call_id=call.id, name=call.name, content="",
                                   error=f"Unknown function: {call.name}")
@@ -181,218 +449,266 @@ class Core:
 
         return FunctionResult(call_id=call.id, name=call.name, content=content, error=error)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def _get_thinking(self, delta) -> str | None:
-        """Extract thinking/reasoning content from a streaming delta.
-
-        MiniMax uses 'reasoning_content', OpenRouter uses 'reasoning'.
-        """
-        if not delta.model_extra:
-            return None
-        return delta.model_extra.get('reasoning_content') or delta.model_extra.get('reasoning')
-
-    async def run_stream(
-        self,
-        context_callback: Callable[[str], dict],
-    ) -> AsyncIterator[dict]:
-        """Run the agent loop, yielding events to the caller.
+    async def run_stream(self, session_id: str) -> AsyncIterator[dict]:
+        """Run the agent loop.
 
         Args:
-            context_callback: Called before each LLM call. Receives the
-                              text streamed so far and returns the full
-                              API payload:
-                                  {"system": "...", "messages": [...]}
-                              The Manager owns this dict and mutates it
-                              mid-loop (e.g. appending tool results).
-
+            session_id: Session ID for this conversation. Memory API must contain
+                        the user's prompt before this is called.
+        
         Yields dicts:
-            {"token": str}            - text chunk from the model stream
-            {"thinking": str}         - reasoning/thinking chunk (kept separate
-                                        from accumulated_text — callers decide
-                                        whether to display/store it)
-            {"tool_call": {id, name, arguments}} - function call detected
-            {"tool_result": {id, name, content, error}} - function result
-            {"assistant": dict}       - full assistant message (with tool_calls
-                                        if applicable). Append BEFORE tool
-                                        results so history is [user, assistant, tool].
-            {"done": True}             - loop complete
-            {"error": str}            - something went wrong
+            {"token": str}            - text chunk
+            {"thinking": str}         - thinking/reasoning content
+            {"tool_call": dict}       - function call detected
+            {"tool_result": dict}     - function result  
+            {"context_updated": dict} - context was rebuilt
+            {"done": True}            - loop complete
+            {"error": str}            - error
         """
+        import requests
+        
         self._cancelled = False
         function_call_count = 0
-        accumulated_text = ""
 
-        while True:
-            if self._cancelled:
-                yield {"error": "cancelled"}
-                return
+        # Memory client for this session
+        memory = MemoryClient(base_url=self._memory_url, session_id=session_id)
 
-            # --- Build API payload ---
-            ctx = context_callback(accumulated_text)
-            api_messages = []
-            if ctx.get("system"):
-                api_messages.append({"role": "system", "content": ctx["system"]})
-            api_messages.extend(ctx.get("messages", []))
+        # Set session ID in context var for all module functions to access
+        token = _session_id.set(session_id)
+        try:
+            functions = self._get_functions()
+            func_index = {f.name: f for f in functions}
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": f.name,
+                        "description": f.description,
+                        "parameters": f.parameters,
+                    },
+                }
+                for f in functions
+            ]
 
-            # --- Call LLM ---
-            stream = await self._client.chat.completions.create(
-                model=self._llm_model,
-                messages=api_messages,
-                tools=self._tools or None,
-                stream=True,
-            )
-
-            # --- Collect the complete assistant message ---
-            assistant_msg = {"content": "", "tool_calls": []}
-            thinking_buffer = ""
-
-            async for chunk in stream:
+            while True:
                 if self._cancelled:
                     yield {"error": "cancelled"}
                     return
 
-                delta = chunk.choices[0].delta
+                # --- Get current context from Memory API ---
+                try:
+                    history = memory.get_context(limit=100, session=session_id)
+                except requests.exceptions.ConnectionError:
+                    yield {"error": "Memory API not available. Ensure memory-api is running."}
+                    return
 
-                # Extract thinking, buffer it
-                thinking = self._get_thinking(delta)
-                if thinking:
-                    thinking_buffer += thinking
-                    continue
+                # Debug: save raw context snapshot
+                stage = "initial" if function_call_count == 0 else f"call_{function_call_count}"
+                self._save_context_snapshot(history, f"raw_{stage}", session_id)
 
-                # Non-thinking delta — flush any buffered thinking first
-                if thinking_buffer:
-                    yield {"thinking": thinking_buffer}
-                    thinking_buffer = ""
+                # Build api_messages from history (filter internal fields)
+                api_messages = [
+                    {k: v for k, v in msg.items() if k not in ('id', 'created_at')}
+                    for msg in history
+                ]
 
-                if delta.content:
-                    accumulated_text += delta.content
-                    yield {"token": delta.content}
-                    assistant_msg["content"] += delta.content
+                # Reorder: ensure tool results follow their assistant message
+                api_messages = self._reorder_messages(api_messages)
 
-                if delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        idx = tc_delta.index or 0
-                        while len(assistant_msg["tool_calls"]) <= idx:
-                            assistant_msg["tool_calls"].append({"id": "", "function": {"name": "", "arguments": ""}})
-                        tc = assistant_msg["tool_calls"][idx]
-                        if tc_delta.id:
-                            tc["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name:
-                                tc["function"]["name"] = tc_delta.function.name
-                            if tc_delta.function.arguments:
-                                tc["function"]["arguments"] += tc_delta.function.arguments
+                # Add system prompt at the front
+                system = self._build_system_prompt()
+                if system:
+                    api_messages.insert(0, {"role": "system", "content": system})
 
-            # --- Flush any remaining thinking at end of stream ---
-            if thinking_buffer:
-                yield {"thinking": thinking_buffer}
+                # --- Debug: save context before LLM call ---
+                context_data = self._build_context()
+                stage = "initial" if function_call_count == 0 else f"call_{function_call_count}"
+                self._debug_save(stage=stage, system_prompt=system, 
+                               api_messages=api_messages, context_data=context_data)
 
-            # --- Parse ---
-            calls = self._parse_calls(assistant_msg)
+                # --- Sanitize messages before sending to LLM ---
+                api_messages = _json_safe(api_messages)
+                
+                # Convert tool role to function role for MiniMax API compatibility
+                # The LLM needs to see tool_calls in assistant messages to know what was called!
+                # We use _json_safe above to handle any Undefined serialization issues
+                for msg in api_messages:
+                    # MiniMax API expects 'function' role, not 'tool' for function results
+                    if msg.get('role') == 'tool':
+                        msg['role'] = 'function'
+                        # Use 'function' property if available (cleaner than parsing content)
+                        if msg.get('function'):
+                            msg['name'] = msg['function']
+                        else:
+                            # Legacy: extract function name from content ("func_name: result")
+                            content = msg.get('content', '')
+                            if ':' in content:
+                                func_name, _, rest = content.partition(':')
+                                msg['name'] = func_name.strip()
+                                msg['content'] = rest.strip()
+                        # Preserve tool_call_id to link result to the original tool call
+                        if msg.get('tool_call_id'):
+                            msg['tool_call_id'] = msg['tool_call_id']
 
-            # --- No tool calls — yield assistant, then done ---
-            if not calls:
+                # --- Call LLM ---
+                try:
+                    stream = await self._client.chat.completions.create(
+                        model=self._llm_model,
+                        messages=api_messages,
+                        tools=tools or None,
+                        stream=True,
+                    )
+                except Exception as e:
+                    yield {"error": f"LLM call failed: {type(e).__name__}: {e}"}
+                    return
+
+                # --- Collect the complete assistant message ---
+                assistant_msg = {"tool_calls": []}  # Start without content
+                full_response = ""
+
+                async for chunk in stream: #streaming is for users benifit. When streaming is done, it should send the whole chunk to the context system than pull a new context in that will include the chunk. The stream only goes to the user.
+                    if self._cancelled:
+                        yield {"error": "cancelled"}
+                        return
+
+                    delta = chunk.choices[0].delta
+
+                    # Handle thinking/reasoning
+                    if delta.model_extra:
+                        thinking = _json_safe(delta.model_extra.get('reasoning_content')) or _json_safe(delta.model_extra.get('reasoning'))
+                        if thinking:
+                            yield {"thinking": thinking}
+                            full_response += f"[think]{thinking}[/think]"
+
+                    if delta.content:
+                        yield {"token": delta.content}
+                        if "content" not in assistant_msg:
+                            assistant_msg["content"] = ""
+                        assistant_msg["content"] += delta.content
+                        full_response += delta.content
+
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index or 0
+                            while len(assistant_msg["tool_calls"]) <= idx:
+                                assistant_msg["tool_calls"].append({"id": "", "function": {"name": "", "arguments": ""}})
+                            tc = assistant_msg["tool_calls"][idx]
+                            if tc_delta.id:
+                                tc["id"] = _json_safe(tc_delta.id)
+                            if tc_delta.function:
+                                func_data = _json_safe(tc_delta.function.model_dump())
+                                if func_data.get('name'):
+                                    tc["function"]["name"] = func_data['name']
+                                if func_data.get('arguments'):
+                                    tc["function"]["arguments"] += func_data['arguments']
+
+                # --- Parse calls ---
+                calls = self._parse_calls(assistant_msg)
+
+                # --- No tool calls — done ---
+                if not calls:
+                    assistant_msg["role"] = "assistant"
+                    if assistant_msg.get("content", "").strip():
+                        safe_msg = _json_safe(assistant_msg)
+                        yield {"assistant": safe_msg}
+                        # Store final response to memory
+                        try:
+                            memory.add_context("assistant", assistant_msg["content"], session=session_id)
+                        except Exception:
+                            pass
+                    yield {"done": True}
+                    return
+
+                # --- Execute tool calls ---
+                results: list[FunctionResult] = []
+                for call in calls:
+                    if self._cancelled:
+                        yield {"error": "cancelled"}
+                        return
+
+                    function_call_count += 1
+                    if function_call_count > self._max_function_calls:
+                        yield {"error": f"Max function calls reached ({self._max_function_calls})"}
+                        return
+
+                    # Yield tool call event
+                    yield {"tool_call": {
+                        "id": call.id, 
+                        "name": call.name, 
+                        "arguments": call.arguments
+                    }}
+                    
+                    # Execute
+                    result = await self._execute(call, func_index)
+                    results.append(result)
+
+                    # Yield tool result event
+                    result_content = result.content if not result.error else f"ERROR: {result.error}"
+                    yield {"tool_result": {
+                        "id": result.call_id, 
+                        "name": result.name,
+                        "content": result.content, 
+                        "error": result.error,
+                    }}
+
+                    # Store tool result to memory API
+                    # Include tool_call_id to link this result to the assistant's tool_calls
+                    # Store function name as 'function' property (not embedded in content)
+                    try:
+                        memory.add_context(
+                            "tool",
+                            result_content,
+                            session=session_id,
+                            tool_call_id=result.call_id,
+                            function=result.name
+                        )
+                        # Debug: save context after storing tool result
+                        self._save_context_snapshot(
+                            memory.get_context(limit=100, session=session_id),
+                            f"after_tool_result_{function_call_count}",
+                            session_id
+                        )
+                    except Exception:
+                        pass  # Memory store failed, but we'll get it on next fetch
+
+                # --- Yield and store assistant message ---
                 assistant_msg["role"] = "assistant"
-                yield {"assistant": assistant_msg}
-                yield {"done": True}
-                return
-
-            # --- Execute all calls, collect results ---
-            results: list[FunctionResult] = []
-            for call in calls:
-                if self._cancelled:
-                    yield {"error": "cancelled"}
-                    return
-
-                function_call_count += 1
-                if function_call_count > self._max_function_calls:
-                    yield {"error": f"Max function calls reached ({self._max_function_calls})"}
-                    return
-
-                yield {"tool_call": {"id": call.id, "name": call.name, "arguments": call.arguments}}
-                results.append(await self._execute(call))
-
-            # --- Yield assistant message FIRST so harness gets ordering right ---
-            assistant_msg["role"] = "assistant"
-            yield {"assistant": assistant_msg}
-
-            # --- Then yield tool results ---
-            for result in results:
-                yield {"tool_result": {
-                    "id": result.call_id, "name": result.name,
-                    "content": result.content, "error": result.error,
-                }}
-
-
-# =============================================================================
-# TEST HARNESS
-# =============================================================================
-
-if __name__ == "__main__":
-    import time
-
-    async def get_time() -> str:
-        """Return the current time."""
-        return time.strftime("%Y-%m-%d %H:%M:%S")
-
-    core = Core(
-        llm_url=config.get("llm.primary.url", "http://127.0.0.1:8000/v1"),
-        llm_model=config.get("llm.primary.model", "lukealonso/MiniMax-M2.7-NVFP4"),
-        llm_api_key=config.get("llm.primary.api_key", "sk-dummy"),
-        functions=[Function.from_callable(get_time)],
-    )
-
-    SYSTEM = """You are a helpful assistant. Use the get_time tool if asked.
-
-Available tools:
-- get_time() -> str (returns current time as YYYY-MM-DD HH:MM:SS)
-"""
-
-    context = {"system": SYSTEM, "messages": []}
-
-    def context_callback(accumulated_text: str) -> dict:
-        return context
-
-    async def main():
-        print("=== Core === (quit to exit)\n")
-        while True:
-            prompt = input("> ").strip()
-            if prompt.lower() in ("q", "quit"):
-                break
-
-            context["messages"].append({"role": "user", "content": prompt})
-
-            pending_tool = None
-
-            async for event in core.run_stream(context_callback=context_callback):
-                if "token" in event:
-                    print(event["token"], end="", flush=True)
-                elif "thinking" in event:
-                    print(f"\n<think>\n{event['thinking']}\n</think>", end="", flush=True)
-                elif "tool_call" in event:
-                    tc = event["tool_call"]
-                    args_str = json.dumps(tc["arguments"]) if tc["arguments"] else "{}"
-                    pending_tool = {"name": tc["name"], "args": args_str}
-                elif "tool_result" in event:
-                    r = event["tool_result"]
-                    context["messages"].append({
-                        "role": "tool",
-                        "tool_call_id": r["id"],
-                        "content": r["content"],
-                    })
-                    if pending_tool:
-                        print(f"\n<tool>{pending_tool['name']}{pending_tool['args']}</tool>\n<result>{r['content']}</result>", flush=True)
-                        pending_tool = None
+                has_content = assistant_msg.get("content", "") or ""
+                has_content = has_content.strip()
+                has_tool_calls = assistant_msg.get("tool_calls")
+                
+                # Clean up: if content is empty, don't include it
+                if not has_content and "content" in assistant_msg:
+                    del assistant_msg["content"]
+                
+                if has_content or has_tool_calls:
+                    # Convert to JSON-safe before yielding (handles pydantic Undefined etc)
+                    safe_assistant_msg = _json_safe(assistant_msg)
+                    yield {"assistant": safe_assistant_msg}
+                    
+                    # Store assistant message to memory
+                    # For messages with tool_calls, embed them in content for reconstruction
+                    if has_tool_calls:
+                        tool_calls_info = json.dumps(_json_safe(has_tool_calls))
+                        if has_content:
+                            storage_content = f"[tool_calls]{tool_calls_info}[/tool_calls]\n\n{has_content}"
+                        else:
+                            storage_content = f"[tool_calls]{tool_calls_info}[/tool_calls]"
+                        try:
+                            memory.add_context("assistant", storage_content, session=session_id)
+                        except Exception:
+                            pass
                     else:
-                        print(f"\n<result>{r['content']}</result>", flush=True)
-                elif "assistant" in event:
-                    context["messages"].append(event["assistant"])
-                elif "done" in event:
-                    print()
-                elif "error" in event:
-                    print(f"\n[Error: {event['error']}]")
+                        try:
+                            memory.add_context("assistant", has_content, session=session_id)
+                        except Exception:
+                            pass
 
-    asyncio.run(main())
+                # Emit that context was rebuilt (for harness to know)
+                yield {"context_updated": {"call_count": function_call_count}}
+                
+        finally:
+            try:
+                _session_id.reset(token)
+            except ValueError:
+                pass
