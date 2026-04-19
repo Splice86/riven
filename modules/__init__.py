@@ -52,9 +52,14 @@ class ContextFn:
     
     The tag is replaced in the system prompt using {tag} syntax.
     Example: tag="time" → replaces {time} in system prompt
+    
+    Static vs Dynamic:
+    - static=True: Returns unchanging data (tool docs, usage tips). Placed at top.
+    - static=False (default): Returns session-dependent data (open files, cwd). Placed after statics.
     """
     tag: str  # e.g., "time" → replaces {time} in system prompt
     fn: Callable  # Returns content to inject
+    static: bool = False  # True if content never changes between calls
 
 
 @dataclass

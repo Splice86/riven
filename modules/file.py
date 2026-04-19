@@ -98,40 +98,32 @@ def _delete_memory(memory_id: str) -> None:
         pass
 
 
-def _open_files_context() -> str:
-    """Return currently open files with their content.
-    
-    Queries memory DB for file records with session_id, then loads
-    the actual file content from disk.
-    """
-    session_id = get_session_id()
-    
-    instructions = """## File Tools
+def _file_help() -> str:
+    """Static tool documentation - does not change between calls."""
+    return """## File Tools (Help)
 
 ### Workflow
-1. **open_file(path)** - Open a file into context
-2. **open_file(path, line_start, line_end)** - Open specific line range
-3. **replace_text(path, old_text, new_text)** - Replace text (auto-saves)
-4. **close_file(filename)** - Close a file
-5. **close_all_files()** - Close all open files
-6. **file_info(path)** - Get file metadata
+1. **open_file(path, line_start?, line_end?)** - Open a file into context
+2. **replace_text(path, old_text, new_text)** - Fuzzy-match replacement (auto-saves)
+3. **close_file(filename, line_start?, line_end?)** - Close file/range
+4. **close_all_files()** - Close all open files
+5. **file_info(path)** - Get file metadata
 
-### Important
+### Notes
 - Open files are automatically included in your context below
 - Use replace_text() for edits - it saves automatically
-- Close files when done to keep context clean
-- Files not in context must be re-opened
-"""
+- Close files when done to keep context clean"""
     
-    # Search memory DB for open files
+def _file_context() -> str:
+    """Dynamic context - currently open files. Changes when files are opened/closed."""
+    session_id = get_session_id()
     query = "k:file"
     memories = _search_memories(session_id, query, limit=50)
     
     if not memories:
-        return instructions + "\n\nNo files currently open"
+        return "No files currently open"
     
-    # Build context from disk
-    lines = [instructions, "", "=== Open Files ==="]
+    lines = ["=== Open Files ==="]
     total_tokens = 0
     
     for mem in memories:
@@ -482,9 +474,7 @@ def get_module():
             ),
         ],
         context_fns=[
-            ContextFn(
-                tag="file",
-                fn=_open_files_context,
-            )
+            ContextFn(tag="file_help", fn=_file_help),
+            ContextFn(tag="file", fn=_file_context),
         ],
     )

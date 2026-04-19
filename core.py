@@ -127,7 +127,23 @@ class MemoryClient:
             params={"limit": limit, "session": session}
         )
         resp.raise_for_status()
-        return resp.json().get("context", [])
+        context = resp.json().get("context", [])
+        
+        # DEBUG: Log context to file with timestamp
+        debug_dir = os.environ.get('DEBUG_CONTEXT_DIR', '/home/david/Projects/riven_projects/riven_core/context_logs')
+        os.makedirs(debug_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"get_context_{ts}.json"
+        filepath = os.path.join(debug_dir, filename)
+        with open(filepath, 'w') as f:
+            json.dump({
+                "timestamp": ts,
+                "session": session,
+                "count": len(context),
+                "messages": context,
+            }, f, indent=2, default=str)
+        
+        return context
 
 
 # =============================================================================
@@ -259,6 +275,10 @@ class Core:
         memory_api = shard.get('memory_api', {})
         self._memory_url = memory_api.get('url', MEMORY_API_URL)
 
+        # Tool result truncation settings from shard
+        self._tool_max_lines = shard.get('tool_result_max_lines', 200)
+        self._tool_char_per_line = shard.get('tool_result_char_per_line', 150)
+
         # Debug settings
         self._debug_dir = shard.get('debug_dir')
         self._debug_snapshots = shard.get('debug_snapshots', False)
@@ -266,6 +286,42 @@ class Core:
 
         # Register modules from shard config
         self._load_modules()
+
+    @staticmethod
+    def _truncate_tool_result(content: str, max_lines: int, char_per_line: int) -> str:
+        """Truncate tool result content to a max number of lines.
+        
+        If content has newlines, truncate at max_lines lines.
+        If content has no newlines, treat every char_per_line chars as a "virtual line".
+        
+        Args:
+            content: The tool result content
+            max_lines: Maximum lines to keep (200 default)
+            char_per_line: Chars per virtual line when no newlines (150 default)
+        
+        Returns:
+            Truncated content with "[TRUNCATED]" marker if cut
+        """
+        if not content:
+            return content
+        
+        # Check if content has actual newlines
+        if '\n' in content:
+            lines = content.split('\n')
+            if len(lines) <= max_lines:
+                return content
+            # Truncate at max_lines
+            truncated = '\n'.join(lines[:max_lines])
+            return truncated + '\n[TRUNCATED: original had {0} lines]'.format(len(lines))
+        else:
+            # No newlines - treat char_per_line as a virtual line
+            virtual_lines = (len(content) + char_per_line - 1) // char_per_line
+            if virtual_lines <= max_lines:
+                return content
+            # Truncate at max_lines * char_per_line chars
+            max_chars = max_lines * char_per_line
+            truncated = content[:max_chars]
+            return truncated + '[TRUNCATED: original had {0} chars]'.format(len(content))
 
     def _load_modules(self) -> None:
         """Load modules listed in shard."""
@@ -480,10 +536,19 @@ class Core:
             storage_content = content
         
         if storage_content or tool_calls:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            print(f"\n[STORE_ASSISTANT {ts}] role={role}")
+            if tool_calls:
+                for tc in tool_calls:
+                    print(f"  tool_call: id={tc.get('id')} name={tc.get('function',{}).get('name')}")
+            if storage_content:
+                print(f"  content={storage_content[:80]}{'...' if len(storage_content) > 80 else ''}")
             try:
                 memory.add_context(role, storage_content, session=session_id)
+                print(f"[STORE_ASSISTANT] SUCCESS")
             except Exception as e:
                 logger.warning(f"Failed to store assistant message to memory: {e}")
+                print(f"[STORE_ASSISTANT] FAILED: {e}")
 
     async def run_stream(self, session_id: str) -> AsyncIterator[dict]:
         """Run the agent loop.
@@ -532,13 +597,26 @@ class Core:
                     return
 
                 # --- Get current context from Memory API ---
+                context_error = None
                 try:
                     history = memory.get_context(limit=100, session=session_id)
-                except requests.exceptions.ConnectionError:
-                    yield {"error": "Memory API not available. Ensure memory-api is running."}
+                except requests.exceptions.ConnectionError as e:
+                    context_error = str(e)
+                    history = []
+                    # Save error snapshot even on connection failure
+                    if self._debug_snapshots:
+                        self._save_context_snapshot([], f"ERROR_memory_api_{function_call_count}", session_id)
+                    yield {"error": f"Memory API not available: {context_error}. Ensure memory-api is running."}
+                    return
+                except Exception as e:
+                    context_error = str(e)
+                    history = []
+                    if self._debug_snapshots:
+                        self._save_context_snapshot([], f"ERROR_memory_api_{function_call_count}", session_id)
+                    yield {"error": f"Memory API error: {context_error}"}
                     return
 
-                # Debug: save raw context snapshot (only if enabled)
+                # Debug: save raw context snapshot BEFORE building messages
                 if self._debug_snapshots:
                     stage = "initial" if function_call_count == 0 else f"call_{function_call_count}"
                     self._save_context_snapshot(history, f"raw_{stage}", session_id)
@@ -551,6 +629,18 @@ class Core:
 
                 # Reorder: ensure tool results follow their assistant message
                 api_messages = self._reorder_messages(api_messages)
+
+                # Truncate tool result content to prevent context overflow
+                for msg in api_messages:
+                    if msg.get('role') == 'tool' and msg.get('content'):
+                        original_len = len(msg['content'])
+                        msg['content'] = self._truncate_tool_result(
+                            msg['content'],
+                            self._tool_max_lines,
+                            self._tool_char_per_line
+                        )
+                        if len(msg['content']) < original_len:
+                            print(f"[TRUNCATE] tool result: {original_len} -> {len(msg['content'])} chars")
 
                 # Add system prompt at the front
                 system = self._build_system_prompt()
@@ -587,6 +677,20 @@ class Core:
                         if msg.get('tool_call_id'):
                             msg['tool_call_id'] = msg['tool_call_id']
 
+                # --- DEBUG: Log what goes to LLM ---
+                debug_dir = os.environ.get('DEBUG_CONTEXT_DIR', '/home/david/Projects/riven_projects/riven_core/context_logs')
+                os.makedirs(debug_dir, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = f"to_llm_{ts}.json"
+                filepath = os.path.join(debug_dir, filename)
+                with open(filepath, 'w') as f:
+                    json.dump({
+                        "timestamp": ts,
+                        "session": session_id,
+                        "function_call_count": function_call_count,
+                        "messages": api_messages,
+                    }, f, indent=2, default=str)
+                
                 # --- Call LLM ---
                 try:
                     stream = await self._client.chat.completions.create(
@@ -648,6 +752,16 @@ class Core:
                     if assistant_msg.get("content", "").strip():
                         # Store BEFORE yield for consistency with tool-call flow
                         self._store_assistant(memory, assistant_msg, session_id)
+                        # Debug: snapshot final state
+                        if self._debug_snapshots:
+                            try:
+                                self._save_context_snapshot(
+                                    memory.get_context(limit=100, session=session_id),
+                                    f"final_response",
+                                    session_id
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to save context snapshot: {e}")
                         safe_msg = _json_safe(assistant_msg)
                         yield {"assistant": safe_msg}
                     yield {"done": True}
@@ -693,6 +807,9 @@ class Core:
                     # Store tool result to memory API
                     # Include tool_call_id to link this result to the assistant's tool_calls
                     # Store function name as 'function' property (not embedded in content)
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+                    print(f"\n[STORE_TOOL_RESULT {ts}] call_id={result.call_id} name={result.name}")
+                    print(f"  content={result_content[:100]}{'...' if len(result_content) > 100 else ''}")
                     try:
                         memory.add_context(
                             "tool",
@@ -701,10 +818,14 @@ class Core:
                             tool_call_id=result.call_id,
                             function=result.name
                         )
+                        print(f"[STORE_TOOL_RESULT] SUCCESS")
                     except Exception as e:
                         logger.warning(f"Failed to store tool result to memory: {e}")
+                        print(f"[STORE_TOOL_RESULT] FAILED: {e}")
+                        if self._debug_snapshots:
+                            self._save_context_snapshot([], f"ERROR_store_tool_{function_call_count}", session_id)
                     
-                    # Debug: save context after storing tool result (only if enabled)
+                    # Debug: save context after storing tool result (verifies storage succeeded)
                     if self._debug_snapshots:
                         try:
                             self._save_context_snapshot(

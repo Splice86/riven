@@ -190,9 +190,9 @@ async def web_search(query: str, num_results: int = 10) -> str:
         return f"[ERROR] {e}"
 
 
-def _web_context() -> str:
-    """Return web module context info."""
-    return """## Web Tools
+def _web_help() -> str:
+    """Static tool documentation - does not change between calls."""
+    return """## Web Tools (Help)
 
 Access web content using these tools:
 - **fetch_page(url)** - Get page content as text via lynx
@@ -246,6 +246,6 @@ def get_module() -> Module:
             ),
         ],
         context_fns=[
-            ContextFn(tag="web", fn=_web_context),
+            ContextFn(tag="web_help", fn=_web_help),
         ],
     )

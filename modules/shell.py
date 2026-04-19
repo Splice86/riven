@@ -44,24 +44,27 @@ class ShellResult:
         return f"ShellResult({status} exit={self.exit_code} time={self.execution_time:.2f}s)"
 
 
-def _get_cwd() -> str:
-    """Return current working directory for this session."""
-    cwd = os.getcwd()
-    return f"""## Shell
-
-### Current Directory
-`{cwd}`
+def _shell_help() -> str:
+    """Static tool documentation - does not change between calls."""
+    return """## Shell (Help)
 
 ### Available Commands
 - **run(command, timeout?, cwd?)** - Execute a shell command
 - **run_background(command, cwd?)** - Run in background, returns PID and log path
-- **kill(pid, signal?)** - Send signal to background process
-- **get_cwd()** - Show current directory
+- **kill(pid, signal?)** - Send signal to background process (15=SIGTERM, 9=SIGKILL)
 - **cd(path)** - Change working directory
+- **get_cwd()** - Show current directory
 - **which(program)** - Find executable path
 
 ### Usage
-Use run() to execute commands. Use run_background() for long-running tasks."""
+Check exit codes. stderr is where the truth lives. Use run_background() for long-running tasks."""
+
+
+def _shell_context() -> str:
+    """Dynamic context - current working directory. Changes when cd is called."""
+    cwd = os.getcwd()
+    return f"""### Current Directory
+`{cwd}`"""
 
 
 async def run(
@@ -376,6 +379,7 @@ def get_module():
             ),
         ],
         context_fns=[
-            ContextFn(tag="shell", fn=_get_cwd),
+            ContextFn(tag="shell_help", fn=_shell_help),
+            ContextFn(tag="shell", fn=_shell_context),
         ],
     )

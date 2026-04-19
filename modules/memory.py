@@ -292,9 +292,9 @@ async def execute_sql(sql: str, params: Optional[list] = None) -> str:
         return f"[ERROR] SQL execution failed: {e}"
 
 
-def _memory_context() -> str:
-    """Return memory module context info."""
-    return """## Memory Tools
+def _memory_help() -> str:
+    """Static tool documentation - does not change between calls."""
+    return """## Memory Tools (Help)
 
 Use these tools to store and retrieve persistent memories:
 - **add_memory(content, keywords?, properties?)** - Store a new memory
@@ -431,6 +431,6 @@ def get_module() -> Module:
             ),
         ],
         context_fns=[
-            ContextFn(tag="memory", fn=_memory_context),
+            ContextFn(tag="memory_help", fn=_memory_help),
         ],
     )

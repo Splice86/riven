@@ -1,7 +1,10 @@
-# Default shard - CodeHammer config
-# Use ?shard=codehammer to explicitly load the codehammer shard
+# CodeHammer - The coding shard
+#
+# A focused coding assistant built on clean code principles.
+# Keeps open files in context, runs shell commands for verification,
+# stores decisions to memory, and follows DRY/KISS/SOLID.
 
-name: default
+name: codehammer
 display_name: "CodeHammer"
 
 system: |
