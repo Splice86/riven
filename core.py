@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from typing import Callable, AsyncIterator
 
 from openai import AsyncOpenAI
-from context import MEMORY_API_URL, MemoryClient, ContextManager, _json_safe
+from context import MemoryClient, ContextManager, _json_safe
 from modules import registry, Module, CalledFn, ContextFn, _session_id
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ class Core:
 
         # Memory API settings from shard
         memory_api = shard.get('memory_api', {})
-        memory_url = memory_api.get('url', MEMORY_API_URL)
+        memory_url = memory_api.get('url')
 
         # Tool result truncation settings from shard
         tool_result_max_lines = shard.get('tool_result_max_lines', 200)
