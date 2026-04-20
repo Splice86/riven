@@ -427,8 +427,8 @@ class Core:
                     error_msg = f"Execution was cancelled by user. Session={session_id}"
                     try:
                         memory.add_context("error", error_msg, session=session_id)
-                    except Exception:
-                        pass
+                    except Exception as store_err:
+                        logger.warning(f"Failed to store cancel error to memory: {store_err}")
                     yield {"error": error_msg}
                     return
 
@@ -436,8 +436,8 @@ class Core:
                     error_msg = f"Max function calls reached ({self._max_function_calls}). Session={session_id}"
                     try:
                         memory.add_context("error", error_msg, session=session_id)
-                    except Exception:
-                        pass
+                    except Exception as store_err:
+                        logger.warning(f"Failed to store max-calls error to memory: {store_err}")
                     yield {"error": error_msg}
                     return
 

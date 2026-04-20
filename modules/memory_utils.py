@@ -8,8 +8,11 @@ All modules that need to store/retrieve from memory should import from here
 instead of duplicating these helpers.
 """
 
+import logging
 import requests
 from config import get
+
+logger = logging.getLogger(__name__)
 
 
 MEMORY_API_URL = get('memory_api.url')
@@ -47,8 +50,8 @@ def _search_memories(
         if resp.status_code == 200:
             data = resp.json()
             return data.get("memories", [])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Memory search failed: {e}")
     return []
 
 
@@ -63,5 +66,5 @@ def _delete_memory(memory_id: str) -> None:
             f"{MEMORY_API_URL}/memories/{memory_id}",
             timeout=5
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Memory delete failed for {memory_id}: {e}")

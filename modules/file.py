@@ -189,7 +189,7 @@ async def open_file(path: str, line_start: int = None, line_end: int = None) -> 
     try:
         with open(abs_path, 'r') as f:
             total_lines = len(f.readlines())
-    except:
+    except Exception:
         total_lines = "?"
     
     line_info = ""
