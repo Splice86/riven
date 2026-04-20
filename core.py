@@ -320,9 +320,9 @@ class Core:
                 history = []
                 error_msg = f"Memory API connection failed: {context_error}. Ensure memory-api is running at {memory_url or 'http://localhost:8030'}."
                 try:
-                    memory.add_context("error", error_msg, session=session_id)
+                    memory.add_context("tool", error_msg, session=session_id)
                 except Exception:
-                    pass  # If we can't store error, continue anyway
+                    pass
                 yield {"error": error_msg}
                 return
             except Exception as e:
@@ -330,7 +330,7 @@ class Core:
                 history = []
                 error_msg = f"Memory API error: {context_error}"
                 try:
-                    memory.add_context("error", error_msg, session=session_id)
+                    memory.add_context("tool", error_msg, session=session_id)
                 except Exception:
                     pass
                 yield {"error": error_msg}
@@ -355,7 +355,7 @@ class Core:
             except Exception as e:
                 error_msg = f"LLM call failed: {type(e).__name__}: {e}. Session={session_id}"
                 try:
-                    memory.add_context("error", error_msg, session=session_id)
+                    memory.add_context("tool", error_msg, session=session_id)
                 except Exception:
                     pass
                 yield {"error": error_msg}
@@ -368,7 +368,7 @@ class Core:
                 if self._cancelled:
                     error_msg = f"Execution was cancelled by user. Session={session_id}"
                     try:
-                        memory.add_context("error", error_msg, session=session_id)
+                        memory.add_context("tool", error_msg, session=session_id)
                     except Exception:
                         pass
                     yield {"error": error_msg}
@@ -435,7 +435,7 @@ class Core:
                 if len(results) + 1 > self._max_function_calls:
                     error_msg = f"Max function calls reached ({self._max_function_calls}). Session={session_id}"
                     try:
-                        memory.add_context("error", error_msg, session=session_id)
+                        memory.add_context("tool", error_msg, session=session_id)
                     except Exception as store_err:
                         logger.warning(f"Failed to store max-calls error to memory: {store_err}")
                     yield {"error": error_msg}
