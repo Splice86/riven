@@ -17,6 +17,7 @@ import jellyfish
 from datetime import datetime
 
 from modules import CalledFn, ContextFn, Module, get_session_id
+from modules.memory_utils import _search_memories, _delete_memory
 from config import get
 
 
@@ -65,37 +66,6 @@ def _find_best_window(
     if best_score >= threshold:
         return best_span, best_score
     return None, best_score
-
-
-def _search_memories(session_id: str, query: str, limit: int = 50) -> list[dict]:
-    """Search memory DB and return results."""
-    search_query = f"k:{session_id} AND {query}"
-    
-    try:
-        url = f"{MEMORY_API_URL}/memories/search"
-        resp = requests.post(
-            url,
-            json={"query": search_query, "limit": limit},
-            timeout=5
-        )
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("memories", [])
-    except Exception:
-        pass
-    return []
-
-
-def _delete_memory(memory_id: str) -> None:
-    """Delete a memory by ID."""
-    try:
-        requests.delete(
-            f"{MEMORY_API_URL}/memories/{memory_id}",
-            timeout=5
-        )
-    except Exception:
-        pass
 
 
 def _file_help() -> str:
