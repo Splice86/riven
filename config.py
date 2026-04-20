@@ -291,8 +291,9 @@ def get_llm_config(name: str = "primary") -> dict:
             key = env_key[len(env_prefix):].lower()
             result[key] = _coerce(env_val)
     
-    # Ensure required fields with defaults
-    result.setdefault("url", "http://127.0.0.1:8000/v1")
+    # Ensure required fields - defaults come from config.yaml
+    if "url" not in result:
+        raise ValueError(f"LLM config '{name}' missing 'url' - check config.yaml")
     result.setdefault("model", "MiniMax-M2.7")
     result.setdefault("api_key", "sk-dummy")
     result.setdefault("timeout", 120)

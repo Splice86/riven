@@ -145,9 +145,9 @@ class Core:
         tool_timeout: float = None,  # Override from shard if not provided
     ):
         # LLM settings from explicit config (not from shard)
-        self._llm_url = llm.get('url', 'http://127.0.0.1:8000/v1') if llm else 'http://127.0.0.1:8000/v1'
-        self._llm_model = llm.get('model', 'MiniMax-M2.7') if llm else 'MiniMax-M2.7'
-        self._llm_api_key = llm.get('api_key', 'sk-dummy') if llm else 'sk-dummy'
+        self._llm_url = llm.get('url') if llm else None
+        self._llm_model = llm.get('model') if llm else None
+        self._llm_api_key = llm.get('api_key') if llm else None
         
         # Shard settings
         self._system_template = shard.get('system', '')

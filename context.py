@@ -14,13 +14,14 @@ from datetime import datetime, timezone
 from typing import Callable
 
 import requests
+from config import get
 
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-MEMORY_API_URL = os.environ.get('MEMORY_API_URL', 'http://127.0.0.1:8030')  # TODO: pull from config system
+
 
 
 # =============================================================================
@@ -70,8 +71,9 @@ class MemoryClient:
     Core will fail gracefully with clear error.
     """
     
-    def __init__(self, base_url: str = MEMORY_API_URL, session_id: str = None):
-        self.base_url = base_url
+    def __init__(self, base_url: str = None, session_id: str = None):
+        self.session_id = session_id
+        self.base_url = base_url or get('memory_api.url')
         self.session_id = session_id
     
     def add_context(self, role: str, content: str, session: str = None,
@@ -146,7 +148,7 @@ class ContextManager:
         debug_dir: str = None,
         debug_snapshots: bool = False,
     ):
-        self._memory_url = memory_url
+        self._memory_url = memory_url or get('memory_api.url')
         self._tool_max_lines = tool_result_max_lines
         self._tool_char_per_line = tool_result_char_per_line
         self._debug_dir = debug_dir

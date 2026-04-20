@@ -18,7 +18,7 @@ from modules import CalledFn, ContextFn, Module
 from config import get
 
 
-MEMORY_API_URL = get('memory_api.url', 'http://127.0.0.1:8030')
+MEMORY_API_URL = get('memory_api.url')
 
 
 async def search_memories(query: str = "", limit: int = 50) -> str:

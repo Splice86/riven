@@ -94,7 +94,7 @@ def _load_shard(shard_name: str) -> dict:
 
     # Ensure memory_api is always set from config (even if shard file doesn't have it)
     shard.setdefault("memory_api", {
-        "url": get("memory_api.url", "http://127.0.0.1:8030"),
+        "url": get("memory_api.url"),
     })
 
     # Resolve llm_config reference if present
@@ -126,7 +126,7 @@ async def send_message(req: MessageRequest):
     core = Core(shard=shard, llm=llm)
 
     # Store user message to Memory API first
-    memory_url = get("memory_api.url", "http://127.0.0.1:8030")
+    memory_url = get("memory_api.url")
 
     try:
         r = requests.post(

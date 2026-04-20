@@ -14,7 +14,7 @@ from modules import CalledFn, ContextFn, Module, get_session_id
 from config import get
 
 
-MEMORY_API_URL = get('memory_api.url', 'http://127.0.0.1:8030')
+MEMORY_API_URL = get('memory_api.url')
 
 
 def _search_planning(query: str, limit: int = 50) -> list[dict]:
