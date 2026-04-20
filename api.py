@@ -217,10 +217,10 @@ async def send_message(req: MessageRequest):
 # Run
 # =============================================================================
 
-def run(host: str = "0.0.0.0", port: int = 8080):
+def run(host: str = None, port: int = None):
     """Run the API server."""
     import uvicorn
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host or get("server.host", "0.0.0.0"), port=port or get("server.port", 8080))
 
 
 if __name__ == "__main__":

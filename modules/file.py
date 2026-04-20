@@ -17,11 +17,7 @@ import jellyfish
 from datetime import datetime
 
 from modules import CalledFn, ContextFn, Module, get_session_id
-from modules.memory_utils import _search_memories, _delete_memory
-from config import get
-
-
-MEMORY_API_URL = get('memory_api.url')
+from modules.memory_utils import _search_memories, _delete_memory, _get_memory_url
 
 
 def _count_tokens(text: str) -> int:
@@ -178,7 +174,7 @@ async def open_file(path: str, line_start: int = None, line_end: int = None) -> 
     }
     
     try:
-        url = f"{MEMORY_API_URL}/memories"
+        url = f"{_get_memory_url()}/memories"
         resp = requests.post(url, json=payload, timeout=5)
         if resp.status_code != 200:
             return f"Error saving to memory: {resp.text[:200]}"

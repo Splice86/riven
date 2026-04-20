@@ -11,10 +11,11 @@ import subprocess
 from typing import Optional
 
 from modules import CalledFn, ContextFn, Module
+from config import get
 
 
-DEFAULT_TIMEOUT = 30
-MAX_CONTENT_LENGTH = 10000
+DEFAULT_TIMEOUT = get('web_timeout', 30)
+MAX_CONTENT_LENGTH = get('web_max_content_length', 10000)
 
 
 async def fetch_page(url: str) -> str:

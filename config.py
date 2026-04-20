@@ -230,7 +230,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
         if key in result and isinstance(result[key], dict) and isinstance(val, dict):
             result[key] = _deep_merge(result[key], val)
         else:
-            result[key] = _deep_copy_dict(val) if isinstance(val, dict) else val
+            result[key] = _deep_copy_dict(val)
     return result
 
 
@@ -291,7 +291,7 @@ def get_llm_config(name: str = "primary") -> dict:
             key = env_key[len(env_prefix):].lower()
             result[key] = _coerce(env_val)
     
-    # Ensure required fields - defaults come from config.yaml
+    # Ensure required fields - config.yaml is the source of truth
     if "url" not in result:
         raise ValueError(f"LLM config '{name}' missing 'url' - check config.yaml")
     result.setdefault("model", "MiniMax-M2.7")

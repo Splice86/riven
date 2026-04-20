@@ -3,6 +3,7 @@
 Provides common helper functions for interacting with the memory API:
 - _search_memories: Search memory DB with session + query
 - _delete_memory: Delete a memory by ID
+- _get_memory_url: Lazy getter for memory API base URL
 
 All modules that need to store/retrieve from memory should import from here
 instead of duplicating these helpers.
@@ -15,7 +16,9 @@ from config import get
 logger = logging.getLogger(__name__)
 
 
-MEMORY_API_URL = get('memory_api.url')
+def _get_memory_url() -> str:
+    """Lazy getter for memory API URL — defers config.get() to call time."""
+    return get('memory_api.url')
 
 
 def _search_memories(
@@ -40,7 +43,7 @@ def _search_memories(
     search_query = f"k:{session_id}{prefix} AND {query}"
 
     try:
-        url = f"{MEMORY_API_URL}/memories/search"
+        url = f"{_get_memory_url()}/memories/search"
         resp = requests.post(
             url,
             json={"query": search_query, "limit": limit},
@@ -63,7 +66,7 @@ def _delete_memory(memory_id: str) -> None:
     """
     try:
         requests.delete(
-            f"{MEMORY_API_URL}/memories/{memory_id}",
+            f"{_get_memory_url()}/memories/{memory_id}",
             timeout=5
         )
     except Exception as e:

@@ -57,7 +57,7 @@ class TestDeleteMemory:
     def test_delete_sends_correct_request(self):
         """Test that delete sends a DELETE request to the correct URL."""
         with patch("modules.memory_utils.requests") as mock_requests, \
-             patch("modules.memory_utils.MEMORY_API_URL", "http://localhost:8030"):
+             patch("modules.memory_utils._get_memory_url", return_value="http://localhost:8030"):
             mock_requests.delete.return_value = MagicMock(status_code=200)
 
             from modules.memory_utils import _delete_memory
@@ -87,4 +87,4 @@ class TestMemoryUtilsExports:
         
         assert hasattr(memory_utils, '_search_memories')
         assert hasattr(memory_utils, '_delete_memory')
-        assert hasattr(memory_utils, 'MEMORY_API_URL')
+        assert hasattr(memory_utils, '_get_memory_url')

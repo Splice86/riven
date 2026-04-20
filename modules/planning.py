@@ -12,7 +12,7 @@ import os
 import requests
 
 from modules import CalledFn, ContextFn, Module, get_session_id
-from modules.memory_utils import _search_memories, MEMORY_API_URL
+from modules.memory_utils import _search_memories, _get_memory_url
 
 
 def _search_planning(query: str, limit: int = 50) -> list[dict]:
@@ -74,7 +74,7 @@ async def create_goal(
     
     try:
         resp = requests.post(
-            f"{MEMORY_API_URL}/memories",
+            f"{_get_memory_url()}/memories",
             json={
                 "content": content,
                 "keywords": keywords,
@@ -98,7 +98,7 @@ async def add_file_to_goal(goal_id: int, file_path: str) -> str:
     session_id = get_session_id()
     
     try:
-        resp = requests.get(f"{MEMORY_API_URL}/memories/{goal_id}", timeout=5)
+        resp = requests.get(f"{_get_memory_url()}/memories/{goal_id}", timeout=5)
         resp.raise_for_status()
         goal = resp.json()
     except requests.RequestException:
@@ -117,7 +117,7 @@ async def add_file_to_goal(goal_id: int, file_path: str) -> str:
     
     try:
         resp = requests.put(
-            f"{MEMORY_API_URL}/memories/{goal_id}",
+            f"{_get_memory_url()}/memories/{goal_id}",
             json={
                 "properties": {
                     **props,
@@ -137,7 +137,7 @@ async def remove_file_from_goal(goal_id: int, file_path: str) -> str:
     session_id = get_session_id()
     
     try:
-        resp = requests.get(f"{MEMORY_API_URL}/memories/{goal_id}", timeout=5)
+        resp = requests.get(f"{_get_memory_url()}/memories/{goal_id}", timeout=5)
         resp.raise_for_status()
         goal = resp.json()
     except requests.RequestException:
@@ -155,7 +155,7 @@ async def remove_file_from_goal(goal_id: int, file_path: str) -> str:
     
     try:
         resp = requests.put(
-            f"{MEMORY_API_URL}/memories/{goal_id}",
+            f"{_get_memory_url()}/memories/{goal_id}",
             json={
                 "properties": {
                     **props,
@@ -178,7 +178,7 @@ async def update_goal_status(goal_id: int, status: str) -> str:
     
     try:
         resp = requests.put(
-            f"{MEMORY_API_URL}/memories/{goal_id}",
+            f"{_get_memory_url()}/memories/{goal_id}",
             json={"properties": {"status": status}},
             timeout=5
         )
@@ -218,7 +218,7 @@ async def list_goals(status: str = None) -> str:
 async def get_goal(goal_id: int) -> str:
     """Get full details of a goal including linked files."""
     try:
-        resp = requests.get(f"{MEMORY_API_URL}/memories/{goal_id}", timeout=5)
+        resp = requests.get(f"{_get_memory_url()}/memories/{goal_id}", timeout=5)
         resp.raise_for_status()
         goal = resp.json()
     except requests.RequestException:
