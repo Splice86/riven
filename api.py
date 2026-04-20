@@ -159,13 +159,10 @@ async def send_message(req: MessageRequest):
                             yield f"data: {json.dumps({'error': event['error']})}\n\n"
                             break
 
-                        # Handle tool_call events
+                        # Handle tool_call events - forward as-is
                         if "tool_call" in event:
-                            tc = event["tool_call"]
-                            args_str = json.dumps(tc["arguments"]) if tc["arguments"] else "{}"
-                            token_val = f"<tool>{tc['name']}{args_str}</tool>"
-                            print(f"[API] YIELD tool_call: {token_val}")
-                            yield f"data: {json.dumps({'token': token_val})}\n\n"
+                            print(f"[API] YIELD tool_call: {event['tool_call']}")
+                            yield f"data: {json.dumps(event)}\n\n"
 
                         # Handle thinking events
                         elif "thinking" in event:
@@ -174,13 +171,10 @@ async def send_message(req: MessageRequest):
                                 print(f"[API] YIELD thinking: {content[:50]}...")
                                 yield f"data: {json.dumps({'thinking': content})}\n\n"
 
-                        # Handle tool results
+                        # Handle tool results - forward as-is
                         elif "tool_result" in event:
-                            tr = event["tool_result"]
-                            content = tr["content"] if not tr["error"] else f"ERROR: {tr['error']}"
-                            token_val = f"<result>{content}</result>"
-                            print(f"[API] YIELD tool_result: {token_val[:80]}...")
-                            yield f"data: {json.dumps({'token': token_val})}\n\n"
+                            print(f"[API] YIELD tool_result: {event['tool_result']}")
+                            yield f"data: {json.dumps(event)}\n\n"
 
                         # Regular token
                         elif "token" in event:
