@@ -142,7 +142,7 @@ class ContextManager:
     
     def __init__(
         self,
-        memory_url: str = MEMORY_API_URL,
+        memory_url: str = None,
         tool_result_max_lines: int = 200,
         tool_result_char_per_line: int = 150,
         debug_dir: str = None,
