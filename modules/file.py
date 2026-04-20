@@ -3,18 +3,26 @@
 Provides file editing capabilities with:
 - open_file: Add file to context (stored in memory DB)
 - replace_text: Fuzzy-match replacement with auto-save
+- preview_replace: Show matched text without modifying
+- diff_text: Show before/after of a replacement
 - close_file: Remove from context
 - close_all_files: Clear all open files
 - file_info: Get file metadata
+- search_files: Grep pattern across files
+- list_dir: List directory contents
 - get_context: Context function that injects open file content
 
 Session ID is automatically available via get_session_id().
 """
 
 import os
+import re
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
 import requests
 import jellyfish
-from datetime import datetime
 
 from modules import CalledFn, ContextFn, Module, get_session_id
 from modules.memory_utils import _search_memories, _delete_memory, _get_memory_url
@@ -52,7 +60,6 @@ def _find_best_window(
     
     for i in range(len(haystack_lines) - win_size + 1):
         window = "\n".join(haystack_lines[i:i + win_size])
-        # Strip trailing newline to match needle (which is rstrip'd)
         window_clean = window.rstrip('\n')
         score = jellyfish.jaro_winkler_similarity(window_clean, needle)
         if score > best_score:
@@ -64,25 +71,66 @@ def _find_best_window(
     return None, best_score
 
 
+def _file_type(path: str) -> str:
+    """Return a short file type description based on extension."""
+    ext = Path(path).suffix.lower()
+    type_map = {
+        '.py': 'python',
+        '.yaml': 'yaml',
+        '.yml': 'yaml',
+        '.json': 'json',
+        '.md': 'markdown',
+        '.txt': 'text',
+        '.sh': 'shell',
+        '.bash': 'shell',
+        '.zsh': 'shell',
+        '.c': 'c',
+        '.h': 'c',
+        '.cpp': 'cpp',
+        '.rs': 'rust',
+        '.go': 'go',
+        '.js': 'javascript',
+        '.ts': 'typescript',
+        '.html': 'html',
+        '.css': 'css',
+        '.sql': 'sql',
+        '.toml': 'toml',
+        '.ini': 'ini',
+        '.cfg': 'cfg',
+        '.conf': 'conf',
+        '.env': 'env',
+        '.gitignore': 'gitignore',
+        '.dockerfile': 'dockerfile',
+    }
+    return type_map.get(ext, ext.lstrip('.') or 'file')
+
+
 def _file_help() -> str:
     """Static tool documentation - does not change between calls."""
     return """## File Tools (Help)
 
 ### Workflow
 1. **open_file(path, line_start?, line_end?)** - Open a file into context
-2. **replace_text(path, old_text, new_text)** - Fuzzy-match replacement (auto-saves)
-3. **close_file(filename, line_start?, line_end?)** - Close file/range
-4. **close_all_files()** - Close all open files
-5. **file_info(path)** - Get file metadata
+2. **replace_text(path, old_text, new_text, threshold?)** - Fuzzy-match replacement (auto-saves)
+3. **preview_replace(path, old_text, threshold?)** - Show matched text without modifying
+4. **diff_text(path, old_text, new_text, threshold?)** - Show before/after of proposed change
+5. **close_file(filename, line_start?, line_end?)** - Close file/range
+6. **close_all_files()** - Close all open files
+7. **file_info(path)** - Get file metadata
+8. **search_files(pattern, path?)** - Grep pattern across files
+9. **list_dir(path?)** - List directory contents
 
 ### Guidelines
 - Prefer opening whole files (no line_start/line_end) - small files are fine to read entirely
 - Avoid opening the same file multiple times in different ranges - open once with a wider range or not at all
+- Use search_files() to find patterns before opening files
+- Use preview_replace() to verify a match before committing to replace_text()
+- Use diff_text() to preview a full change before applying it
 - Close files when done to keep context clean
 - Use file_info() for metadata without loading content
-- If you need to work with multiple files, close each one before opening the next
 - Be sensitive to context growth - open only what you need"""
-    
+
+
 def _file_context() -> str:
     """Dynamic context - currently open files. Changes when files are opened/closed."""
     session_id = get_session_id()
@@ -106,7 +154,6 @@ def _file_context() -> str:
             with open(path, 'r') as f:
                 content = f.read()
             
-            # Apply line range if specified
             line_start = props.get("line_start", "0")
             line_end = props.get("line_end", "*")
             
@@ -140,7 +187,7 @@ async def open_file(path: str, line_start: int = None, line_end: int = None) -> 
         line_end: End line for partial opening (None = to end)
         
     Returns:
-        Confirmation message
+        Confirmation message with file metadata
     """
     path = os.path.expanduser(path)
     abs_path = os.path.abspath(path)
@@ -155,7 +202,6 @@ async def open_file(path: str, line_start: int = None, line_end: int = None) -> 
     line_end_str = line_end if line_end is not None else "*"
     line_range = f"{line_start}-{line_end_str}"
     
-    # Save file record to memory DB with range-aware keywords
     keywords = [
         session_id,
         "file",
@@ -181,35 +227,45 @@ async def open_file(path: str, line_start: int = None, line_end: int = None) -> 
     except Exception as e:
         return f"Error saving to memory: {e}"
     
-    # Get line count
     try:
         with open(abs_path, 'r') as f:
-            total_lines = len(f.readlines())
+            content = f.read()
+        total_lines = len(content.splitlines())
     except Exception:
         total_lines = "?"
     
+    file_type_str = _file_type(abs_path)
     line_info = ""
     if line_start > 0 or line_end is not None:
         line_info = f" (lines {line_start}-{line_end or 'end'})"
     
-    return f"Opened {filename} ({total_lines} lines){line_info}"
+    large_warning = ""
+    if total_lines != "?" and total_lines > 1000:
+        large_warning = " [!LARGE FILE - consider using line_start/line_end to limit scope]"
+    
+    return f"Opened {filename} ({file_type_str}, {total_lines} lines){line_info}{large_warning}"
 
 
-async def replace_text(path: str, old_text: str, new_text: str) -> str:
+async def replace_text(
+    path: str,
+    old_text: str,
+    new_text: str,
+    threshold: float = 0.95
+) -> str:
     """Replace text in a file using fuzzy matching (auto-saves).
     
     Args:
         path: Path to the file
         old_text: Text to find and replace
         new_text: Replacement text
+        threshold: Minimum Jaro-Winkler similarity (0.0-1.0, default 0.95)
         
     Returns:
-        Confirmation message or error
+        Confirmation message or error with best match info
     """
     path = os.path.expanduser(path)
     abs_path = os.path.abspath(path)
     
-    # Read file from disk
     try:
         with open(abs_path, 'r') as f:
             content = f.read()
@@ -217,16 +273,25 @@ async def replace_text(path: str, old_text: str, new_text: str) -> str:
     except Exception as e:
         return f"Error reading {abs_path}: {e}"
     
-    # Fuzzy matching across the document
-    span, score = _find_best_window(lines, old_text, threshold=0.95)
+    span, score = _find_best_window(lines, old_text, threshold=threshold)
     
     if not span:
-        # Provide helpful error message
-        actual_content = ''.join(lines[:20])
+        # Find best match even below threshold so we can show it
+        best_span, best_score = _find_best_window(lines, old_text, threshold=0.0)
+        if best_span:
+            start, end = best_span
+            matched_lines = lines[start:end]
+            matched_text = ''.join(matched_lines).strip()
+            return (
+                f"Text not found (best match was {best_score:.0%} — below {threshold:.0%} threshold).\n\n"
+                f"Best match found:\n{matched_text[:300]}\n\n"
+                f"Tips:\n"
+                f"- Try lowering threshold (e.g., threshold=0.75) if whitespace differs\n"
+                f"- Make sure indentation and newlines match the file format\n"
+                f"- The more text you provide, the better the fuzzy match"
+            )
         return (
-            f"Text not found - fuzzy match failed.\n\n"
-            f"Expected (not in file):\n{repr(old_text[:200])}\n\n"
-            f"Actual file content (first 20 lines):\n{actual_content[:500]}\n\n"
+            f"Text not found.\n\n"
             f"Tips:\n"
             f"- Check for whitespace differences (spaces/tabs)\n"
             f"- Make sure newlines match the file format\n"
@@ -235,14 +300,12 @@ async def replace_text(path: str, old_text: str, new_text: str) -> str:
     
     start, end = span
     
-    # Replace the matched span with new_text
     new_lines = new_text.splitlines(keepends=True)
     if new_lines and not new_lines[-1].endswith('\n'):
         new_lines[-1] += '\n'
     lines[start:end] = new_lines
     new_content = ''.join(lines)
     
-    # Save to disk
     try:
         with open(abs_path, 'w') as f:
             f.write(new_content)
@@ -250,6 +313,102 @@ async def replace_text(path: str, old_text: str, new_text: str) -> str:
         return f"Error saving {abs_path}: {e}"
     
     return f"Replaced lines {start+1}-{end} (fuzzy match {score:.0%})"
+
+
+async def preview_replace(path: str, old_text: str, threshold: float = 0.95) -> str:
+    """Show the matched text window without modifying the file.
+    
+    Args:
+        path: Path to the file
+        old_text: Text to search for
+        threshold: Minimum Jaro-Winkler similarity (0.0-1.0, default 0.95)
+        
+    Returns:
+        Matched text window or not-found message
+    """
+    path = os.path.expanduser(path)
+    abs_path = os.path.abspath(path)
+    
+    try:
+        with open(abs_path, 'r') as f:
+            content = f.read()
+        lines = content.splitlines(keepends=True)
+    except Exception as e:
+        return f"Error reading {abs_path}: {e}"
+    
+    span, score = _find_best_window(lines, old_text, threshold=threshold)
+    
+    if not span:
+        best_span, best_score = _find_best_window(lines, old_text, threshold=0.0)
+        if best_span:
+            start, end = best_span
+            matched_text = ''.join(lines[start:end]).strip()
+            return (
+                f"No match above {threshold:.0%} threshold. "
+                f"Best match ({best_score:.0%}) at lines {start+1}-{end}:\n"
+                f"{matched_text[:300]}"
+            )
+        return f"Text not found in {os.path.basename(abs_path)}."
+    
+    start, end = span
+    matched_text = ''.join(lines[start:end]).strip()
+    return f"Match at lines {start+1}-{end} (similarity {score:.0%}):\n{matched_text}"
+
+
+async def diff_text(
+    path: str,
+    old_text: str,
+    new_text: str,
+    threshold: float = 0.95
+) -> str:
+    """Show the before/after of a proposed replacement without modifying.
+    
+    Args:
+        path: Path to the file
+        old_text: Text to find
+        new_text: Replacement text
+        threshold: Minimum Jaro-Winkler similarity (0.0-1.0, default 0.95)
+        
+    Returns:
+        Formatted before/after diff
+    """
+    path = os.path.expanduser(path)
+    abs_path = os.path.abspath(path)
+    
+    try:
+        with open(abs_path, 'r') as f:
+            content = f.read()
+        lines = content.splitlines(keepends=True)
+    except Exception as e:
+        return f"Error reading {abs_path}: {e}"
+    
+    span, score = _find_best_window(lines, old_text, threshold=threshold)
+    
+    if not span:
+        best_span, best_score = _find_best_window(lines, old_text, threshold=0.0)
+        if best_span:
+            start, end = best_span
+            matched_text = ''.join(lines[start:end]).rstrip()
+            return (
+                f"Cannot diff — best match ({best_score:.0%}) is below {threshold:.0%} threshold.\n\n"
+                f"Best match at lines {start+1}-{end}:\n{matched_text[:300]}\n\n"
+                f"Try lowering threshold for this replacement."
+            )
+        return f"Cannot diff — text not found in {os.path.basename(abs_path)}."
+    
+    start, end = span
+    before = ''.join(lines[start:end]).rstrip()
+    
+    new_lines = new_text.splitlines(keepends=True)
+    if new_lines and not new_lines[-1].endswith('\n'):
+        new_lines[-1] += '\n'
+    after = ''.join(new_lines).rstrip()
+    
+    filename = os.path.basename(abs_path)
+    return (
+        f"=== diff: {filename} lines {start+1}-{end} (match {score:.0%}) ===\n"
+        f"\n--- BEFORE ---:\n{before}\n\n--- AFTER ---:\n{after}"
+    )
 
 
 async def close_file(filename: str, line_start: int = None, line_end: int = None) -> str:
@@ -267,14 +426,12 @@ async def close_file(filename: str, line_start: int = None, line_end: int = None
     session_id = get_session_id()
     
     if line_start is not None or line_end is not None:
-        # Exact range match - close specific range
         ls = line_start if line_start is not None else 0
         le = line_end if line_end is not None else "*"
         range_key = f"file:{name}:{ls}-{le}"
         query = f"k:{range_key}"
         memories = _search_memories(session_id, query, limit=10)
     else:
-        # No range specified - close ALL ranges for this file
         query = f"k:file:{name}"
         memories = _search_memories(session_id, query, limit=10)
     
@@ -332,14 +489,109 @@ async def file_info(path: str) -> str:
         line_count = 0
         token_count = 0
     
+    file_type_str = _file_type(abs_path)
+    
     return (
         f"File: {os.path.basename(abs_path)}\n"
-        f"Path: {abs_path}\n"
+        f"Type: {file_type_str}\n"
         f"Lines: {line_count}\n"
         f"Tokens: ~{token_count:,}\n"
         f"Size: {stat.st_size:,} bytes\n"
         f"Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}"
     )
+
+
+async def search_files(pattern: str, path: str = None) -> str:
+    """Grep pattern across files under a directory.
+    
+    Args:
+        pattern: Regex pattern to search for
+        path: Directory to search under (default: cwd)
+        
+    Returns:
+        Formatted list of matches (file:line:content)
+    """
+    search_path = os.path.expanduser(path) if path else os.getcwd()
+    
+    if not os.path.exists(search_path):
+        return f"Path not found: {search_path}"
+    
+    try:
+        result = subprocess.run(
+            ['rg', '--line-number', '--color=never', pattern, search_path],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        output = result.stdout.strip()
+    except FileNotFoundError:
+        return "[ERROR] ripgrep (rg) not installed. Install ripgrep to use search_files."
+    except subprocess.TimeoutExpired:
+        return "[ERROR] Search timed out after 10 seconds."
+    except Exception as e:
+        return f"[ERROR] Search failed: {e}"
+    
+    if not output:
+        return f"No matches for '{pattern}' under {search_path}"
+    
+    lines = output.splitlines()
+    # ripgrep outputs: file:line:content — format nicely
+    formatted = [f"=== Search: '{pattern}' ==="]
+    for line in lines[:50]:  # cap at 50 matches
+        formatted.append(line)
+    
+    if len(lines) > 50:
+        formatted.append(f"... and {len(lines) - 50} more matches")
+    
+    return "\n".join(formatted)
+
+
+async def list_dir(path: str = None) -> str:
+    """List directory contents (files and subdirectories).
+    
+    Args:
+        path: Directory to list (default: cwd)
+        
+    Returns:
+        Formatted directory listing
+    """
+    dir_path = os.path.expanduser(path) if path else os.getcwd()
+    
+    if not os.path.exists(dir_path):
+        return f"Directory not found: {dir_path}"
+    
+    if not os.path.isdir(dir_path):
+        return f"Not a directory: {dir_path}"
+    
+    try:
+        entries = os.listdir(dir_path)
+    except PermissionError:
+        return f"Permission denied: {dir_path}"
+    
+    dirs = []
+    files = []
+    for entry in entries:
+        full_path = os.path.join(dir_path, entry)
+        if os.path.isdir(full_path):
+            dirs.append(entry + '/')
+        else:
+            files.append(entry)
+    
+    dirs.sort()
+    files.sort()
+    
+    lines = [f"=== {dir_path} ==="]
+    if dirs:
+        lines.append("dirs:")
+        lines.extend(f"  {d}" for d in dirs)
+    if files:
+        lines.append("files:")
+        lines.extend(f"  {f}" for f in files)
+    
+    if not dirs and not files:
+        lines.append("  (empty)")
+    
+    return "\n".join(lines)
 
 
 def get_module():
@@ -349,7 +601,7 @@ def get_module():
         called_fns=[
             CalledFn(
                 name="open_file",
-                description="Open a file and add it to the file context. Use this before reading or editing a file.\n\nGuidelines:\n- Prefer opening whole files (no line_start/line_end) when possible - small files are fine to read entirely\n- Avoid opening the same file multiple times in different ranges - open once with a wider range or not at all\n- Close files (close_file) when you're done with them to keep context clean\n- Use file_info() for metadata without loading content\n- If you need to work with multiple files, close each one before opening the next\n- Be sensitive to context growth - open only what you need",
+                description="Open a file and add it to the file context. Returns file type and line count. Large files (>1000 lines) include a warning.\n\nArgs:\n- path: Path to the file to open\n- line_start: Start line for partial opening (0-indexed)\n- line_end: End line for partial opening",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -372,7 +624,7 @@ def get_module():
             ),
             CalledFn(
                 name="replace_text",
-                description="Replace text in an open file using fuzzy matching. Auto-saves the file.",
+                description="Replace text in an open file using fuzzy matching. Auto-saves the file.\n\nArgs:\n- path: Path to the file\n- old_text: Text to find and replace (fuzzy matched)\n- new_text: Replacement text\n- threshold: Minimum Jaro-Winkler similarity (0.0-1.0, default: 0.95). Lower values allow sloppier matches.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -387,11 +639,65 @@ def get_module():
                         "new_text": {
                             "type": "string",
                             "description": "Replacement text"
+                        },
+                        "threshold": {
+                            "type": "number",
+                            "description": "Minimum Jaro-Winkler similarity (0.0-1.0, default: 0.95). Lower to allow matches with whitespace differences."
                         }
                     },
                     "required": ["path", "old_text", "new_text"]
                 },
                 fn=replace_text,
+            ),
+            CalledFn(
+                name="preview_replace",
+                description="Show the matched text window without modifying the file. Use to verify the right location before committing to replace_text.\n\nArgs:\n- path: Path to the file\n- old_text: Text to search for\n- threshold: Minimum Jaro-Winkler similarity (0.0-1.0, default: 0.95)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file"
+                        },
+                        "old_text": {
+                            "type": "string",
+                            "description": "Text to search for"
+                        },
+                        "threshold": {
+                            "type": "number",
+                            "description": "Minimum Jaro-Winkler similarity (0.0-1.0, default: 0.95)"
+                        }
+                    },
+                    "required": ["path", "old_text"]
+                },
+                fn=preview_replace,
+            ),
+            CalledFn(
+                name="diff_text",
+                description="Show the before/after of a proposed replacement without modifying the file. Use to preview a full change before applying it.\n\nArgs:\n- path: Path to the file\n- old_text: Text to find\n- new_text: Replacement text\n- threshold: Minimum Jaro-Winkler similarity (0.0-1.0, default: 0.95)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file"
+                        },
+                        "old_text": {
+                            "type": "string",
+                            "description": "Text to find"
+                        },
+                        "new_text": {
+                            "type": "string",
+                            "description": "Replacement text"
+                        },
+                        "threshold": {
+                            "type": "number",
+                            "description": "Minimum Jaro-Winkler similarity (0.0-1.0, default: 0.95)"
+                        }
+                    },
+                    "required": ["path", "old_text", "new_text"]
+                },
+                fn=diff_text,
             ),
             CalledFn(
                 name="close_file",
@@ -428,7 +734,7 @@ def get_module():
             ),
             CalledFn(
                 name="file_info",
-                description="Get file metadata (line count, size, modified date) without loading content.",
+                description="Get file metadata (type, line count, size, modified date) without loading content.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -441,9 +747,43 @@ def get_module():
                 },
                 fn=file_info,
             ),
+            CalledFn(
+                name="search_files",
+                description="Grep pattern across files under a directory using ripgrep (rg). Returns file:line:content for each match, capped at 50 results.\n\nArgs:\n- pattern: Regex pattern to search for\n- path: Directory to search under (default: cwd)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regex pattern to search for"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory to search under (default: cwd)"
+                        }
+                    },
+                    "required": ["pattern"]
+                },
+                fn=search_files,
+            ),
+            CalledFn(
+                name="list_dir",
+                description="List directory contents (files and subdirectories).\n\nArgs:\n- path: Directory to list (default: cwd)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory to list (default: cwd)"
+                        }
+                    },
+                    "required": []
+                },
+                fn=list_dir,
+            ),
         ],
         context_fns=[
-            ContextFn(tag="file_help", fn=_file_help),
+            ContextFn(tag="file_help", fn=_file_help, static=True),
             ContextFn(tag="file", fn=_file_context),
         ],
     )
