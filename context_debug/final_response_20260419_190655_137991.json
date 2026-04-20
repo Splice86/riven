@@ -1,0 +1,20 @@
+{
+  "timestamp": "20260419_190655_137991",
+  "label": "final_response",
+  "session_id": "simple_test_001",
+  "message_count": 2,
+  "messages": [
+    {
+      "id": 206,
+      "role": "user",
+      "content": "say hello",
+      "created_at": "2026-04-20T00:06:50.432511+00:00"
+    },
+    {
+      "id": 207,
+      "role": "assistant",
+      "content": "Hello! \ud83d\udc4b How can I help you today?",
+      "created_at": "2026-04-20T00:06:54.105194+00:00"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "timestamp": "20260419_192339_792759",
+  "label": "raw_loop",
+  "session_id": "70bd95b1-1420-4b22-9498-ede97ecf2b7d",
+  "message_count": 3,
+  "messages": [
+    {
+      "id": 219,
+      "role": "user",
+      "content": "hello",
+      "created_at": "2026-04-20T00:23:25.504442+00:00"
+    },
+    {
+      "id": 220,
+      "role": "assistant",
+      "content": "Hello! How can I help you today?",
+      "created_at": "2026-04-20T00:23:29.192153+00:00"
+    },
+    {
+      "id": 221,
+      "role": "user",
+      "content": "What time is it?",
+      "created_at": "2026-04-20T00:23:39.213738+00:00"
+    }
+  ]
+}

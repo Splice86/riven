@@ -1,0 +1,38 @@
+{
+  "timestamp": "20260419_192355_031433",
+  "label": "raw_loop",
+  "session_id": "70bd95b1-1420-4b22-9498-ede97ecf2b7d",
+  "message_count": 5,
+  "messages": [
+    {
+      "id": 219,
+      "role": "user",
+      "content": "hello",
+      "created_at": "2026-04-20T00:23:25.504442+00:00"
+    },
+    {
+      "id": 220,
+      "role": "assistant",
+      "content": "Hello! How can I help you today?",
+      "created_at": "2026-04-20T00:23:29.192153+00:00"
+    },
+    {
+      "id": 221,
+      "role": "user",
+      "content": "What time is it?",
+      "created_at": "2026-04-20T00:23:39.213738+00:00"
+    },
+    {
+      "id": 222,
+      "role": "assistant",
+      "content": "It's **April 19, 2026, 7:23 PM**.",
+      "created_at": "2026-04-20T00:23:43.564647+00:00"
+    },
+    {
+      "id": 223,
+      "role": "user",
+      "content": "can you see what files are in the pwd",
+      "created_at": "2026-04-20T00:23:54.515381+00:00"
+    }
+  ]
+}

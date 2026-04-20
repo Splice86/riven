@@ -1,0 +1,22 @@
+{
+  "timestamp": "20260419_185903_242679",
+  "label": "after_tool_result",
+  "session_id": "test_session_full",
+  "message_count": 2,
+  "messages": [
+    {
+      "id": 194,
+      "role": "assistant",
+      "content": "[tool_calls][{\"id\": \"call_7c4ff34c83a84d9cbb3d8e95\", \"function\": {\"name\": \"run\", \"arguments\": \"{\\\"command\\\": \\\"find . -type f -name \\\\\\\"*.py\\\\\\\" | head -30 && echo \\\\\\\"---\\\\\\\" && ls -la\\\"}\"}}][/tool_calls]",
+      "created_at": "2026-04-19T23:59:01.537734+00:00"
+    },
+    {
+      "id": 195,
+      "role": "tool",
+      "content": "Exit code: 0 (time: 0.03s)\n[stdout]\n./core.py\n./context.py\n./api.py\n./config.py\n./venv/lib/python3.13/site-packages/annotated_types/__init__.py\n./venv/lib/python3.13/site-packages/annotated_types/test_cases.py\n./venv/lib/python3.13/site-packages/fastapi/responses.py\n./venv/lib/python3.13/site-packages/fastapi/applications.py\n./venv/lib/python3.13/site-packages/fastapi/security/utils.py\n./venv/lib/python3.13/site-packages/fastapi/security/http.py\n./venv/lib/python3.13/site-packages/fastapi/security/__init__.py\n./venv/lib/python3.13/site-packages/fastapi/security/oauth2.py\n./venv/lib/python3.13/site-packages/fastapi/security/base.py\n./venv/lib/python3.13/site-packages/fastapi/security/api_key.py\n./venv/lib/python3.13/site-packages/fastapi/security/open_id_connect_url.py\n./venv/lib/python3.13/site-packages/fastapi/utils.py\n./venv/lib/python3.13/site-packages/fastapi/concurrency.py\n./venv/lib/python3.13/site-packages/fastapi/datastructures.py\n./venv/lib/python3.13/site-packages/fastapi/dependencies/utils.py\n./venv/lib/python3.13/site-packages/fastapi/dependencies/models.py\n./venv/lib/python3.13/site-packages/fastapi/dependencies/__init__.py\n./venv/lib/python3.13/site-packages/fastapi/background.py\n./venv/lib/python3.13/site-packages/fastapi/__init__.py\n./venv/lib/python3.13/site-packages/fastapi/param_functions.py\n./venv/lib/python3.13/site-packages/fastapi/sse.py\n./venv/lib/python3.13/site-packages/fastapi/exceptions.py\n./venv/lib/python3.13/site-packages/fastapi/_compat/v2.py\n./venv/lib/python3.13/site-packages/fastapi/_compat/__init__.py\n./venv/lib/python3.13/site-packages/fastapi/_compat/shared.py\n./venv/lib/python3.13/site-packages/fastapi/templating.py\n---\ntotal 148\ndrwxrwxr-x 9 david david  4096 Apr 19 18:13 .\ndrwxrwxr-x 6 david david  4096 Apr 19 16:29 ..\n-rw-rw-r-- 1 david david  8351 Apr 19 18:13 api.py\n-rw-rw-r-- 1 david david  9632 Apr 19 16:28 config.py\n-rw-rw-r-- 1 david david   866 Apr 19 16:28 config.yaml\ndrwxrwxr-x 2 david david  4096 Apr 19 18:58 context_debug\ndrwxrwxr-x 2 david david  4096 Apr 19 18:58 context_logs\n-rw-rw-r-- 1 david david 14994 Apr 19 18:09 context.py\n-rw-rw-r-- 1 david david 22570 Apr 19 18:58 core.py\ndrwxrwxr-x 8 david david  4096 Apr 19 17:52 .git\ndrwxrwxr-x 3 david david  4096 Apr 19 17:12 modules\n-rw-rw-r-- 1 david david  5525 Apr 19 17:12 MODULES.md\n-rw-rw-r-- 1 david david  7599 Apr 19 16:28 PROCESS_FLOW.md\ndrwxrwxr-x 2 david david  4096 Apr 19 18:58 __pycache__\n-rw-rw-r-- 1 david david  6027 Apr 19 17:14 README.md\n-rw-rw-r-- 1 david david    95 Apr 19 16:39 requirements.txt\n-rw-rw-r-- 1 david david   280 Apr 19 16:28 secrets_template.yaml\n-rw-rw-r-- 1 david david   444 Apr 19 16:28 secrets.yaml\ndrwxrwxr-x 2 david david  4096 Apr 19 17:47 shards\n-rw-rw-r-- 1 david david  7713 Apr 19 16:53 THEORY.md\ndrwxrwxr-x 5 david david  4096 Apr 19 16:38 venv\n",
+      "created_at": "2026-04-19T23:59:02.077967+00:00",
+      "tool_call_id": "call_7c4ff34c83a84d9cbb3d8e95",
+      "function": "run"
+    }
+  ]
+}

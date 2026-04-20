@@ -1,0 +1,28 @@
+{
+  "timestamp": "20260419_190704_384843",
+  "label": "after_tool_result",
+  "session_id": "tool_test_001",
+  "message_count": 3,
+  "messages": [
+    {
+      "id": 208,
+      "role": "user",
+      "content": "list current directory",
+      "created_at": "2026-04-20T00:06:59.085182+00:00"
+    },
+    {
+      "id": 209,
+      "role": "assistant",
+      "content": "[tool_calls][{\"id\": \"call_e634f986c1b14dd6a113ce02\", \"function\": {\"name\": \"run\", \"arguments\": \"{\\\"command\\\": \\\"ls -la\\\"}\"}}][/tool_calls]",
+      "created_at": "2026-04-20T00:07:02.824571+00:00"
+    },
+    {
+      "id": 210,
+      "role": "tool",
+      "content": "Exit code: 0 (time: 0.01s)\n[stdout]\ntotal 148\ndrwxrwxr-x 9 david david  4096 Apr 19 18:13 .\ndrwxrwxr-x 6 david david  4096 Apr 19 16:29 ..\n-rw-rw-r-- 1 david david  8731 Apr 19 19:04 api.py\n-rw-rw-r-- 1 david david  9632 Apr 19 16:28 config.py\n-rw-rw-r-- 1 david david   866 Apr 19 16:28 config.yaml\ndrwxrwxr-x 2 david david  4096 Apr 19 19:07 context_debug\ndrwxrwxr-x 2 david david  4096 Apr 19 19:07 context_logs\n-rw-rw-r-- 1 david david 14994 Apr 19 18:09 context.py\n-rw-rw-r-- 1 david david 23492 Apr 19 19:04 core.py\ndrwxrwxr-x 8 david david  4096 Apr 19 17:52 .git\ndrwxrwxr-x 3 david david  4096 Apr 19 17:12 modules\n-rw-rw-r-- 1 david david  5525 Apr 19 17:12 MODULES.md\n-rw-rw-r-- 1 david david  7599 Apr 19 16:28 PROCESS_FLOW.md\ndrwxrwxr-x 2 david david  4096 Apr 19 19:05 __pycache__\n-rw-rw-r-- 1 david david  6027 Apr 19 17:14 README.md\n-rw-rw-r-- 1 david david    95 Apr 19 16:39 requirements.txt\n-rw-rw-r-- 1 david david   280 Apr 19 16:28 secrets_template.yaml\n-rw-rw-r-- 1 david david   444 Apr 19 16:28 secrets.yaml\ndrwxrwxr-x 2 david david  4096 Apr 19 17:47 shards\n-rw-rw-r-- 1 david david  7713 Apr 19 16:53 THEORY.md\ndrwxrwxr-x 5 david david  4096 Apr 19 16:38 venv\n",
+      "created_at": "2026-04-20T00:07:03.270015+00:00",
+      "tool_call_id": "call_e634f986c1b14dd6a113ce02",
+      "function": "run"
+    }
+  ]
+}

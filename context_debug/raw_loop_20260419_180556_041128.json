@@ -1,0 +1,14 @@
+{
+  "timestamp": "20260419_180556_041128",
+  "label": "raw_loop",
+  "session_id": "c747c556-255d-41aa-969c-48246c6dbe87",
+  "message_count": 1,
+  "messages": [
+    {
+      "id": 161,
+      "role": "user",
+      "content": "ls",
+      "created_at": "2026-04-19T23:05:55.443389+00:00"
+    }
+  ]
+}

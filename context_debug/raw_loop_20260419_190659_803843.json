@@ -1,0 +1,14 @@
+{
+  "timestamp": "20260419_190659_803843",
+  "label": "raw_loop",
+  "session_id": "tool_test_001",
+  "message_count": 1,
+  "messages": [
+    {
+      "id": 208,
+      "role": "user",
+      "content": "list current directory",
+      "created_at": "2026-04-20T00:06:59.085182+00:00"
+    }
+  ]
+}

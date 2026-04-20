@@ -1,0 +1,26 @@
+{
+  "timestamp": "20260419_184931_739072",
+  "label": "raw_loop",
+  "session_id": "c5f6a835-0bd8-400c-99b8-2703c8d92d68",
+  "message_count": 3,
+  "messages": [
+    {
+      "id": 186,
+      "role": "user",
+      "content": "ls",
+      "created_at": "2026-04-19T23:45:50.345020+00:00"
+    },
+    {
+      "id": 187,
+      "role": "user",
+      "content": "can you ls the files",
+      "created_at": "2026-04-19T23:49:22.447356+00:00"
+    },
+    {
+      "id": 188,
+      "role": "user",
+      "content": "ls the pwd",
+      "created_at": "2026-04-19T23:49:30.832153+00:00"
+    }
+  ]
+}

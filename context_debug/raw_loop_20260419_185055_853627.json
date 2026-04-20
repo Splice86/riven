@@ -1,0 +1,26 @@
+{
+  "timestamp": "20260419_185055_853627",
+  "label": "raw_loop",
+  "session_id": "048e167c-7c24-4eb2-9312-d3caf9fc8bb9",
+  "message_count": 3,
+  "messages": [
+    {
+      "id": 189,
+      "role": "user",
+      "content": "ls",
+      "created_at": "2026-04-19T23:50:36.985258+00:00"
+    },
+    {
+      "id": 190,
+      "role": "user",
+      "content": "what?",
+      "created_at": "2026-04-19T23:50:48.725853+00:00"
+    },
+    {
+      "id": 191,
+      "role": "user",
+      "content": "hello",
+      "created_at": "2026-04-19T23:50:55.244450+00:00"
+    }
+  ]
+}

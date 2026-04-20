@@ -1,0 +1,20 @@
+{
+  "timestamp": "20260419_190516_240879",
+  "label": "final_response",
+  "session_id": "test_debug_123",
+  "message_count": 2,
+  "messages": [
+    {
+      "id": 198,
+      "role": "user",
+      "content": "say hello",
+      "created_at": "2026-04-20T00:05:11.555607+00:00"
+    },
+    {
+      "id": 199,
+      "role": "assistant",
+      "content": "Hello! \ud83d\udc4b\n\nI'm ready to help you work on your project in `/home/david/Projects/riven_projects/riven_core`. What would you like to work on today?",
+      "created_at": "2026-04-20T00:05:15.438034+00:00"
+    }
+  ]
+}
