@@ -281,8 +281,7 @@ class ContextManager:
             if include_timestamp and msg.get('created_at') and msg_copy.get('content'):
                 try:
                     ts = datetime.fromisoformat(msg['created_at'].replace('Z', '+00:00'))
-                    # Use ISO format to avoid space stripping issues
-                    timestamp_str = ts.strftime('%Y-%m-%dT%H:%M')
+                    timestamp_str = ts.strftime('%Y-%m-%d %H:%M')
                     msg_copy['content'] = f"[{timestamp_str}] {msg_copy['content']}"
                 except (ValueError, TypeError):
                     pass  # Skip timestamp if parsing fails
