@@ -48,7 +48,7 @@ score = jellyfish.jaro_winkler_similarity(window_clean, needle)
 
 #### 1.3: EditResult Dataclass
 
-**Status:** 🔄 In Progress
+**Status:** ✅ Implemented in `modules/file.py`
 
 ```python
 @dataclass
@@ -77,16 +77,22 @@ class EditResult:
             return "\n".join(parts)
         else:
             parts = [f"❌ {self.message}"]
+            if self.similarity:
+                parts.append(f"   Best match: {self.similarity:.0%}")
             if self.syntax_error:
                 parts.append(f"   Syntax error: {self.syntax_error}")
             if self.diff:
                 parts.append(f"\n{self.diff}")
             return "\n".join(parts)
+
+    def __str__(self) -> str:
+        """String representation for logging."""
+        return self.to_string()
 ```
 
 #### 1.4: Replacement Dataclass
 
-**Status:** ⏳ TODO
+**Status:** ✅ Implemented in `modules/file.py`
 
 ```python
 @dataclass
@@ -94,18 +100,25 @@ class Replacement:
     """A single text replacement for batch operations."""
     old_str: str
     new_str: str
+
+    def __post_init__(self):
+        """Validate replacement data."""
+        if not isinstance(self.old_str, str):
+            raise TypeError(f"old_str must be str, got {type(self.old_str)}")
+        if not isinstance(self.new_str, str):
+            raise TypeError(f"new_str must be str, got {type(self.new_str)}")
 ```
 
 ---
 
 ## Phase 2: Robustness Features
 
-| # | Change | Source | Priority | Impact | Effort | Files |
-|---|--------|--------|----------|--------|--------|-------|
-| 2.1 | Atomic writes (temp file + rename) | Code Puppy | 🔴 High | Prevent partial writes | ⭐ Low | `modules/file_editor.py` (new) |
-| 2.2 | Verify-after-write | Code Puppy | 🟡 Med | Catch disk/memory mismatches | ⭐ Low | `modules/file_editor.py` (new) |
-| 2.3 | Surrogate character sanitization | Code Puppy | 🟡 Med | Handle encoding edge cases | ⭐ Low | `modules/file_editor.py` (new) |
-| 2.4 | Syntax validation for `.py` files | New | 🟡 Med | Catch broken Python before saving | ⭐⭐ Med | `modules/file_editor.py` (new) |
+| # | Change | Source | Priority | Impact | Effort | Status |
+|---|--------|--------|----------|--------|--------|--------|
+| 2.1 | Atomic writes (temp file + rename) | Code Puppy | 🔴 High | Prevent partial writes | ⭐ Low | ⏳ TODO |
+| 2.2 | Verify-after-write | Code Puppy | 🟡 Med | Catch disk/memory mismatches | ⭐ Low | ⏳ TODO |
+| 2.3 | Surrogate character sanitization | Code Puppy | 🟡 Med | Handle encoding edge cases | ⭐ Low | ⏳ TODO |
+| 2.4 | Syntax validation for `.py` files | New | 🟡 Med | Catch broken Python before saving | ⭐⭐ Med | ⏳ TODO |
 
 ### Details
 
@@ -145,13 +158,13 @@ def _validate_python(content: str) -> tuple[bool, str | None]:
 
 ## Phase 3: Batch Operations
 
-| # | Change | Source | Priority | Impact | Effort | Files |
-|---|--------|--------|----------|--------|--------|-------|
-| 3.1 | `batch_edit()` function | Code Puppy | 🔴 High | One disk trip vs N | ⭐⭐ Med | `modules/file_editor.py` (new) |
-| 3.2 | `single_edit()` wrapper | New | 🟡 Med | Backward compatible | ⭐ Low | `modules/file_editor.py` (new) |
-| 3.3 | Rollback on batch failure | New | 🟡 Med | All-or-nothing edits | ⭐⭐ Med | `modules/file_editor.py` (new) |
-| 3.4 | Conflict detection for overlapping replacements | New | 🟡 Med | Prevent self-overwrites | ⭐⭐ Med | `modules/file_editor.py` (new) |
-| 3.5 | `delete_snippet()` function | Code Puppy | 🟡 Med | Remove content | ⭐ Low | `modules/file_editor.py` (new) |
+| # | Change | Source | Priority | Impact | Effort | Status |
+|---|--------|--------|----------|--------|--------|--------|
+| 3.1 | `batch_edit()` function | Code Puppy | 🔴 High | One disk trip vs N | ⭐⭐ Med | ⏳ TODO |
+| 3.2 | `single_edit()` wrapper | New | 🟡 Med | Backward compatible | ⭐ Low | ⏳ TODO |
+| 3.3 | Rollback on batch failure | New | 🟡 Med | All-or-nothing edits | ⭐⭐ Med | ⏳ TODO |
+| 3.4 | Conflict detection for overlapping replacements | New | 🟡 Med | Prevent self-overwrites | ⭐⭐ Med | ⏳ TODO |
+| 3.5 | `delete_snippet()` function | Code Puppy | 🟡 Med | Remove content | ⭐ Low | ⏳ TODO |
 
 ### Details
 
@@ -177,13 +190,13 @@ def batch_edit(
 
 ## Phase 4: Developer Experience
 
-| # | Change | Source | Priority | Impact | Effort | Files |
-|---|--------|--------|----------|--------|--------|-------|
-| 4.1 | Unified diff output on every operation | Code Puppy | 🔴 High | Better debugging | ⭐ Low | `modules/file_editor.py` (new) |
-| 4.2 | `preview_edit()` with configurable threshold | Internal | 🟡 Med | Consistent API | ⭐ Low | `modules/file_editor.py` (new) |
-| 4.3 | `diff_edit()` with unified diff output | Internal | 🟡 Med | Better before/after | ⭐ Low | `modules/file_editor.py` (new) |
-| 4.4 | Best-match shown in error messages | Internal | 🟡 Med | Helpful errors | ⭐ Low | `modules/file_editor.py` (new) |
-| 4.5 | Tips in error messages | Internal | 🟡 Med | User guidance | ⭐ Low | `modules/file_editor.py` (new) |
+| # | Change | Source | Priority | Impact | Effort | Status |
+|---|--------|--------|----------|--------|--------|--------|
+| 4.1 | Unified diff output on every operation | Code Puppy | 🔴 High | Better debugging | ⭐ Low | ⏳ TODO |
+| 4.2 | `preview_edit()` with configurable threshold | Internal | 🟡 Med | Consistent API | ⭐ Low | ⏳ TODO |
+| 4.3 | `diff_edit()` with unified diff output | Internal | 🟡 Med | Better before/after | ⭐ Low | ⏳ TODO |
+| 4.4 | Best-match shown in error messages | Internal | 🟡 Med | Helpful errors | ⭐ Low | ⏳ TODO |
+| 4.5 | Tips in error messages | Internal | 🟡 Med | User guidance | ⭐ Low | ⏳ TODO |
 
 ### Details
 
@@ -212,32 +225,68 @@ if best_span:
 
 ## Phase 5: MemoryDB Integration
 
-| # | Change | Source | Priority | Impact | Effort | Files |
-|---|--------|--------|----------|--------|--------|-------|
-| 5.1 | `FileEditSession` dataclass | New | 🔴 High | Track edit sessions | ⭐ Low | `modules/file_editor.py` (new) |
-| 5.2 | `FileSnapshot` dataclass | New | 🔴 High | Enable undo/redo | ⭐ Low | `modules/file_editor.py` (new) |
-| 5.3 | MemoryDB API extensions for file sessions | New | 🔴 High | Persistence layer | ⭐⭐ Med | `context.py` |
-| 5.4 | Store sessions on each edit | New | 🔴 High | Build audit trail | ⭐ Low | `modules/file_editor.py` (new) |
-| 5.5 | `undo_session()` function | New | 🟡 Med | Undo changes | ⭐⭐ Med | `modules/file_editor.py` (new) |
-| 5.6 | Operation history query | New | 🟡 Med | "What changed?" | ⭐⭐ Med | `modules/file_editor.py` (new) |
+| # | Change | Source | Priority | Impact | Effort | Status |
+|---|--------|--------|----------|--------|--------|--------|
+| 5.1 | `FileEditSession` dataclass | New | 🔴 High | Track edit sessions | ⭐ Low | ✅ DONE |
+| 5.2 | `FileSnapshot` dataclass | New | 🔴 High | Enable undo/redo | ⭐ Low | ⏳ TODO |
+| 5.3 | MemoryDB API extensions for file sessions | New | 🔴 High | Persistence layer | ⭐⭐ Med | ⏳ TODO |
+| 5.4 | Store sessions on each edit | New | 🔴 High | Build audit trail | ⭐ Low | ⏳ TODO |
+| 5.5 | `undo_session()` function | New | 🟡 Med | Undo changes | ⭐⭐ Med | ⏳ TODO |
+| 5.6 | Operation history query | New | 🟡 Med | "What changed?" | ⭐⭐ Med | ⏳ TODO |
 
 ### Details
 
 #### 5.1: FileEditSession
 
+**Status:** ✅ Implemented in `modules/file.py`
+
 ```python
 @dataclass
 class FileEditSession:
     """A session of related file edits, persisted in MemoryDB."""
-    session_id: str              # UUID, e.g., "edit_abc123"
-    tool_name: str               # "batch_edit", "single_edit", etc.
-    files: list[str]             # Files modified in this session
-    operations: int              # Number of operations
-    created_at: datetime
-    status: str                  # "pending", "completed", "failed", "rolled_back"
-    diff: str                    # Unified diff of all changes
-    original_snapshots: dict     # path -> original content (for undo)
-    modified_snapshots: dict     # path -> new content
+    session_id: str
+    tool_name: str
+    files: list[str] = field(default_factory=list)
+    operations: int = 0
+    created_at: datetime = field(default_factory=datetime.now)
+    status: Literal["pending", "completed", "failed", "rolled_back"] = "pending"
+    diff: str = ""
+    original_snapshots: dict[str, str] = field(default_factory=dict)
+    modified_snapshots: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "session_id": self.session_id,
+            "tool_name": self.tool_name,
+            "files": self.files,
+            "operations": self.operations,
+            "created_at": self.created_at.isoformat(),
+            "status": self.status,
+            "diff": self.diff,
+            "original_snapshots": self.original_snapshots,
+            "modified_snapshots": self.modified_snapshots,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FileEditSession":
+        """Create from dictionary (e.g., from MemoryDB)."""
+        created_at = data.get("created_at")
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        elif created_at is None:
+            created_at = datetime.now()
+        return cls(
+            session_id=data["session_id"],
+            tool_name=data["tool_name"],
+            files=data.get("files", []),
+            operations=data.get("operations", 0),
+            created_at=created_at,
+            status=data.get("status", "pending"),
+            diff=data.get("diff", ""),
+            original_snapshots=data.get("original_snapshots", {}),
+            modified_snapshots=data.get("modified_snapshots", {}),
+        )
 ```
 
 #### 5.2: FileSnapshot
@@ -317,28 +366,29 @@ class MemoryClient:
 │                              RIVEN FILE TOOL ROADMAP                                │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
-│  PHASE 1: Core          PHASE 2: Robustness     PHASE 3: Batch                      │
+│  PHASE 1: Core ✅       PHASE 2: Robustness     PHASE 3: Batch                      │
 │  ┌───────────────┐      ┌───────────────┐       ┌───────────────┐                   │
-│  │ ✓ threshold   │      │ ✓ Atomic Write│       │ ✓ batch_edit()│                   │
-│  │   param       │      │ ✓ Verify      │       │ ✓ single_edit │                   │
-│  │ ✓ .rstrip()   │      │ ✓ Surrogate   │       │ ✓ Rollback    │                   │
-│  │ ✓ EditResult  │      │   sanitize    │       │ ✓ Conflict    │                   │
-│  │ ✓ Replacement │      │ ✓ Syntax      │       │   detection   │                   │
-│  └───────────────┘      │   validation  │       │ ✓ delete_     │                   │
-│                         └───────────────┘       │   snippet     │                   │
-│                                                 └───────────────┘                   │
+│  │ ✓ threshold   │      │ ○ Atomic Write│       │ ○ batch_edit()│                   │
+│  │   param       │      │ ○ Verify      │       │ ○ single_edit │                   │
+│  │ ✓ .rstrip()   │      │ ○ Surrogate   │       │ ○ Rollback    │                   │
+│  │ ✓ EditResult  │      │   sanitize    │       │ ○ Conflict    │                   │
+│  │ ✓ Replacement │      │ ○ Syntax      │       │   detection   │                   │
+│  │ ✓ FileEdit-   │      │   validation  │       │ ○ delete_     │                   │
+│  │   Session     │      └───────────────┘       │   snippet     │                   │
+│  └───────────────┘                              └───────────────┘                   │
 │  PHASE 4: DX                                                             PHASE 5: MemoryDB
 │  ┌───────────────┐                                                      ┌────────────────┐
-│  │ ✓ Unified diff│                                                      │ ✓ FileEditSession│
-│  │ ✓ preview_    │                                                      │ ✓ FileSnapshot  │
-│  │   edit        │                                                      │ ✓ MemoryDB API  │
-│  │ ✓ diff_edit() │                                                      │ ✓ Store sessions│
-│  │ ✓ Best-match  │                                                      │ ✓ undo_session()│
-│  │   errors      │                                                      │ ✓ History query │
-│  │ ✓ Tips in     │                                                      └────────────────┘
+│  │ ○ Unified diff│                                                      │ ✓ FileEditSession│
+│  │ ○ preview_    │                                                      │ ○ FileSnapshot  │
+│  │   edit        │                                                      │ ○ MemoryDB API  │
+│  │ ○ diff_edit() │                                                      │ ○ Store sessions│
+│  │ ○ Best-match  │                                                      │ ○ undo_session()│
+│  │   errors      │                                                      │ ○ History query │
+│  │ ○ Tips in     │                                                      └────────────────┘
 │  │   errors      │                                                             │
 │  └───────────────┘                                                             │
 │                                                                                     │
+│  ✓ = Done   ○ = TODO                                                        │
 │  Effort: ⭐ = Low    ⭐⭐ = Medium    ⭐⭐⭐ = High                               │
 │  Priority: 🔴 High   🟡 Medium   🟠 Low                                          │
 └─────────────────────────────────────────────────────────────────────────────────────┘
@@ -450,15 +500,16 @@ riven/
 
 ## Status
 
-- [ ] Phase 1 Complete
+- [x] Phase 1 Complete
   - [x] 1.1 Add threshold parameter to _find_best_window
   - [x] 1.2 Add .rstrip('\n') before comparison
   - [x] 1.3 Create EditResult dataclass
   - [x] 1.4 Create Replacement dataclass
+  - [x] 5.1 Create FileEditSession dataclass (early implementation)
 - [ ] Phase 2 Complete
 - [ ] Phase 3 Complete
 - [ ] Phase 4 Complete
-- [ ] Phase 5 Complete
+- [ ] Phase 5 Complete (except FileEditSession)
 
 ---
 
