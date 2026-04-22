@@ -16,7 +16,6 @@ Session ID is automatically available via get_session_id().
 """
 
 import os
-import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +24,7 @@ import requests
 import jellyfish
 
 from modules import CalledFn, ContextFn, Module, get_session_id
-from modules.memory_utils import _search_memories, _delete_memory, _get_memory_url
+from modules.memory_utils import _search_memories, _delete_memory, _get_memory, _set_memory, _get_memory_url
 
 
 def _count_tokens(text: str) -> int:
@@ -105,23 +104,38 @@ def _file_type(path: str) -> str:
     return type_map.get(ext, ext.lstrip('.') or 'file')
 
 
+def _get_cwd() -> str:
+    """Get the current working directory from session memory, or fall back to OS cwd."""
+    session_id = get_session_id()
+    memory = _get_memory(session_id, "cwd")
+    if memory:
+        props = memory.get("properties", {})
+        return props.get("path", os.getcwd())
+    return os.getcwd()
+
+
 def _file_help() -> str:
     """Static tool documentation - does not change between calls."""
     return """## File Tools (Help)
 
 ### Workflow
-1. **open_file(path, line_start?, line_end?)** - Open a file into context
-2. **replace_text(path, old_text, new_text, threshold?)** - Fuzzy-match replacement (auto-saves)
-3. **preview_replace(path, old_text, threshold?)** - Show matched text without modifying
-4. **diff_text(path, old_text, new_text, threshold?)** - Show before/after of proposed change
-5. **close_file(filename, line_start?, line_end?)** - Close file/range
-6. **close_all_files()** - Close all open files
-7. **file_info(path)** - Get file metadata
-8. **search_files(pattern, path?)** - Grep pattern across files
-9. **list_dir(path?)** - List directory contents
-10. **write_text(path, content)** - Write content to a file (creates if needed)
+1. **pwd()** - Show current working directory for this session
+2. **chdir(path)** - Change the working directory for this session
+3. **open_file(path, line_start?, line_end?)** - Open a file into context
+4. **replace_text(path, old_text, new_text, threshold?)** - Fuzzy-match replacement (auto-saves)
+5. **preview_replace(path, old_text, threshold?)** - Show matched text without modifying
+6. **diff_text(path, old_text, new_text, threshold?)** - Show before/after of proposed change
+7. **close_file(filename, line_start?, line_end?)** - Close file/range
+8. **close_all_files()** - Close all open files
+9. **file_info(path)** - Get file metadata
+10. **search_files(pattern, path?)** - Grep pattern across files
+11. **list_dir(path?)** - List directory contents
+12. **write_text(path, content)** - Write content to a file (creates if needed)
 
 ### Guidelines
+- Use pwd() to see the current directory and chdir(path) to change it
+- The working directory persists across calls in this session (survives module reloads)
+- Functions like search_files() and list_dir() use the session cwd as default when path is omitted
 - Prefer opening whole files (no line_start/line_end) - small files are fine to read entirely
 - Avoid opening the same file multiple times in different ranges - open once with a wider range or not at all
 - Use search_files() to find patterns before opening files
@@ -138,11 +152,12 @@ def _file_context() -> str:
     session_id = get_session_id()
     query = "k:file"
     memories = _search_memories(session_id, query, limit=50)
-    
+    cwd = _get_cwd()
+
     if not memories:
-        return "No files currently open"
+        return f"cwd: {cwd}\n\nNo files currently open"
     
-    lines = ["=== Open Files ==="]
+    lines = [f"cwd: {cwd}", "", "=== Open Files ==="]
     total_tokens = 0
     
     for mem in memories:
@@ -465,6 +480,47 @@ async def close_all_files() -> str:
     return f"Closed {count} open files"
 
 
+async def pwd() -> str:
+    """Print working directory — shows the current directory for this session.
+
+    Returns:
+        Current working directory path
+    """
+    return _get_cwd()
+
+
+async def chdir(path: str) -> str:
+    """Change the working directory for this session.
+
+    Args:
+        path: New directory path (absolute or relative)
+
+    Returns:
+        Confirmation message with the new directory
+
+    Raises:
+        FileNotFoundError: If the path does not exist
+        NotADirectoryError: If the path exists but is not a directory
+    """
+    path = os.path.expanduser(path)
+    abs_path = os.path.abspath(path)
+
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"Directory does not exist: {abs_path}")
+    if not os.path.isdir(abs_path):
+        raise NotADirectoryError(f"Not a directory: {abs_path}")
+
+    session_id = get_session_id()
+    _set_memory(
+        session_id,
+        "cwd",
+        f"cwd: {abs_path}",
+        {"path": abs_path}
+    )
+
+    return abs_path
+
+
 async def file_info(path: str) -> str:
     """Get file metadata without loading content.
     
@@ -513,7 +569,7 @@ async def search_files(pattern: str, path: str = None) -> str:
     Returns:
         Formatted list of matches (file:line:content)
     """
-    search_path = os.path.expanduser(path) if path else os.getcwd()
+    search_path = os.path.expanduser(path) if path else _get_cwd()
     
     if not os.path.exists(search_path):
         return f"Path not found: {search_path}"
@@ -586,7 +642,7 @@ async def list_dir(path: str = None) -> str:
     Returns:
         Formatted directory listing
     """
-    dir_path = os.path.expanduser(path) if path else os.getcwd()
+    dir_path = os.path.expanduser(path) if path else _get_cwd()
     
     if not os.path.exists(dir_path):
         return f"Directory not found: {dir_path}"
@@ -762,6 +818,31 @@ def get_module():
                     "required": []
                 },
                 fn=close_all_files,
+            ),
+            CalledFn(
+                name="pwd",
+                description="Print working directory — shows the current directory for this session.\n\nThe cwd is session-specific and persists across calls.",
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                },
+                fn=pwd,
+            ),
+            CalledFn(
+                name="chdir",
+                description="Change the working directory for this session.\n\nArgs:\n- path: New directory path (absolute or relative). Supports ~ expansion.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "New directory path (absolute or relative). Supports ~ expansion."
+                        }
+                    },
+                    "required": ["path"]
+                },
+                fn=chdir,
             ),
             CalledFn(
                 name="file_info",

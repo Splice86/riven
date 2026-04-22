@@ -71,3 +71,56 @@ def _delete_memory(memory_id: str) -> None:
         )
     except Exception as e:
         logger.warning(f"Memory delete failed for {memory_id}: {e}")
+
+
+def _get_memory(session_id: str, memory_type: str) -> dict | None:
+    """Get a single memory by type for the current session.
+
+    Args:
+        session_id: Current session ID
+        memory_type: Type identifier (e.g. "cwd")
+
+    Returns:
+        Memory dict or None if not found
+    """
+    query = f"k:{memory_type}"
+    memories = _search_memories(session_id, query, limit=1)
+    return memories[0] if memories else None
+
+
+def _set_memory(
+    session_id: str,
+    memory_type: str,
+    content: str,
+    properties: dict,
+) -> bool:
+    """Store a single memory, overwriting any existing one of the same type.
+
+    Args:
+        session_id: Current session ID
+        memory_type: Type identifier (e.g. "cwd")
+        content: Display content for the memory
+        properties: Additional properties to store
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Delete existing first to avoid duplicates
+    existing = _get_memory(session_id, memory_type)
+    if existing:
+        _delete_memory(existing['id'])
+
+    keywords = [session_id, memory_type]
+    payload = {
+        "content": content,
+        "keywords": keywords,
+        "properties": properties,
+    }
+
+    try:
+        url = f"{_get_memory_url()}/memories"
+        resp = requests.post(url, json=payload, timeout=5)
+        return resp.status_code == 200
+    except Exception as e:
+        logger.warning(f"Memory set failed for {memory_type}: {e}")
+        return False
