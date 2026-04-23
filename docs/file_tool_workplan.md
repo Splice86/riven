@@ -115,8 +115,8 @@ class Replacement:
 
 | # | Change | Source | Priority | Impact | Effort | Status |
 |---|--------|--------|----------|--------|--------|--------|
-| 2.1 | Atomic writes (temp file + rename) | Code Puppy | 🔴 High | Prevent partial writes | ⭐ Low | ⏳ TODO |
-| 2.2 | Verify-after-write | Code Puppy | 🟡 Med | Catch disk/memory mismatches | ⭐ Low | ⏳ TODO |
+| 2.1 | Atomic writes (temp file + rename) | Code Puppy | 🔴 High | Prevent partial writes | ⭐ Low | ✅ DONE |
+| 2.2 | Verify-after-write | Code Puppy | 🟡 Med | Catch disk/memory mismatches | ⭐ Low | ✅ DONE |
 | 2.3 | Surrogate character sanitization | Code Puppy | 🟡 Med | Handle encoding edge cases | ⭐ Low | ⏳ TODO |
 | 2.4 | Syntax validation for `.py` files | New | 🟡 Med | Catch broken Python before saving | ⭐⭐ Med | ⏳ TODO |
 
@@ -366,10 +366,10 @@ class MemoryClient:
 │                              RIVEN FILE TOOL ROADMAP                                │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
-│  PHASE 1: Core ✅       PHASE 2: Robustness     PHASE 3: Batch                      │
+│  PHASE 1: Core ✅       PHASE 2: Robustness  ⏳   PHASE 3: Batch                      │
 │  ┌───────────────┐      ┌───────────────┐       ┌───────────────┐                   │
-│  │ ✓ threshold   │      │ ○ Atomic Write│       │ ○ batch_edit()│                   │
-│  │   param       │      │ ○ Verify      │       │ ○ single_edit │                   │
+│  │ ✓ threshold   │      │ ✓ Atomic Write│       │ ○ batch_edit()│                   │
+│  │   param       │      │ ✓ Verify      │       │ ○ single_edit │                   │
 │  │ ✓ .rstrip()   │      │ ○ Surrogate   │       │ ○ Rollback    │                   │
 │  │ ✓ EditResult  │      │   sanitize    │       │ ○ Conflict    │                   │
 │  │ ✓ Replacement │      │ ○ Syntax      │       │   detection   │                   │
@@ -448,9 +448,9 @@ riven/
 - [x] Create `FileEditSession` dataclass in `modules/file.py`
 
 ### Phase 2: Robustness
-- [ ] Create `_atomic_write()` helper in `modules/file_editor.py`
-- [ ] Create `_validate_python()` helper in `modules/file_editor.py`
-- [ ] Create `_verify_write()` helper in `modules/file_editor.py`
+- [x] Create `_atomic_write()` helper in `modules/file.py`
+- [x] Create `_verify_write()` helper in `modules/file.py`
+- [ ] Create `_validate_python()` helper in `modules/file.py`
 - [ ] Add surrogate sanitization in read/write operations
 
 ### Phase 3: Batch Operations
@@ -507,6 +507,10 @@ riven/
   - [x] 1.4 Create Replacement dataclass
   - [x] 5.1 Create FileEditSession dataclass (early implementation)
 - [ ] Phase 2 Complete
+  - [x] 2.1 Atomic writes (_atomic_write)
+  - [x] 2.2 Verify-after-write (_verify_write)
+  - [ ] 2.3 Surrogate sanitization
+  - [ ] 2.4 Syntax validation
 - [ ] Phase 3 Complete
 - [ ] Phase 4 Complete
 - [ ] Phase 5 Complete (except FileEditSession)
