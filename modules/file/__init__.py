@@ -1,0 +1,513 @@
+"""File module for Riven.
+
+Provides file operations including:
+- open_file: Add file to context
+- open_function: Open specific class/function by name (AST-based)
+- replace_text: Fuzzy-match replacement with auto-save
+- batch_edit: Multiple replacements in one pass
+- And more...
+
+Implementation split into:
+- editor.py: FileEditor class with all operations
+- code_parser.py: AST-based code extraction
+- memory.py: Memory tracking helpers
+"""
+
+import os
+import tempfile
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+from modules import CalledFn, ContextFn, Module, get_session_id
+from modules.memory_utils import _search_memories, _delete_memory, _set_memory
+
+# Re-export requests for backward compatibility with tests
+# Tests may mock modules.file.requests.post
+import requests as requests_module
+requests = requests_module
+
+# Import from submodules
+from modules.file.editor import (
+    EditResult,
+    FileEditor,
+    Replacement,
+    _atomic_write,
+    _file_type,
+    _find_best_window,
+    _generate_diff,
+    _sanitize_content,
+    _validate_python,
+)
+
+from modules.file.code_parser import (
+    CodeDefinition,
+    DefinitionExtractor,
+    _extract_code_definitions,
+    _find_definitions_by_name,
+    _extract_definition_source,
+)
+
+from modules.file.memory import (
+    format_file_history,
+    get_file_history,
+    get_open_files,
+    hash_content,
+    track_file_change,
+)
+
+
+# =============================================================================
+# File Editor Instance
+# =============================================================================
+
+_file_editor = FileEditor()
+
+
+# =============================================================================
+# Forwarding Functions (connect FileEditor to CalledFn interface)
+# =============================================================================
+
+async def open_file(path: str, line_start: int = None, line_end: int = None) -> str:
+    """Open a file and add it to the file context."""
+    return await _file_editor.open_file(path, line_start, line_end)
+
+
+async def close_file(name: str, line_start: int = None, line_end: int = None) -> str:
+    """Close a file from the file context."""
+    return await _file_editor.close_file(name, line_start, line_end)
+
+
+async def close_all_files() -> str:
+    """Close all files from the file context."""
+    return await _file_editor.close_all_files()
+
+
+async def replace_text(
+    path: str,
+    old_text: str,
+    new_text: str,
+    threshold: float = 0.95,
+    validate_syntax: bool = True
+) -> str:
+    """Replace text in a file using fuzzy matching."""
+    return await _file_editor.replace_text(path, old_text, new_text, threshold, validate_syntax)
+
+
+async def batch_edit(
+    path: str,
+    replacements: list,
+    threshold: float = 0.95,
+    validate_syntax: bool = True
+) -> EditResult:
+    """Apply multiple replacements in a single pass."""
+    reps = []
+    for r in replacements:
+        if isinstance(r, Replacement):
+            reps.append(r)
+        else:
+            reps.append(Replacement(old_str=r["old_str"], new_str=r["new_str"]))
+    return await _file_editor.batch_edit(path, reps, threshold, validate_syntax)
+
+
+async def delete_snippet(path: str, snippet: str, threshold: float = 0.95) -> EditResult:
+    """Remove a snippet from a file."""
+    return await _file_editor.delete_snippet(path, snippet, threshold)
+
+
+async def write_text(path: str, content: str, create_parent_dirs: bool = False) -> str:
+    """Write content to a file."""
+    return await _file_editor.write_text(path, content, create_parent_dirs)
+
+
+async def delete_file(path: str) -> EditResult:
+    """Delete a file."""
+    return await _file_editor.delete_file(path)
+
+
+async def open_function(
+    path: str,
+    name: str,
+    include_docstring: bool = True,
+    include_decorators: bool = True
+) -> str:
+    """Open a specific class or function by name using AST parsing."""
+    return await _file_editor.open_function(path, name, include_docstring, include_decorators)
+
+
+async def preview_replace(path: str, old_text: str, threshold: float = 0.95) -> str:
+    """Preview where a replacement would match."""
+    return await _file_editor.preview_replace(path, old_text, threshold)
+
+
+async def diff_text(path: str, old_text: str, new_text: str, threshold: float = 0.95) -> str:
+    """Show diff of a proposed replacement."""
+    return await _file_editor.diff_text(path, old_text, new_text, threshold)
+
+
+async def search_files(pattern: str, path: str = ".") -> str:
+    """Search for pattern in files."""
+    return await _file_editor.search_files(pattern, path)
+
+
+async def list_dir(path: str = ".") -> str:
+    """List directory contents."""
+    return await _file_editor.list_dir(path)
+
+
+async def file_info(path: str) -> str:
+    """Get information about a file."""
+    return await _file_editor.file_info(path)
+
+
+async def pwd() -> str:
+    """Get current working directory."""
+    return await _file_editor.pwd()
+
+
+async def chdir(path: str) -> str:
+    """Change current working directory."""
+    return await _file_editor.chdir(path)
+
+
+def read_file(path: str, line_start: int = None, line_end: int = None) -> str:
+    """Read a file and return its content."""
+    return _file_editor.read_file(path, line_start, line_end)
+
+
+def list_open_files() -> str:
+    """List all open files for current session."""
+    return _file_editor.list_open_files()
+
+
+def get_file_history(path: str = None) -> str:
+    """Get file change history.
+    
+    Args:
+        path: Optional path to filter by (default: None = all files)
+        
+    Note: For backward compatibility, if path looks like a session ID
+    (contains 'session' or starts with 'test-'), it's treated as path filter.
+    """
+    session_id = get_session_id()
+    from modules.file.memory import get_file_history as _get_file_history_impl
+    memories = _get_file_history_impl(session_id, path)
+    return format_file_history(memories)
+
+
+def file_context() -> str:
+    """Context function that injects open file information."""
+    session_id = get_session_id()
+    memories = _search_memories(session_id, "k:open_file:*", limit=100)
+    
+    if not memories:
+        return "No open files in context."
+    
+    lines = ["Open Files:", ""]
+    for mem in memories:
+        props = mem.get("properties", {})
+        path = props.get("path", "unknown")
+        line_start = props.get("line_start", "0")
+        line_end = props.get("line_end", "*")
+        filename = path.split("/")[-1] if "/" in path else path
+        lines.append(f"  {filename} (lines {line_start}-{line_end})")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# Module Registration
+# =============================================================================
+
+def get_module() -> Module:
+    """Get the file module with all registered functions."""
+    return Module(
+        name="file",
+        called_fns=[
+            CalledFn(
+                name="open_file",
+                description="Open a file and add it to the file context. Returns file type and line count.\n\nArgs:\n- path: Path to the file to open\n- line_start: Start line for partial opening (0-indexed)\n- line_end: End line for partial opening (default: None = to end)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file to open"},
+                        "line_start": {"type": "integer", "description": "Start line for partial opening (0-indexed)"},
+                        "line_end": {"type": "integer", "description": "End line for partial opening (default: None = to end)"}
+                    },
+                    "required": ["path"]
+                },
+                fn=open_file,
+            ),
+            CalledFn(
+                name="open_function",
+                description="Open a specific class or function by name using AST parsing.\n\nArgs:\n- path: Path to the Python file\n- name: Name of the class or function (supports 'ClassName.method' for methods)\n- include_docstring: Whether to show docstring (default: True)\n- include_decorators: Whether to show decorators (default: True)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the Python file"},
+                        "name": {"type": "string", "description": "Name of class or function"},
+                        "include_docstring": {"type": "boolean", "description": "Show docstring (default: True)"},
+                        "include_decorators": {"type": "boolean", "description": "Show decorators (default: True)"}
+                    },
+                    "required": ["path", "name"]
+                },
+                fn=open_function,
+            ),
+            CalledFn(
+                name="replace_text",
+                description="Replace text in an open file using fuzzy matching. Auto-saves the file.\n\nArgs:\n- path: Path to the file\n- old_text: Text to find and replace\n- new_text: Replacement text\n- threshold: Minimum Jaro-Winkler similarity (default: 0.95)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "old_text": {"type": "string", "description": "Text to find and replace"},
+                        "new_text": {"type": "string", "description": "Replacement text"},
+                        "threshold": {"type": "number", "description": "Minimum similarity (0.0-1.0, default: 0.95)"}
+                    },
+                    "required": ["path", "old_text", "new_text"]
+                },
+                fn=replace_text,
+            ),
+            CalledFn(
+                name="batch_edit",
+                description="Apply multiple replacements in a single atomic operation.\n\nArgs:\n- path: Path to the file\n- replacements: List of {old_str, new_str} objects\n- threshold: Minimum Jaro-Winkler similarity (default: 0.95)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "replacements": {"type": "array", "description": "List of {old_str, new_str} objects"},
+                        "threshold": {"type": "number", "description": "Minimum similarity (default: 0.95)"}
+                    },
+                    "required": ["path", "replacements"]
+                },
+                fn=batch_edit,
+            ),
+            CalledFn(
+                name="delete_snippet",
+                description="Remove a snippet from a file. Auto-saves.\n\nArgs:\n- path: Path to the file\n- snippet: Text to remove from file",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "snippet": {"type": "string", "description": "Text to remove from file"}
+                    },
+                    "required": ["path", "snippet"]
+                },
+                fn=delete_snippet,
+            ),
+            CalledFn(
+                name="write_text",
+                description="Write content to a file, creating it if needed.\n\nArgs:\n- path: Path to the file\n- content: Content to write\n- create_parent_dirs: Create parent directories if needed (default: False)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "content": {"type": "string", "description": "Content to write"},
+                        "create_parent_dirs": {"type": "boolean", "description": "Create parent dirs if needed"}
+                    },
+                    "required": ["path", "content"]
+                },
+                fn=write_text,
+            ),
+            CalledFn(
+                name="delete_file",
+                description="Delete a file.\n\nArgs:\n- path: Path to the file to delete",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file to delete"}
+                    },
+                    "required": ["path"]
+                },
+                fn=delete_file,
+            ),
+            CalledFn(
+                name="close_file",
+                description="Close a file from the file context.\n\nArgs:\n- name: Filename to close\n- line_start: Specific line range start (optional)\n- line_end: Specific line range end (optional)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Filename to close"},
+                        "line_start": {"type": "integer", "description": "Line range start"},
+                        "line_end": {"type": "integer", "description": "Line range end"}
+                    },
+                    "required": ["name"]
+                },
+                fn=close_file,
+            ),
+            CalledFn(
+                name="close_all_files",
+                description="Close all files from the file context.",
+                parameters={"type": "object", "properties": {}},
+                fn=close_all_files,
+            ),
+            CalledFn(
+                name="preview_replace",
+                description="Preview where a replacement would match without modifying.\n\nArgs:\n- path: Path to the file\n- old_text: Text to find\n- threshold: Minimum similarity (default: 0.95)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "old_text": {"type": "string", "description": "Text to find"},
+                        "threshold": {"type": "number", "description": "Minimum similarity (default: 0.95)"}
+                    },
+                    "required": ["path", "old_text"]
+                },
+                fn=preview_replace,
+            ),
+            CalledFn(
+                name="diff_text",
+                description="Show diff of a proposed replacement without modifying.\n\nArgs:\n- path: Path to the file\n- old_text: Text to find\n- new_text: Proposed replacement\n- threshold: Minimum similarity (default: 0.95)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "old_text": {"type": "string", "description": "Text to find"},
+                        "new_text": {"type": "string", "description": "Proposed replacement"},
+                        "threshold": {"type": "number", "description": "Minimum similarity (default: 0.95)"}
+                    },
+                    "required": ["path", "old_text", "new_text"]
+                },
+                fn=diff_text,
+            ),
+            CalledFn(
+                name="list_open_files",
+                description="List all open files for the current session.",
+                parameters={"type": "object", "properties": {}},
+                fn=list_open_files,
+            ),
+            CalledFn(
+                name="get_file_history",
+                description="Get file change history for the current session.\n\nArgs:\n- path: Optional path to filter by",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Optional path to filter by"}
+                    }
+                },
+                fn=get_file_history,
+            ),
+            CalledFn(
+                name="search_files",
+                description="Search for pattern in files.\n\nArgs:\n- pattern: Grep pattern to search for\n- path: Directory to search in (default: .)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Grep pattern"},
+                        "path": {"type": "string", "description": "Directory to search"}
+                    },
+                    "required": ["pattern"]
+                },
+                fn=search_files,
+            ),
+            CalledFn(
+                name="list_dir",
+                description="List directory contents.\n\nArgs:\n- path: Directory path (default: current directory)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path"}
+                    }
+                },
+                fn=list_dir,
+            ),
+            CalledFn(
+                name="file_info",
+                description="Get information about a file.\n\nArgs:\n- path: Path to the file",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"}
+                    },
+                    "required": ["path"]
+                },
+                fn=file_info,
+            ),
+            CalledFn(
+                name="pwd",
+                description="Get current working directory.",
+                parameters={"type": "object", "properties": {}},
+                fn=pwd,
+            ),
+            CalledFn(
+                name="chdir",
+                description="Change current working directory.\n\nArgs:\n- path: Directory path",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path"}
+                    },
+                    "required": ["path"]
+                },
+                fn=chdir,
+            ),
+            CalledFn(
+                name="read_file",
+                description="Read a file and return its content.\n\nArgs:\n- path: Path to the file\n- line_start: Start line (0-indexed, optional)\n- line_end: End line (optional)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "line_start": {"type": "integer", "description": "Start line"},
+                        "line_end": {"type": "integer", "description": "End line"}
+                    },
+                    "required": ["path"]
+                },
+                fn=read_file,
+            ),
+        ],
+        context_fns=[
+            ContextFn(
+                tag="open_files",
+                fn=file_context,
+            ),
+        ],
+    )
+
+
+__all__ = [
+    # Core classes
+    "FileEditor",
+    "EditResult",
+    "Replacement",
+    "CodeDefinition",
+    "DefinitionExtractor",
+    # Functions
+    "open_file",
+    "close_file",
+    "close_all_files",
+    "replace_text",
+    "batch_edit",
+    "delete_snippet",
+    "write_text",
+    "delete_file",
+    "open_function",
+    "preview_replace",
+    "diff_text",
+    "search_files",
+    "list_dir",
+    "file_info",
+    "pwd",
+    "chdir",
+    "read_file",
+    "list_open_files",
+    "get_file_history",
+    "file_context",
+    "get_module",
+    "_file_editor",
+    # Helpers
+    "_atomic_write",
+    "_file_type",
+    "_find_best_window",
+    "_generate_diff",
+    "_sanitize_content",
+    "_validate_python",
+    "_extract_code_definitions",
+    "_find_definitions_by_name",
+    "_extract_definition_source",
+    "format_file_history",
+    "get_file_history",
+    "get_open_files",
+    "hash_content",
+    "track_file_change",
+]

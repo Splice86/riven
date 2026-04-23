@@ -32,7 +32,7 @@ class TestWriteText:
         """write_text creates parent directories if they don't exist."""
         path = tmp_path / "subdir" / "nested" / "file.txt"
 
-        result = await write_text(str(path), "deep content")
+        result = await write_text(str(path), "deep content", create_parent_dirs=True)
 
         assert path.read_text() == "deep content"
         assert "file.txt" in result
