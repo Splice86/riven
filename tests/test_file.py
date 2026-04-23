@@ -596,6 +596,195 @@ class TestModuleRegistration:
         assert diff_fn is not None
 
 
+class TestCountTokens:
+    """Tests for _count_tokens() helper."""
+
+    def test_count_tokens_basic(self):
+        """_count_tokens should return rough token count."""
+        from modules.file import _count_tokens
+
+        assert _count_tokens("hello world") == 2
+        assert _count_tokens("a" * 8) == 2  # 8 chars / 4
+        assert _count_tokens("") == 0
+
+    def test_count_tokens_large_text(self):
+        """_count_tokens should handle large texts."""
+        from modules.file import _count_tokens
+
+        text = "x" * 1000
+        assert _count_tokens(text) == 250  # 1000 / 4
+
+
+class TestFileType:
+    """Tests for _file_type() helper."""
+
+    def test_file_type_python(self):
+        """_file_type should return 'python' for .py files."""
+        from modules.file import _file_type
+
+        assert _file_type("script.py") == "python"
+        assert _file_type("/path/to/module.py") == "python"
+
+    def test_file_type_yaml(self):
+        """_file_type should return 'yaml' for .yaml and .yml files."""
+        from modules.file import _file_type
+
+        assert _file_type("config.yaml") == "yaml"
+        assert _file_type("config.yml") == "yaml"
+
+    def test_file_type_json(self):
+        """_file_type should return 'json' for .json files."""
+        from modules.file import _file_type
+
+        assert _file_type("data.json") == "json"
+
+    def test_file_type_markdown(self):
+        """_file_type should return 'markdown' for .md files."""
+        from modules.file import _file_type
+
+        assert _file_type("README.md") == "markdown"
+
+    def test_file_type_shell(self):
+        """_file_type should return 'shell' for shell scripts."""
+        from modules.file import _file_type
+
+        assert _file_type("script.sh") == "shell"
+        assert _file_type("script.bash") == "shell"
+        assert _file_type("script.zsh") == "shell"
+
+    def test_file_type_rust(self):
+        """_file_type should return 'rust' for .rs files."""
+        from modules.file import _file_type
+
+        assert _file_type("main.rs") == "rust"
+
+    def test_file_type_javascript(self):
+        """_file_type should return 'javascript' for .js files."""
+        from modules.file import _file_type
+
+        assert _file_type("app.js") == "javascript"
+        assert _file_type("app.ts") == "typescript"
+
+    def test_file_type_unknown(self):
+        """_file_type should return extension for unknown types."""
+        from modules.file import _file_type
+
+        assert _file_type("random.xyz") == "xyz"
+        assert _file_type("noextension") == "file"
+
+
+class TestGetCwd:
+    """Tests for _get_cwd() helper."""
+
+    def test_get_cwd_returns_string(self):
+        """_get_cwd should return a string."""
+        from modules.file import _get_cwd
+
+        result = _get_cwd()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_get_cwd_is_valid_path(self):
+        """_get_cwd should return a valid path."""
+        from modules.file import _get_cwd
+
+        result = _get_cwd()
+        assert os.path.isabs(result) or result == "."
+
+
+class TestFileHelp:
+    """Tests for _file_help() helper."""
+
+    def test_file_help_returns_string(self):
+        """_file_help should return a string."""
+        from modules.file import _file_help
+
+        result = _file_help()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_file_help_contains_tools(self):
+        """_file_help should document file tools."""
+        from modules.file import _file_help
+
+        result = _file_help()
+        assert "pwd" in result
+        assert "chdir" in result
+        assert "open_file" in result
+        assert "replace_text" in result
+
+    def test_file_help_contains_workflow(self):
+        """_file_help should document the workflow."""
+        from modules.file import _file_help
+
+        result = _file_help()
+        assert "Workflow" in result
+        assert "Guidelines" in result
+
+
+class TestGenerateUnifiedDiff:
+    """Tests for _generate_unified_diff() helper."""
+
+    def test_generate_unified_diff_basic(self):
+        """_generate_unified_diff should generate diff output."""
+        from modules.file import _generate_unified_diff
+
+        old_lines = ["line1\n", "line2\n", "line3\n"]
+        new_lines = ["line1\n", "line2 modified\n", "line3\n"]
+
+        result = _generate_unified_diff("/test/file.py", old_lines, new_lines)
+
+        assert "---" in result
+        assert "+++" in result
+        assert "-line2" in result
+        assert "+line2 modified" in result
+
+    def test_generate_unified_diff_additions(self):
+        """_generate_unified_diff should show additions."""
+        from modules.file import _generate_unified_diff
+
+        old_lines = ["line1\n"]
+        new_lines = ["line1\n", "line2\n"]
+
+        result = _generate_unified_diff("/test/file.py", old_lines, new_lines)
+
+        assert "+++" in result
+        assert "+line2" in result
+
+    def test_generate_unified_diff_deletions(self):
+        """_generate_unified_diff should show deletions."""
+        from modules.file import _generate_unified_diff
+
+        old_lines = ["line1\n", "line2\n"]
+        new_lines = ["line1\n"]
+
+        result = _generate_unified_diff("/test/file.py", old_lines, new_lines)
+
+        assert "---" in result
+        assert "-line2" in result
+
+    def test_generate_unified_diff_no_changes(self):
+        """_generate_unified_diff should return empty for identical content."""
+        from modules.file import _generate_unified_diff
+
+        lines = ["line1\n", "line2\n"]
+        result = _generate_unified_diff("/test/file.py", lines, lines)
+
+        # unified_diff returns empty when no changes
+        assert result == ""
+
+    def test_generate_unified_diff_custom_context(self):
+        """_generate_unified_diff should respect context parameter."""
+        from modules.file import _generate_unified_diff
+
+        old_lines = ["line1\n", "line2\n", "line3\n", "line4\n", "line5\n"]
+        new_lines = ["line1\n", "line2 modified\n", "line3\n", "line4\n", "line5\n"]
+
+        result = _generate_unified_diff("/test/file.py", old_lines, new_lines, context=1)
+
+        assert "@@" in result
+
+
 class TestFindBestWindow:
     """Test _find_best_window fuzzy matching."""
 
