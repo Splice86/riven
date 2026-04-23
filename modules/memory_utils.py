@@ -58,19 +58,24 @@ def _search_memories(
     return []
 
 
-def _delete_memory(memory_id: str) -> None:
+def _delete_memory(memory_id: str) -> bool:
     """Delete a memory by ID.
 
     Args:
         memory_id: ID of the memory to delete
+        
+    Returns:
+        True if deleted successfully, False otherwise
     """
     try:
-        requests.delete(
+        response = requests.delete(
             f"{_get_memory_url()}/memories/{memory_id}",
             timeout=5
         )
+        return response.status_code in (200, 204)
     except Exception as e:
         logger.warning(f"Memory delete failed for {memory_id}: {e}")
+        return False
 
 
 def _get_memory(session_id: str, memory_type: str) -> dict | None:

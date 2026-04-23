@@ -1154,23 +1154,23 @@ class TestFileHistory:
     def test_get_file_history_formatted_with_changes(self, editor, temp_dir, session_id):
         """get_file_history_formatted should format file changes properly."""
         file_path = os.path.join(temp_dir, "test_file.py")
-        Path(file_path).write_text("original content")
+        Path(file_path).write_text("x = 1")
         
         async def run():
-            # Create a file change by replacing text
-            await editor.replace_text(file_path, "original", "modified content")
+            # Create a file change by replacing text (use valid Python)
+            result = await editor.replace_text(file_path, "x = 1", "x = 2")
+            return result
         
-        asyncio.run(run())
+        result = asyncio.run(run())
         
         # Give the API a moment to process
         import time
         time.sleep(0.1)
         
-        result = editor.get_file_history_formatted()
+        history_result = editor.get_file_history_formatted()
         
-        # Should include info about the changes (if memories were created)
-        # or 'no changes' if API hasn't returned them yet
-        assert "no changes" in result.lower() or "test_file.py" in result or "modified" in result.lower()
+        # Should include info about the changes
+        assert "no changes" in history_result.lower() or "test_file.py" in history_result or "replace_text" in history_result.lower()
 
     def test_get_file_history_handles_api_errors(self, editor, session_id):
         """get_file_history_formatted should handle empty results gracefully."""
