@@ -192,6 +192,44 @@ async def get_file_history(path: str = None) -> str:
     return format_file_history(memories)
 
 
+def _file_help() -> str:
+    """Static tool documentation - does not change between calls."""
+    return """## File Tools (Help)
+
+### CRITICAL: File Context Rules
+- Files opened with open_file() are automatically injected into context below.
+- Do NOT re-open a file that is already in context — check list_open_files() first.
+- If a file is already listed in context, read from context directly. Do NOT call open_file() again.
+- Large files (>1200 lines) are automatically truncated. Use open_function() to see specific code.
+- Use close_file() when done with a file to free context space.
+
+### Tool Reference
+- **open_file(path, line_start?, line_end?)** - Add file to context (only if not already open!)
+- **open_function(path, name, include_docstring?, include_decorators?)** - Extract specific class/function via AST (use this for large files)
+- **replace_text(path, old_text, new_text, threshold?)** - Fuzzy-match replacement, auto-saves (threshold=0.95)
+- **batch_edit(path, replacements, threshold?)** - Multiple replacements in one atomic pass
+- **delete_snippet(path, snippet, threshold?)** - Remove a snippet, auto-saves
+- **write_text(path, content, create_parent_dirs?)** - Write content, creates file if needed
+- **delete_file(path)** - Delete a file
+- **close_file(name)** - Close a file from context (frees context space)
+- **close_all_files()** - Close all open files
+- **preview_replace(path, old_text, threshold?)** - Preview match location only
+- **diff_text(path, old_text, new_text, threshold?)** - Show diff without modifying
+- **list_open_files()** - List all files currently in context (always check this first!)
+- **get_file_history(path?)** - Get file change history
+- **search_files(pattern, path?)** - Grep pattern in files
+- **list_dir(path?)** - List directory contents
+- **file_info(path)** - Get file info
+- **pwd()** - Show current directory
+- **chdir(path)** - Change directory
+
+### Workflow
+1. Before opening a file: call list_open_files() to see what's already in context
+2. For specific functions/classes in large files: use open_function(path, name)
+3. When done with a file: call close_file() to manage context size
+4. Use search_files() to find code before opening files"""
+
+
 def file_context() -> str:
     """Context function that injects open file information and contents.
     
@@ -201,49 +239,72 @@ def file_context() -> str:
     import os
     
     session_id = get_session_id()
-    # Build search query using property keys from constants
     query = build_search_query()
     memories = _search_memories(session_id, query, limit=100)
     
     if not memories:
-        return "No open files in context."
+        return "[File Context] No open files in context."
     
-    sections = []
-    for mem in memories:
+    # Show total count upfront so model knows how much context there is
+    total_files = len(memories)
+    lines: list[str] = [
+        f"[File Context] {total_files} file(s) open in context:",
+        "=" * 60,
+        "",
+    ]
+    
+    for i, mem in enumerate(memories, 1):
         props = mem.get("properties", {})
         path = props.get(PROP_PATH, "unknown")
         line_start = int(props.get(PROP_LINE_START, 0))
         line_end = props.get(PROP_LINE_END, None)
+        
+        # File header with full path and line range
+        if line_end is None or line_end == "*" or line_end == "":
+            range_label = f"lines {line_start}+ (to end)"
+        else:
+            line_end = int(line_end)
+            range_label = f"lines {line_start}-{line_end}"
+        
+        lines.append(f"[File {i}/{total_files}] {path}")
+        lines.append(f"  Range: {range_label}")
+        lines.append("  " + "-" * 55)
         
         # Read the actual file content
         try:
             with open(path, 'r', encoding='utf-8', errors='replace') as f:
                 all_lines = f.readlines()
             
+            total_lines_in_file = len(all_lines)
+            
             # Handle line range
             if line_end is None or line_end == "*" or line_end == "":
                 file_content = ''.join(all_lines[line_start:])
             else:
-                line_end = int(line_end)
                 file_content = ''.join(all_lines[line_start:line_end])
             
             # Truncate very long content to avoid context overflow
-            MAX_LINES = 500
+            MAX_LINES = 1200
             content_lines = file_content.split('\n')
-            if len(content_lines) > MAX_LINES:
+            num_lines_in_context = len(content_lines)
+            
+            if num_lines_in_context > MAX_LINES:
                 file_content = '\n'.join(content_lines[:MAX_LINES])
-                file_content += f'\n[... content truncated at {MAX_LINES} lines ...]'
+                lines.append(f"  NOTE: Content truncated at {MAX_LINES} lines of {num_lines_in_context} total. Use open_function() to see specific functions.")
+            else:
+                lines.append(f"  Showing {num_lines_in_context} lines of {total_lines_in_file} total lines in file.")
             
-            filename = path.split("/")[-1] if "/" in path else path
-            lines_info = f"lines {line_start}-{line_end if line_end and line_end != '*' else 'end'}"
-            
-            sections.append(f"=== {filename} ({lines_info}) ===\n{file_content}")
+            lines.append("")
+            lines.append(file_content)
             
         except Exception as e:
-            filename = path.split("/")[-1] if "/" in path else path
-            sections.append(f"=== {filename} ===\n[Error reading file: {e}]")
+            lines.append(f"  [ERROR reading file: {e}]")
+        
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("")
     
-    return "\n\n".join(sections)
+    return "\n".join(lines)
 
 
 # =============================================================================
@@ -479,7 +540,12 @@ def get_module() -> Module:
         ],
         context_fns=[
             ContextFn(
-                tag="open_files",
+                tag="file_help",
+                fn=_file_help,
+                static=True,
+            ),
+            ContextFn(
+                tag="file",
                 fn=file_context,
             ),
         ],

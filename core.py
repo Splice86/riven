@@ -172,7 +172,7 @@ class Core:
 
         # Memory API settings from shard
         memory_api = shard.get('memory_api', {})
-        memory_url = memory_api.get('url')
+        self._memory_url = memory_api.get('url')
 
         # Tool result truncation settings from shard
         tool_result_max_lines = shard.get('tool_result_max_lines', 200)
@@ -180,28 +180,34 @@ class Core:
 
         # Context manager handles all memory API + message processing
         self._ctx = ContextManager(
-            memory_url=memory_url,
+            memory_url=self._memory_url,
             tool_result_max_lines=tool_result_max_lines,
             tool_result_char_per_line=tool_result_char_per_line,
         )
 
-        # Register modules from shard config
-        self._load_modules()
-
-    def _load_modules(self) -> None:
+    def _load_modules(self, session_id: str = None) -> None:
         """Load modules listed in shard."""
+        _debug(f"_load_modules: clearing registry, loading {self._module_names}", session_id)
         registry._modules.clear()
         for name in self._module_names:
+            _debug(f"_load_modules: importing modules.{name}", session_id)
             try:
                 mod = __import__(f'modules.{name}', fromlist=['get_module'])
+                _debug(f"_load_modules: modules.{name} imported, checking get_module", session_id)
                 if hasattr(mod, 'get_module'):
                     module = mod.get_module()
                     registry.register(module)
+                    _debug(f"_load_modules: registered module '{name}'", session_id)
+                else:
+                    _debug(f"_load_modules: modules.{name} has no get_module, skipping", session_id)
             except Exception as e:
+                _debug(f"_load_modules: FAILED to load {name}: {e}", session_id)
                 logger.warning(f"Failed to load module {name}: {e}")
+        _debug(f"_load_modules: done, registry has {list(registry._modules.keys())}", session_id)
 
-    def _get_functions(self) -> list[Function]:
+    def _get_functions(self, session_id: str = None) -> list[Function]:
         """Convert registry called_fns to Core Functions."""
+        _debug(f"_get_functions: building function list from {len(list(registry.all_modules()))} modules", session_id)
         funcs = []
         for mod in registry.all_modules():
             for cf in mod.called_fns:
@@ -213,6 +219,7 @@ class Core:
                     fn=cf.fn,
                     timeout=effective_timeout,
                 ))
+        _debug(f"_get_functions: done, {len(funcs)} functions: {[f.name for f in funcs]}", session_id)
         return funcs
 
     def cancel(self) -> None:
@@ -233,24 +240,30 @@ class Core:
             ))
         return calls
 
-    async def _execute(self, call: FunctionCall, func_index: dict) -> FunctionResult:
+    async def _execute(self, call: FunctionCall, func_index: dict, session_id: str = None) -> FunctionResult:
         """Execute a single function call with timeout."""
+        _debug(f"_execute: looking up '{call.name}'", session_id)
         func = func_index.get(call.name)
         if not func:
             # Suggest using run() for shell commands
+            _debug(f"_execute: '{call.name}' NOT FOUND in func_index", session_id)
             return FunctionResult(call_id=call.id, name=call.name, content="",
                                   error=f"Unknown function: '{call.name}'. For shell commands, use: run(command='{call.name}')")
 
         timeout = call.arguments.pop("_timeout", None) or self._tool_timeout
+        _debug(f"_execute: calling {func.fn} with timeout={timeout}s args={list(call.arguments.keys())}", session_id)
 
         content, error = "", None
         try:
             result = await asyncio.wait_for(func.fn(**call.arguments), timeout=timeout)
             content = str(result) if result is not None else ""
+            _debug(f"_execute: {call.name} completed OK (content len={len(content)})", session_id)
         except asyncio.TimeoutError:
             error = f"Function timed out after {timeout}s"
+            _debug(f"_execute: {call.name} TIMED OUT after {timeout}s", session_id)
         except Exception as e:
             error = str(e)
+            _debug(f"_execute: {call.name} EXCEPTION: {e}", session_id)
 
         return FunctionResult(call_id=call.id, name=call.name, content=content, error=error)
 
@@ -279,6 +292,10 @@ class Core:
                 memory.add_context(role, storage_content, session=session_id)
             except Exception as e:
                 logger.warning(f"Failed to store assistant message to memory: {e}")
+        
+        # DEBUG: log assistant messages with empty or near-empty content
+        if tool_calls and not content:
+            _debug(f"_store_assistant: WARNING - tool-call-only message (no text), id={tool_calls[0].get('id','?')[:8]}", session_id)
 
     def _save_llm_context(self, api_messages: list[dict], session_id: str) -> None:
         """Save the full LLM request context to a timestamped file.
@@ -350,10 +367,14 @@ class Core:
         # Memory client for this session
         memory = self._ctx.memory_client
 
-        # Set session ID in context var for all module functions to access
+        # Set session ID in context var FIRST so all module operations can access it
         token = _session_id.set(session_id)
         try:
-            functions = self._get_functions()
+            # Load modules (only on first call per Core instance) and build function index
+            # This must be inside the try block so _session_id is set for context functions
+            if not registry._modules:
+                self._load_modules(session_id)
+            functions = self._get_functions(session_id)
             func_index = {f.name: f for f in functions}
             tools = [
                 {
@@ -377,7 +398,7 @@ class Core:
                 context_error = str(e)
                 history = []
                 _debug(f"run_stream: Memory API connection failed: {context_error}", session_id)
-                error_msg = f"Memory API connection failed: {context_error}. Ensure memory-api is running at {memory_url or 'http://localhost:8030'}."
+                error_msg = f"Memory API connection failed: {context_error}. Ensure memory-api is running at {self._memory_url or 'http://localhost:8030'}."
                 try:
                     memory.add_context("tool", error_msg, session=session_id)
                 except Exception:
@@ -407,6 +428,24 @@ class Core:
             
             # --- Save LLM request context snapshot ---
             self._save_llm_context(api_messages, session_id)
+            
+            # --- Pre-LLM debug audit: log message summary and catch empty-content bugs ---
+            # Check for both '' content AND missing content key (the bug that caused MiniMax 400)
+            issues = []
+            for i, msg in enumerate(api_messages):
+                role = msg.get('role', '?')
+                if role in ('tool', 'system'):
+                    continue
+                content = msg.get('content')
+                has_tc = bool(msg.get('tool_calls'))
+                if content is None:
+                    issues.append(f"msg[{i}][{role}] content=None")
+                elif content == '':
+                    issues.append(f"msg[{i}][{role}] content='' {'(tool-call-only)' if has_tc else ''}")
+            if issues:
+                _debug(f"run_stream: WARNING - empty content issues detected: {'; '.join(issues)}", session_id)
+            else:
+                _debug(f"run_stream: LLM call ready - {len(api_messages)} messages, roles={[m.get('role') for m in api_messages]}", session_id)
             
             # --- Call LLM ---
             _debug("run_stream: calling LLM (streaming)", session_id)
@@ -518,7 +557,7 @@ class Core:
                     "arguments": call.arguments
                 }}
                 
-                result = await self._execute(call, func_index)
+                result = await self._execute(call, func_index, session_id)
                 _debug(f"run_stream: tool '{call.name}' executed, error={result.error}", session_id)
                 results.append(result)
 

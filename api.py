@@ -82,26 +82,24 @@ def list_shards():
                     "display_name": data.get("display_name", data["name"]),
                 })
 
-    # Always include default shard (backed by config defaults, not a file)
-    if not any(s["name"] == "default" for s in shards):
-        shards.append({"name": "default", "display_name": "Default"})
-
-    return {"shards": shards}
+    return {"shards": shards, "note": "Shards without a YAML file fall back to config defaults."}
 
 
 def _load_shard(shard_name: str) -> dict:
     """Load shard config by name."""
     shard = None
+    found = False
 
     for filepath in _shard_files():
         with open(filepath) as f:
             data = yaml.safe_load(f)
             if data and data.get("name") == shard_name:
                 shard = data
+                found = True
                 break
 
     if shard is None:
-        # Build from config defaults
+        # Build from config defaults (fallback)
         shard = {
             "name": shard_name,
             "modules": get("modules", ["time", "shell"]),
@@ -109,6 +107,10 @@ def _load_shard(shard_name: str) -> dict:
             "tool_timeout": get("tool_timeout", 60),
             "max_function_calls": get("max_function_calls", 20),
         }
+        available = sorted(os.path.basename(f)[:-5] for f in _shard_files())
+        print(f"[WARNING] Shard '{shard_name}' not found (no YAML matches). Using config defaults. Available: {available}", flush=True)
+    else:
+        print(f"[INFO] Shard '{shard_name}' loaded (modules={shard.get('modules', [])})", flush=True)
 
     # Ensure memory_api is always set from config (even if shard file doesn't have it)
     shard.setdefault("memory_api", {

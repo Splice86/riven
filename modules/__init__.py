@@ -12,9 +12,22 @@ Session ID is automatically injected via context_var - no need to pass it.
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable
+import time as _stdlib_time  # noqa: E402 - alias to avoid collision with modules.time subpackage
 
 # Session ID automatically available in all module functions
 _session_id: ContextVar[str] = ContextVar('session_id', default='')
+
+# High-level debug flag
+DEBUG_HANG = True
+
+def _debug(step: str, session_id: str = None) -> None:
+    """Print timestamped debug messages to trace execution flow."""
+    if not DEBUG_HANG:
+        return
+    ts = _stdlib_time.time()
+    # Fall back to contextvar if not passed explicitly
+    sid = f"[{session_id[:8]}]" if session_id else f"[{get_session_id()[:8]}]" if get_session_id() else "[--------]"
+    print(f"[DEBUG {ts:.3f}] {sid} {step}", flush=True)
 
 
 def get_session_id() -> str:
@@ -101,14 +114,20 @@ class ModuleRegistry:
 
     def build_context(self) -> dict[str, str]:
         """Run all context functions and return {tag: content}."""
+        _debug(f"ModuleRegistry.build_context: starting ({len(self._modules)} modules)")
         context = {}
         for module in self._modules.values():
             for ctx_fn in module.context_fns:
                 try:
+                    _debug(f"ModuleRegistry.build_context: calling {ctx_fn.tag}() from {module.name}")
                     result = ctx_fn.fn()
+                    content_preview = repr(result[:80]) if result else repr(result)
+                    _debug(f"ModuleRegistry.build_context: {ctx_fn.tag}() -> {content_preview}")
                     context[ctx_fn.tag] = result
                 except Exception as e:
+                    _debug(f"ModuleRegistry.build_context: {ctx_fn.tag}() FAILED: {e}")
                     context[ctx_fn.tag] = f"[Error: {e}]"
+        _debug(f"ModuleRegistry.build_context: done, tags={list(context.keys())}")
         return context
 
 

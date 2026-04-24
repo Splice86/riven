@@ -142,12 +142,14 @@ CodeHammer includes a planning module that tracks goals with linked files:
 
 | Module | Purpose |
 |--------|---------|
-| **file** | Open files, edit with fuzzy matching, track in context |
+| **file/** | File tracking & editing (package) |
 | **shell** | Run commands, manage background processes |
 | **memory** | Store and search long-term memories |
+| **memory_utils** | Memory API utilities |
 | **planning** | Track goals with linked files |
-| **web** | Fetch pages, search the web |
+| **shards** | Shard loading & execution |
 | **time** | Current timestamp (always at bottom) |
+| **web** | Fetch pages, search the web |
 
 ---
 
@@ -178,20 +180,28 @@ The LLM learns to look here for truth, not in conversation history. Less confusi
 ```
 riven_core/
 ├── README.md          # This file
-├── THEORY.md          # Deep dive into architecture
-├── MODULES.md         # Module reference
+├── docs/              # Architecture docs (THEORY.md, MODULES.md, etc.)
 ├── api.py             # HTTP server (your interface)
 ├── core.py            # Agent logic
 ├── config.py          # Configuration loading
 ├── config.yaml        # Default config
 ├── secrets.yaml       # API keys (gitignored)
+├── context.py         # Context manager + memory client
+├── _stream_worker.py  # Streaming utilities
+├── killcheck.py       # Process cleanup helpers
 ├── shards/
-│   └── codehammer.yaml # The coding shard config
-└── modules/
-    ├── file.py        # File tracking & editing
-    ├── shell.py       # Command execution
-    ├── memory.py      # Memory API client
-    ├── planning.py    # Goal tracking
-    ├── time.py        # Timestamp context
-    └── web.py         # Web fetching
+│   ├── codehammer.yaml  # The coding shard config
+│   ├── scribe.yaml      # Documentation shard
+│   └── testhammer.yaml  # Testing shard
+├── modules/
+│   ├── file/          # File tracking & editing (package)
+│   ├── file.py        # File module entry point
+│   ├── shell.py       # Command execution
+│   ├── memory.py      # Memory API client
+│   ├── memory_utils.py    # Memory API utilities
+│   ├── planning.py    # Goal tracking
+│   ├── shards.py      # Shard loading & execution
+│   ├── time.py        # Timestamp context
+│   └── web.py         # Web fetching
+└── tests/             # Test suite
 ```

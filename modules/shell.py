@@ -106,7 +106,7 @@ async def run(
     start_time = asyncio.get_event_loop().time()
     
     try:
-        _debug(f"run(): creating subprocess")
+        _debug(f"run(): creating subprocess shell")
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
@@ -114,14 +114,15 @@ async def run(
             cwd=cwd,
             start_new_session=True,  # Proper process group handling
         )
+        _debug(f"run(): subprocess created, pid={proc.pid}")
         
         try:
-            _debug(f"run(): waiting for process to complete (timeout={timeout}s)")
+            _debug(f"run(): calling proc.communicate() with timeout={timeout}s")
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=timeout,
             )
-            _debug(f"run(): process completed")
+            _debug(f"run(): proc.communicate() returned, bytes stdout={len(stdout_bytes) if stdout_bytes else 0}, stderr={len(stderr_bytes) if stderr_bytes else 0}")
             exit_code = proc.returncode
             execution_time = asyncio.get_event_loop().time() - start_time
             
@@ -217,6 +218,7 @@ async def run_background(
     Returns:
         PID and log file path for monitoring
     """
+    _debug(f"run_background() ENTRY: command='{command}'")
     cwd = cwd or os.getcwd()
     
     # Create temp file for output
@@ -230,6 +232,7 @@ async def run_background(
     log_file.close()
     
     try:
+        _debug(f"run_background(): spawning Popen")
         proc = subprocess.Popen(
             command,
             shell=True,
@@ -239,10 +242,11 @@ async def run_background(
             cwd=cwd,
             start_new_session=True,
         )
-        
+        _debug(f"run_background(): spawned PID={proc.pid}")
         return f"Started background process: PID={proc.pid}\nLog file: {log_path}\nUse kill({proc.pid}) to stop it."
     
     except Exception as e:
+        _debug(f"run_background(): EXCEPTION: {e}")
         return f"[ERROR] Failed to start background process: {e}"
 
 

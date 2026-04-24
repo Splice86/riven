@@ -26,7 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description="Send a streaming message to riven_core and save output to a file.")
     parser.add_argument("--message", "-m", required=True, help="The message to send to the AI")
     parser.add_argument("--session", "-s", default=None, help="Session ID (auto-generated if omitted)")
-    parser.add_argument("--shard", default="default", help="Shard name to use (default: default)")
+    parser.add_argument("--shard", default="codehammer", help="Shard name to use (default: codehammer)")
     parser.add_argument("--output", "-o", required=True, help="Output file to write to")
     parser.add_argument("--api-url", default="http://127.0.0.1:8080", help="Riven API base URL")
     args = parser.parse_args()

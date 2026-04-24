@@ -178,7 +178,10 @@ class ContextManager:
     
     def build_context_from_modules(self, registry) -> dict[str, str]:
         """Build context dict by calling all registered context functions."""
-        return registry.build_context()
+        _debug("ContextManager.build_context_from_modules: START")
+        ctx = registry.build_context()
+        _debug(f"ContextManager.build_context_from_modules: DONE, {len(ctx)} tags")
+        return ctx
     
     def build_system_prompt(
         self,
@@ -186,11 +189,20 @@ class ContextManager:
         registry,
     ) -> str:
         """Build system prompt by replacing {tag} placeholders with context."""
+        _debug("ContextManager.build_system_prompt: START")
         ctx = self.build_context_from_modules(registry)
         system = template
+        replacements = 0
         for tag, content in ctx.items():
             placeholder = f"{{{tag}}}"
+            if placeholder in system:
+                _debug(f"ContextManager.build_system_prompt: replaced {{{tag}}}")
+                replacements += 1
             system = system.replace(placeholder, content)
+        unreplaced = [m.group(1) for m in __import__('re').finditer(r'\{(\w+)\}', system)]
+        if unreplaced:
+            _debug(f"ContextManager.build_system_prompt: UNREPLACED placeholders: {unreplaced}")
+        _debug(f"ContextManager.build_system_prompt: DONE ({replacements} replaced, system len={len(system)})")
         return system
     
     # -------------------------------------------------------------------------
@@ -222,8 +234,11 @@ class ContextManager:
                         tool_calls = json.loads(tc_match.group(1))
                         msg['tool_calls'] = tool_calls
                         msg['content'] = re.sub(r'\[tool_calls\].+?\[/tool_calls\]\s*', '', content).strip()
+                        # CRITICAL: never send an assistant message to LLM with no content and no text.
+                        # If content is empty after parsing (tool-call-only response), keep content as ''
+                        # rather than deleting it — MiniMax rejects messages with no content field.
                         if not msg['content']:
-                            del msg['content']
+                            msg['content'] = ''
                     except json.JSONDecodeError:
                         pass
             
@@ -294,6 +309,8 @@ class ContextManager:
         Returns (api_messages, system_prompt) where api_messages has system
         prompt prepended and messages are processed (reordered, truncated).
         """
+        _debug("ContextManager.prepare_messages_for_llm: START")
+        
         # Check config for timestamp preference (default to False if not set)
         if include_timestamp is None:
             include_timestamp = get('memory_api.include_timestamp', False)
@@ -314,6 +331,8 @@ class ContextManager:
             
             api_messages.append(msg_copy)
         
+        _debug(f"ContextManager.prepare_messages_for_llm: {len(api_messages)} history messages")
+        
         # Reorder: ensure tool results follow their assistant message
         api_messages = self.reorder_messages(api_messages)
         
@@ -327,10 +346,12 @@ class ContextManager:
                 )
         
         # Add system prompt at the front
+        _debug("ContextManager.prepare_messages_for_llm: building system prompt")
         system = self.build_system_prompt(system_template, registry)
         if system:
             api_messages.insert(0, {"role": "system", "content": system})
         
+        _debug(f"ContextManager.prepare_messages_for_llm: DONE ({len(api_messages)} total messages, system len={len(system)})")
         return api_messages, system
     
     def sanitize_messages_for_llm(self, api_messages: list[dict]) -> list[dict]:
@@ -341,6 +362,9 @@ class ContextManager:
         - tool_call_id: links result to the original tool call request
         - content: the result string
         - (optional) name: extracted from stored 'function' property if present
+
+        Also guards against empty content on any message type (MiniMax rejects these
+        with "Input is a zero-length, empty document").
         """
         api_messages = _json_safe(api_messages)
 
@@ -351,5 +375,17 @@ class ContextManager:
                 if msg.get('function'):
                     msg['name'] = msg['function']
                     del msg['function']
+
+            # Guard: ensure non-tool messages never have empty/missing content
+            # MiniMax returns 400 "zero-length document" if content is "" or absent
+            role = msg.get('role', 'unknown')
+            if role not in ('tool', 'system'):
+                content = msg.get('content')
+                if content is None:
+                    _debug(f"sanitize: WARNING message [{role}] has content=None, setting to ''", None)
+                    msg['content'] = ''
+                elif content == '':
+                    _debug(f"sanitize: WARNING message [{role}] has empty content (tool-call-only?) role={role}", None)
+                    # Keep as '' — empty string is safer than None for MiniMax
 
         return api_messages
