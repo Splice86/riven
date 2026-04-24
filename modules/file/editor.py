@@ -25,6 +25,15 @@ try:
         _extract_definition_source,
         _find_definitions_by_name,
     )
+    from .constants import (
+        MEMORY_KEYWORD_PREFIX,
+        make_open_file_keyword,
+        match_open_file_keyword,
+        PROP_FILENAME,
+        PROP_PATH,
+        PROP_LINE_START,
+        PROP_LINE_END,
+    )
     from .memory import format_file_history, get_file_history, get_open_files, hash_content, track_file_change
 except ImportError:
     # Running as standalone module
@@ -33,6 +42,15 @@ except ImportError:
         extract_code_definitions,
         extract_definition_source,
         find_definitions_by_name,
+    )
+    from constants import (
+        MEMORY_KEYWORD_PREFIX,
+        make_open_file_keyword,
+        match_open_file_keyword,
+        PROP_FILENAME,
+        PROP_PATH,
+        PROP_LINE_START,
+        PROP_LINE_END,
     )
     from memory import format_file_history, get_file_history, get_open_files, hash_content, track_file_change
 
@@ -302,16 +320,17 @@ class FileEditor:
         session_id = self._get_session_id()
         
         line_start = line_start if line_start is not None else 0
-        line_end_str = line_end if line_end is not None else "*"
-        line_range = f"{line_start}-{line_end_str}"
+        line_end_str = str(line_end) if line_end is not None else "*"
         
-        # Use _set_memory pattern for consistency
-        memory_type = f"open_file:{filename}:{line_range}"
-        content = f"open: {filename} [{line_range}]"
+        # Unique keyword per file (prevents overwrites in _set_memory)
+        # All data goes in properties
+        memory_type = make_open_file_keyword(filename)
+        content = f"open: {filename} [{line_start}-{line_end_str}]"
         properties = {
-            "path": abs_path,
-            "line_start": str(line_start),
-            "line_end": str(line_end) if line_end is not None else "*"
+            PROP_FILENAME: filename,
+            PROP_PATH: abs_path,
+            PROP_LINE_START: str(line_start),
+            PROP_LINE_END: line_end_str,
         }
         
         if not self._get_set_memory()(session_id, memory_type, content, properties):
@@ -336,42 +355,39 @@ class FileEditor:
         return f"Opened {filename} ({file_type_str}, {total_lines} lines){line_info}{large_warning}"
     
     async def close_file(self, name: str, line_start: int = None, line_end: int = None) -> str:
-        """Close a file from the file context."""
+        """Close a file from the file context.
+        
+        Args:
+            name: Filename to close
+            line_start: Optional specific line range start (unused - kept for API compat)
+            line_end: Optional specific line range end (unused - kept for API compat)
+        """
         session_id = self._get_session_id()
         
-        if line_start is not None or line_end is not None:
-            range_str = f"{line_start or 0}-{line_end or '*'}"
-            memory_type = f"open_file:{name}:{range_str}"
-            # Search for the specific memory entry to get its ID
-            memories = self._get_search_memories()(session_id, f"k:{memory_type}", limit=1)
-            if memories:
-                mem_id = memories[0].get("id")
-                if mem_id:
-                    self._get_delete_memory()(mem_id)
-                    return f"Closed {name} (lines {range_str})"
-            return f"File {name} (lines {range_str}) not in context"
-        else:
-            # Close all ranges for this file
-            # Note: wildcard in AND queries doesn't work reliably, so search by session
-            # and filter by filename pattern
-            memories = self._get_search_memories()(session_id, "", limit=100)
-            deleted_count = 0
-            for mem in memories:
-                keywords = mem.get("keywords", [])
-                # Match open_file:name:* patterns
-                if any(kw.startswith(f"open_file:{name}:") for kw in keywords):
-                    mem_id = mem.get("id")
-                    if mem_id and self._get_delete_memory()(mem_id):
-                        deleted_count += 1
-            
-            if deleted_count > 0:
-                return f"Closed {name} ({deleted_count} range(s))"
+        # Use the specific keyword for this file
+        keyword = make_open_file_keyword(name)
+        memories = self._get_search_memories()(session_id, keyword, limit=100)
+        
+        if not memories:
             return f"File {name} not in context"
+        
+        deleted_count = 0
+        for mem in memories:
+            mem_id = mem.get("id")
+            if mem_id and self._get_delete_memory()(mem_id):
+                deleted_count += 1
+        
+        if deleted_count > 0:
+            return f"Closed {name} ({deleted_count} entry)"
+        return f"File {name} not in context"
     
     async def close_all_files(self) -> str:
         """Close all files from the file context."""
         session_id = self._get_session_id()
-        memories = self._get_search_memories()(session_id, "k:open_file:*", limit=1000)
+        
+        # Search using property pattern (keyword doesn't support wildcards)
+        query = f"p:{PROP_FILENAME}=*"
+        memories = self._get_search_memories()(session_id, query, limit=1000)
         
         if not memories:
             return "No open files to close"
@@ -710,19 +726,16 @@ class FileEditor:
         except Exception as e:
             return EditResult(False, abs_path, f"Failed to delete: {e}")
         
-        # Clean up memory entries for this file
-        # Note: wildcard in AND queries doesn't work reliably, so search by session
-        # and filter by filename pattern
+        # Clean up memory entries for this file using property search
         session_id = self._get_session_id()
         filename = os.path.basename(abs_path)
-        memories = self._get_search_memories()(session_id, "", limit=100)
+        query = f"p:{PROP_FILENAME}={filename}"
+        memories = self._get_search_memories()(session_id, query, limit=100)
+        
         for mem in memories:
-            keywords = mem.get("keywords", [])
-            # Match open_file:filename:* patterns
-            if any(kw.startswith(f"open_file:{filename}:") for kw in keywords):
-                mem_id = mem.get("id")
-                if mem_id:
-                    self._get_delete_memory()(mem_id)
+            mem_id = mem.get("id")
+            if mem_id:
+                self._get_delete_memory()(mem_id)
         
         return EditResult(True, abs_path, f"Deleted {filename}", changed=True)
     
@@ -805,13 +818,14 @@ class FileEditor:
         
         result = '\n'.join(parts)
         
-        # Store in memory
-        memory_type = f"open_file:{filename}:{defn.memory_key}"
-        content_mem = f"open: {filename}:{defn.memory_key} ({defn.type})"
+        # Store in memory using unique keyword + properties
+        memory_type = make_open_file_keyword(filename)
+        content_mem = f"open: {filename} {defn.qualified_name} ({defn.type})"
         properties = {
-            "path": abs_path,
-            "line_start": str(defn.line_start),
-            "line_end": str(defn.line_end),
+            PROP_FILENAME: filename,
+            PROP_PATH: abs_path,
+            PROP_LINE_START: str(defn.line_start),
+            PROP_LINE_END: str(defn.line_end),
             "definition_name": defn.name,
             "definition_type": defn.type,
             "qualified_name": defn.qualified_name

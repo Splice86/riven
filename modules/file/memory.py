@@ -16,6 +16,12 @@ else:
     SetMemoryFunc = None
     SearchMemoriesFunc = None
 
+try:
+    from .constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword, build_search_query
+except ImportError:
+    # Running as standalone module
+    from constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword, build_search_query
+
 
 def _get_set_memory():
     """Lazy import to avoid circular dependencies."""
@@ -106,8 +112,12 @@ def get_open_files(session_id: str) -> list[dict]:
         
     Returns:
         List of memory entries for open files
+    
+    Search query: k:open_file: (prefix match for all open files)
+    The _search_memories builds: k:{session_id} AND k:open_file:
     """
-    return _get_search_memories()(session_id, "k:open_file:*", limit=100)
+    query = build_search_query()  # This now returns k:open_file:
+    return _get_search_memories()(session_id, query, limit=100)
 
 
 def get_file_history(session_id: str, path: str | None = None) -> list[dict]:

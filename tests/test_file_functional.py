@@ -22,6 +22,7 @@ from modules.file import (
     hash_content,
 )
 from modules.memory_utils import _search_memories, _delete_memory, _set_memory
+from modules.file.constants import PROP_FILENAME
 
 
 # =============================================================================
@@ -300,11 +301,9 @@ class TestOpenFile:
         assert "Python" in result
         assert "3 lines" in result
         
-        # Verify memory was stored - search by session_id only since open_file
-        # stores keyword as 'open_file:<filename>:<line_range>' which varies
-        memories = _search_memories(session_id, "", limit=10)
+        # Verify memory was stored - search by property (keyword supports wildcards in properties)
+        memories = _search_memories(session_id, f"p:{PROP_FILENAME}=test.py", limit=10)
         assert len(memories) >= 1
-        assert any("open_file:test.py" in kw for m in memories for kw in m.get('keywords', []))
 
     def test_open_file_tracks_in_database(self, editor, temp_dir, session_id):
         """open_file should store tracking info in database."""
@@ -321,7 +320,7 @@ class TestOpenFile:
         assert len(memories) >= 1
         assert any("track.py" in str(m.get('properties', {}).get('path', '')) for m in memories)
 
-    def test_open_file_with_line_range(self, editor, temp_dir):
+    def test_open_file_with_line_range(self, editor, temp_dir, session_id):
         """open_file should support line range specification."""
         file_path = os.path.join(temp_dir, "range.py")
         Path(file_path).write_text("\n".join([f"line {i}" for i in range(20)]))
@@ -633,9 +632,8 @@ class TestDeleteFile:
         
         asyncio.run(run())
         
-        # Verify memory entry exists - search by session and filter
-        memories_before = _search_memories(session_id, "", limit=10)
-        memories_before = [m for m in memories_before if any(kw.startswith(f"open_file:{filename}:") for kw in m.get('keywords', []))]
+        # Verify memory entry exists - search using property
+        memories_before = _search_memories(session_id, f"p:filename={filename}", limit=10)
         assert len(memories_before) >= 1
         
         async def run_delete():
@@ -644,8 +642,7 @@ class TestDeleteFile:
         asyncio.run(run_delete())
         
         # Verify memory entry was cleaned up
-        memories_after = _search_memories(session_id, "", limit=10)
-        memories_after = [m for m in memories_after if any(kw.startswith(f"open_file:{filename}:") for kw in m.get('keywords', []))]
+        memories_after = _search_memories(session_id, f"p:filename={filename}", limit=10)
         assert len(memories_after) == 0
 
     def test_delete_nonexistent_file(self, editor, temp_dir):
@@ -680,9 +677,8 @@ class TestCloseFile:
         
         asyncio.run(run())
         
-        # Verify memory entry exists - search by session and filter
-        memories_before = _search_memories(session_id, "", limit=10)
-        memories_before = [m for m in memories_before if any(kw.startswith(f"open_file:{filename}:") for kw in m.get('keywords', []))]
+        # Verify memory entry exists - search using property
+        memories_before = _search_memories(session_id, f"p:filename={filename}", limit=10)
         assert len(memories_before) >= 1
         
         async def run_close():
@@ -693,9 +689,8 @@ class TestCloseFile:
         
         assert "Closed" in result or "closed" in result.lower()
         
-        # Verify memory entry was cleaned up - search by session and filter
-        memories_after = _search_memories(session_id, "", limit=10)
-        memories_after = [m for m in memories_after if any(kw.startswith(f"open_file:{filename}:") for kw in m.get('keywords', []))]
+        # Verify memory entry was cleaned up - search using property
+        memories_after = _search_memories(session_id, f"p:filename={filename}", limit=10)
         assert len(memories_after) == 0
 
     def test_close_file_with_line_range(self, editor, temp_dir, session_id):
@@ -752,10 +747,9 @@ class TestCloseAllFiles:
         
         asyncio.run(run())
         
-        # Verify memories exist - search by session and filter
-        memories_before = _search_memories(session_id, "", limit=100)
-        open_memories = [m for m in memories_before if any(kw.startswith('open_file:') for kw in m.get('keywords', []))]
-        assert len(open_memories) == 2
+        # Verify memories exist - search using property
+        memories_before = _search_memories(session_id, "p:filename=*", limit=100)
+        assert len(memories_before) == 2
         
         async def run_close_all():
             result = await editor.close_all_files()
@@ -763,10 +757,9 @@ class TestCloseAllFiles:
         
         result = asyncio.run(run_close_all())
         
-        # Verify all memories were cleaned up - search by session and filter
-        memories_after = _search_memories(session_id, "", limit=100)
-        open_memories_after = [m for m in memories_after if any(kw.startswith('open_file:') for kw in m.get('keywords', []))]
-        assert len(open_memories_after) == 0
+        # Verify all memories were cleaned up - search using property
+        memories_after = _search_memories(session_id, "p:filename=*", limit=100)
+        assert len(memories_after) == 0
 
     def test_close_all_files_none_open(self, editor, temp_dir, session_id):
         """close_all_files should handle no open files."""
@@ -1072,9 +1065,8 @@ class TestEndToEndWorkflow:
             open_result = await editor.open_file(file_path)
             assert "lifecycle.txt" in open_result
             
-            # Verify memory was stored - search by session and filter
-            memories = _search_memories(session_id, "", limit=10)
-            memories = [m for m in memories if any(kw.startswith("open_file:lifecycle.txt:") for kw in m.get('keywords', []))]
+            # Verify memory was stored - search using property
+            memories = _search_memories(session_id, f"p:filename={filename}", limit=10)
             assert len(memories) >= 1
             
             # Step 3: Replace text
@@ -1090,9 +1082,8 @@ class TestEndToEndWorkflow:
             close_result = await editor.close_file(filename)
             assert "closed" in close_result.lower()
             
-            # Verify memory was cleaned up - search by session and filter
-            memories_after = _search_memories(session_id, "", limit=10)
-            memories_after = [m for m in memories_after if any(kw.startswith("open_file:lifecycle.txt:") for kw in m.get('keywords', []))]
+            # Verify memory was cleaned up - search using property
+            memories_after = _search_memories(session_id, f"p:filename={filename}", limit=10)
             assert len(memories_after) == 0
             
             return "All steps completed successfully"
@@ -1120,19 +1111,17 @@ class TestEndToEndWorkflow:
             for _, name in files:
                 assert name in list_result
             
-            # Verify all 3 memories exist - search by session and filter
-            all_memories = _search_memories(session_id, "", limit=100)
-            open_memories = [m for m in all_memories if any(kw.startswith('open_file:') for kw in m.get('keywords', []))]
-            assert len(open_memories) == 3
+            # Verify all 3 memories exist - search using property
+            all_memories = _search_memories(session_id, "p:filename=*", limit=100)
+            assert len(all_memories) == 3
             
             # Close all files
             close_result = await editor.close_all_files()
-            assert "3" in close_result or len(open_memories) == 3  # 3 files should be mentioned
+            assert "3" in close_result or len(all_memories) == 3  # 3 files should be mentioned
             
-            # Verify all memories were cleaned up - search by session and filter
-            memories_after = _search_memories(session_id, "", limit=100)
-            open_memories_after = [m for m in memories_after if any(kw.startswith('open_file:') for kw in m.get('keywords', []))]
-            assert len(open_memories_after) == 0
+            # Verify all memories were cleaned up - search using property
+            memories_after = _search_memories(session_id, "p:filename=*", limit=100)
+            assert len(memories_after) == 0
         
         asyncio.run(run())
 

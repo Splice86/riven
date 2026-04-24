@@ -40,7 +40,6 @@ from modules.file import (
     file_info,
     pwd,
     chdir,
-    read_file,
     list_open_files,
     get_file_history,
     file_context,
@@ -970,7 +969,8 @@ class TestModuleIntegration:
         assert "replace_text" in fn_names
         assert "batch_edit" in fn_names
         assert "close_file" in fn_names
-        assert "read_file" in fn_names
+        # read_file is intentionally NOT exposed - files should be opened via
+        # open_file() and contents will be injected via file_context()
 
     def test_module_function_descriptions(self):
         """Test that module functions have proper descriptions."""

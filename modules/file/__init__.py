@@ -56,6 +56,8 @@ from modules.file.memory import (
     track_file_change,
 )
 
+from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword, build_search_query, PROP_FILENAME, PROP_PATH, PROP_LINE_START, PROP_LINE_END
+
 
 # =============================================================================
 # File Editor Instance
@@ -170,11 +172,6 @@ async def chdir(path: str) -> str:
     return await _file_editor.chdir(path)
 
 
-async def read_file(path: str, line_start: int = None, line_end: int = None) -> str:
-    """Read a file and return its content."""
-    return _file_editor.read_file(path, line_start, line_end)
-
-
 async def list_open_files() -> str:
     """List all open files for current session."""
     return _file_editor.list_open_files()
@@ -196,23 +193,57 @@ async def get_file_history(path: str = None) -> str:
 
 
 def file_context() -> str:
-    """Context function that injects open file information."""
+    """Context function that injects open file information and contents.
+    
+    Reads the actual content of all open files from disk and formats them
+    for injection into the system prompt.
+    """
+    import os
+    
     session_id = get_session_id()
-    memories = _search_memories(session_id, "k:open_file:*", limit=100)
+    # Build search query using property keys from constants
+    query = build_search_query()
+    memories = _search_memories(session_id, query, limit=100)
     
     if not memories:
         return "No open files in context."
     
-    lines = ["Open Files:", ""]
+    sections = []
     for mem in memories:
         props = mem.get("properties", {})
-        path = props.get("path", "unknown")
-        line_start = props.get("line_start", "0")
-        line_end = props.get("line_end", "*")
-        filename = path.split("/")[-1] if "/" in path else path
-        lines.append(f"  {filename} (lines {line_start}-{line_end})")
+        path = props.get(PROP_PATH, "unknown")
+        line_start = int(props.get(PROP_LINE_START, 0))
+        line_end = props.get(PROP_LINE_END, None)
+        
+        # Read the actual file content
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                all_lines = f.readlines()
+            
+            # Handle line range
+            if line_end is None or line_end == "*" or line_end == "":
+                file_content = ''.join(all_lines[line_start:])
+            else:
+                line_end = int(line_end)
+                file_content = ''.join(all_lines[line_start:line_end])
+            
+            # Truncate very long content to avoid context overflow
+            MAX_LINES = 500
+            content_lines = file_content.split('\n')
+            if len(content_lines) > MAX_LINES:
+                file_content = '\n'.join(content_lines[:MAX_LINES])
+                file_content += f'\n[... content truncated at {MAX_LINES} lines ...]'
+            
+            filename = path.split("/")[-1] if "/" in path else path
+            lines_info = f"lines {line_start}-{line_end if line_end and line_end != '*' else 'end'}"
+            
+            sections.append(f"=== {filename} ({lines_info}) ===\n{file_content}")
+            
+        except Exception as e:
+            filename = path.split("/")[-1] if "/" in path else path
+            sections.append(f"=== {filename} ===\n[Error reading file: {e}]")
     
-    return "\n".join(lines)
+    return "\n\n".join(sections)
 
 
 # =============================================================================
@@ -441,20 +472,10 @@ def get_module() -> Module:
                 },
                 fn=chdir,
             ),
-            CalledFn(
-                name="read_file",
-                description="Read a file and return its content.\n\nArgs:\n- path: Path to the file\n- line_start: Start line (0-indexed, optional)\n- line_end: End line (optional)",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Path to the file"},
-                        "line_start": {"type": "integer", "description": "Start line"},
-                        "line_end": {"type": "integer", "description": "End line"}
-                    },
-                    "required": ["path"]
-                },
-                fn=read_file,
-            ),
+            # NOTE: read_file is intentionally not exposed as a tool.
+            # Files should be opened via open_file() and their contents
+            # will be automatically injected into the system prompt via file_context().
+            # This ensures consistent file context management.
         ],
         context_fns=[
             ContextFn(
@@ -489,7 +510,6 @@ __all__ = [
     "file_info",
     "pwd",
     "chdir",
-    "read_file",
     "list_open_files",
     "get_file_history",
     "file_context",
