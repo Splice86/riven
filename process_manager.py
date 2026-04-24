@@ -142,8 +142,8 @@ class Process:
             events = [e for e in events if e.timestamp > since]
         
         if last_only:
-            # Return only events since last poll (or since timestamp if provided)
-            pass  # already filtered above
+            # Return only events since last poll — filter out older ones
+            events = [e for e in events if e.timestamp > self._last_poll]
         
         for event in events:
             if event.type == "token" and messages:

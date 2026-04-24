@@ -4,6 +4,7 @@ Session ID is passed directly to Memory API - no session state stored here.
 The API is stateless; all conversation history lives in the Memory API.
 """
 
+import asyncio
 import glob
 import json
 import os
@@ -398,8 +399,9 @@ async def stream_process_output(
     if not proc:
         raise HTTPException(404, f"Process '{process_id}' not found")
     
-    async def event_generator():
-        seen_indices = set()
+    async def generate():
+        seen_count = 0
+        _debug(f"API: process_output/stream: starting for {process_id}")
         while not proc.is_done:
             events = proc.get_output(
                 messages=messages,
@@ -411,27 +413,21 @@ async def stream_process_output(
             
             # Yield only new events
             for i, event in enumerate(events):
-                if i >= len(seen_indices):
-                    yield {"event": "output", "data": json.dumps(event)}
-                    seen_indices.add(i)
+                if i >= seen_count:
+                    _debug(f"API: stream yielding event {i}: {event.get('type', '?')}")
+                    yield f"event: output\ndata: {json.dumps(event)}\n\n"
+                    seen_count = i + 1
             
             # Also yield status updates
-            yield {"event": "status", "data": json.dumps({"status": proc.status.value})}
+            yield f"event: status\ndata: {json.dumps({'status': proc.status.value})}\n\n"
             
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.25)
         
         # Final done event
-        yield {"event": "done", "data": json.dumps({"status": proc.status.value})}
+        _debug(f"API: process_output/stream: done for {process_id}")
+        yield f"event: done\ndata: {json.dumps({'status': proc.status.value})}\n\n"
     
-    async def sse_wrapper():
-        # Use streaming response
-        from starlette.responses import StreamingResponse
-        async def generate():
-            async for event in event_generator():
-                yield f"event: {event['event']}\ndata: {event['data']}\n\n"
-        return StreamingResponse(generate(), media_type="text/event-stream")
-    
-    return await sse_wrapper()
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/processes/{process_id}/input")

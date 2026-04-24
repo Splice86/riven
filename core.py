@@ -391,13 +391,14 @@ class Core:
             # --- Get current context from Memory API ---
             context_error = None
             _debug("run_stream: fetching history from memory API", session_id)
+            _mem_fetch_start = time.time()
             try:
                 history = memory.get_context(session=session_id)
-                _debug(f"run_stream: history received ({len(history)} messages)", session_id)
+                _debug(f"run_stream: history received ({len(history)} msgs, took {time.time()-_mem_fetch_start:.3f}s)", session_id)
             except requests.exceptions.ConnectionError as e:
                 context_error = str(e)
                 history = []
-                _debug(f"run_stream: Memory API connection failed: {context_error}", session_id)
+                _debug(f"run_stream: Memory API connection failed (took {time.time()-_mem_fetch_start:.3f}s): {context_error}", session_id)
                 error_msg = f"Memory API connection failed: {context_error}. Ensure memory-api is running at {self._memory_url or 'http://localhost:8030'}."
                 try:
                     memory.add_context("tool", error_msg, session=session_id)
@@ -408,7 +409,7 @@ class Core:
             except Exception as e:
                 context_error = str(e)
                 history = []
-                _debug(f"run_stream: Memory API error: {context_error}", session_id)
+                _debug(f"run_stream: Memory API error (took {time.time()-_mem_fetch_start:.3f}s): {context_error}", session_id)
                 error_msg = f"Memory API error: {context_error}"
                 try:
                     memory.add_context("tool", error_msg, session=session_id)
@@ -449,6 +450,7 @@ class Core:
             
             # --- Call LLM ---
             _debug("run_stream: calling LLM (streaming)", session_id)
+            _llm_start = time.time()
             try:
                 stream = await self._client.chat.completions.create(
                     model=self._llm_model,
@@ -469,8 +471,10 @@ class Core:
             # --- Collect the complete assistant message ---
             assistant_msg = {"tool_calls": []}
             _debug("run_stream: waiting for LLM stream chunks", session_id)
+            _chunk_count = 0
 
             async for chunk in stream:
+                _chunk_count += 1
                 if self._cancelled:
                     error_msg = f"Execution was cancelled by user. Session={session_id}"
                     try:
@@ -509,7 +513,7 @@ class Core:
                             if func_data.get('arguments'):
                                 tc["function"]["arguments"] += func_data['arguments']
 
-            _debug("run_stream: LLM stream complete", session_id)
+            _debug(f"run_stream: LLM stream complete ({_chunk_count} chunks, took {time.time()-_llm_start:.3f}s)", session_id)
             # --- Parse calls ---
             calls = self._parse_calls(assistant_msg)
 
@@ -557,8 +561,9 @@ class Core:
                     "arguments": call.arguments
                 }}
                 
+                _tool_exec_start = time.time()
                 result = await self._execute(call, func_index, session_id)
-                _debug(f"run_stream: tool '{call.name}' executed, error={result.error}", session_id)
+                _debug(f"run_stream: tool '{call.name}' executed ({time.time()-_tool_exec_start:.3f}s), error={result.error}", session_id)
                 results.append(result)
 
                 result_content = result.content if not result.error else f"ERROR: {result.error}"
@@ -571,6 +576,7 @@ class Core:
 
                 # Store tool result to memory API
                 _debug(f"run_stream: storing tool result to memory API", session_id)
+                _mem_store_start = time.time()
                 try:
                     memory.add_context(
                         "tool",
@@ -579,9 +585,9 @@ class Core:
                         tool_call_id=result.call_id,
                         function=result.name
                     )
+                    _debug(f"run_stream: tool result stored ({time.time()-_mem_store_start:.3f}s)", session_id)
                 except Exception as e:
                     logger.warning(f"Failed to store tool result to memory: {e}")
-                _debug("run_stream: tool result stored", session_id)
 
             # --- Yield assistant message ---
             safe_assistant_msg = _json_safe(assistant_msg)
