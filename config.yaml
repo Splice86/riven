@@ -14,6 +14,13 @@ memory_api:
   # Prepend [YYYY-MM-DD HH:MM] timestamp to context content
   include_timestamp: true
 
+# Context settings
+context:
+  # Max unsummarized messages to include in context
+  limit: 20
+  # Max top-level summaries to include (summaries summarize older messages)
+  max_summaries: 3
+
 # Named LLM configs (URLs here are templates, secrets in secrets.yaml)
 # Shards reference these by name: llm_config: primary
 llm:

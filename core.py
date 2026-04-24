@@ -313,8 +313,10 @@ class Core:
 
             # --- Get current context from Memory API ---
             context_error = None
+            context_limit = get('context.limit', 20)
+            context_max_summaries = get('context.max_summaries', 3)
             try:
-                history = memory.get_context(limit=100, session=session_id)
+                history = memory.get_context(limit=context_limit, max_summaries=context_max_summaries, session=session_id)
             except requests.exceptions.ConnectionError as e:
                 context_error = str(e)
                 history = []

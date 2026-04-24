@@ -96,12 +96,18 @@ class MemoryClient:
         resp.raise_for_status()
         return resp.json()
     
-    def get_context(self, limit: int = 100, session: str = None) -> list[dict]:
-        """Get conversation history from memory."""
+    def get_context(self, limit: int = 100, max_summaries: int = 3, session: str = None) -> list[dict]:
+        """Get conversation history from memory.
+        
+        Args:
+            limit: Max unsummarized messages to return
+            max_summaries: Max top-level summaries to include
+            session: Session ID
+        """
         session = session or self.session_id
         resp = requests.get(
             f"{self.base_url}/context",
-            params={"limit": limit, "session": session}
+            params={"limit": limit, "max_summaries": max_summaries, "session": session}
         )
         resp.raise_for_status()
         return resp.json().get("context", [])
