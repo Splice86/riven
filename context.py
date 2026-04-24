@@ -78,6 +78,9 @@ class MemoryClient:
     def __init__(self, base_url: str = None, session_id: str = None):
         self.base_url = base_url or get('memory_api.url')
         self.session_id = session_id
+        # Context settings from config
+        self._max_summaries = get('context.max_summaries', 3)
+        self._trigger_limit = get('context.trigger_limit', 40)
     
     def add_context(self, role: str, content: str, session: str = None,
                     tool_call_id: str = None, function: str = None) -> dict:
@@ -104,25 +107,26 @@ class MemoryClient:
         _debug(f"MEMORY: add_context({role}, {len(content)} chars)", session)
         resp = requests.post(
             f"{self.base_url}/context",
-            json=payload
+            json=payload,
+            params={"trigger_limit": self._trigger_limit}
         )
         _debug(f"MEMORY: add_context done", session)
         resp.raise_for_status()
         return resp.json()
     
-    def get_context(self, limit: int = 100, max_summaries: int = 3, session: str = None) -> list[dict]:
+    def get_context(self, max_summaries: int = None, session: str = None) -> list[dict]:
         """Get conversation history from memory.
         
         Args:
-            limit: Max unsummarized messages to return
-            max_summaries: Max top-level summaries to include
+            max_summaries: Max top-level summaries to include (default from config)
             session: Session ID
         """
         session = session or self.session_id
-        _debug(f"MEMORY: get_context(limit={limit}, max_summaries={max_summaries})", session)
+        effective_max_summaries = max_summaries if max_summaries is not None else self._max_summaries
+        _debug(f"MEMORY: get_context(max_summaries={effective_max_summaries})", session)
         resp = requests.get(
             f"{self.base_url}/context",
-            params={"limit": limit, "max_summaries": max_summaries, "session": session}
+            params={"max_summaries": effective_max_summaries, "session": session}
         )
         _debug(f"MEMORY: get_context done", session)
         resp.raise_for_status()
