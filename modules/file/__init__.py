@@ -234,8 +234,14 @@ Every file open consumes context space. LLM context windows are finite.
 ### Tool Reference
 
 **Opening & Closing:**
-- **open_file(path, line_start?, line_end?)** — Add file to context (only if not already open!).
+- **open_file(path, line_start?, line_end?)** — Add file to context.
   line_start is 0-indexed. Omit line_end to read to end of file.
+  Range validation rules:
+  - If the requested range is a SUBSET of an already-open range, it is REJECTED.
+    Read the file from context instead.
+  - If the requested range SUPERSETS or PARTIALLY OVERLAPS an existing range, the
+    existing entry is expanded to cover the union of both ranges.
+  - If the file is not open yet, it is added normally.
   IMPORTANT: If open_file fails with a git-tracking warning, call init_git_for_file(path) first.
 - **open_function(path, name, include_docstring?, include_decorators?)** — Extract a specific
   class/function using AST. Only works on .py files. Replaces the file's context entry with the
@@ -372,7 +378,7 @@ def get_module() -> Module:
         called_fns=[
             CalledFn(
                 name="open_file",
-                description="Open a file and add it to the file context. Returns file type and line count.\n\nArgs:\n- path: Path to the file to open\n- line_start: Start line for partial opening (0-indexed)\n- line_end: End line for partial opening (default: None = to end)",
+                description="Open a file and add it to the file context.\n\nRange validation:\n- Opening a range that is a subset of an already-open range is REJECTED (read from context).\n- Opening a range that supersets or overlaps an existing range EXPANDS the existing entry.\n\nArgs:\n- path: Path to the file to open\n- line_start: Start line for partial opening (0-indexed)\n- line_end: End line for partial opening (default: None = to end)",
                 parameters={
                     "type": "object",
                     "properties": {

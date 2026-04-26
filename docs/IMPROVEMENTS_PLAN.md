@@ -121,17 +121,4 @@
 - `tests/test_api.py`
 - `IMPROVEMENTS_PLAN.md`
 
----
 
-## Follow-up: Guard Against Re-opening Files Already in Context
-
-> **Status**: Deferred (not blocking — can be addressed after current help-text fix)
-
-**Problem**: The guidance says "if the file is already open with a wide range, just work with what's there." But the LLM may still call `open_file()` on a file that's already open, creating a duplicate entry in Memory API or wasting context. The guidance helps but doesn't enforce.
-
-**Fix options**:
-1. **`open_file()` guard**: When `open_file()` is called, check if the file is already tracked in Memory for this session. If so, return a message saying "file already open — read from context instead" instead of creating a duplicate entry.
-2. **Merge ranges**: If the file is already open with a narrower range, expand to the union of both ranges (or the new range if it's wider). This prevents duplicate entries while supporting range expansion.
-3. **`open_function()` guard**: Same logic — if the function is already open, return a message instead of replacing the entry unnecessarily.
-
-**Recommended approach**: Option 2 for `open_file()` (merge ranges), Option 1 for `open_function()` (block duplicates with a helpful message).

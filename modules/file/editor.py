@@ -318,11 +318,93 @@ class FileEditor:
     # Open/Close Operations
     # -------------------------------------------------------------------------
     
+    def _check_and_merge_open_range(
+        self,
+        session_id: str,
+        abs_path: str,
+        line_start: int,
+        line_end: int | None,
+    ) -> str | None:
+        """Check if a file is already open and validate/merge the range.
+        
+        Returns:
+            None   - no conflict, proceed normally
+            str    - rejection or merge message (caller should return it)
+        """
+        filename = os.path.basename(abs_path)
+        keyword = make_open_file_keyword(filename)
+        memories = self._get_search_memories()(session_id, keyword, limit=10)
+
+        for mem in memories:
+            props = mem.get("properties", {})
+            existing_path = props.get(PROP_PATH, "")
+            
+            # Only check entries for this exact path
+            if os.path.abspath(existing_path) != abs_path:
+                continue
+
+            existing_start = int(props.get(PROP_LINE_START, 0))
+            existing_end_raw = props.get(PROP_LINE_END, "*")
+            existing_end = None if existing_end_raw in ("*", "", None) else int(existing_end_raw)
+
+            # Normalize None end to infinity for comparison
+            existing_end_inf = float('inf') if existing_end is None else existing_end
+            new_end_inf = float('inf') if line_end is None else line_end
+
+            # Case 1: new range is entirely inside existing range -> reject
+            if existing_start <= line_start and new_end_inf <= existing_end_inf:
+                return (
+                    f"{filename} is already open with lines {existing_start}-"
+                    f"{'end' if existing_end is None else existing_end}. "
+                    f"That range fully covers lines {line_start}-"
+                    f"{'end' if line_end is None else line_end}. "
+                    f"Read the file from context — do NOT call open_file() again."
+                )
+
+            # Case 2: new range overlaps or extends existing range -> merge
+            if not (existing_start > new_end_inf or line_start > existing_end_inf):
+                merged_start = min(existing_start, line_start)
+                merged_end = max(existing_end_inf, new_end_inf)
+                merged_end_str = "*" if merged_end == float('inf') else str(int(merged_end))
+                existing_mem_id = mem.get("id")
+
+                # Update the existing entry with merged range
+                if existing_mem_id:
+                    self._get_delete_memory()(existing_mem_id)
+
+                new_keyword = make_open_file_keyword(filename)
+                existing_git_hash = props.get("git_hash", "*")
+                new_content = f"open: {filename} [{merged_start}-{merged_end_str}]"
+                new_properties = {
+                    PROP_FILENAME: filename,
+                    PROP_PATH: abs_path,
+                    PROP_LINE_START: str(merged_start),
+                    PROP_LINE_END: merged_end_str,
+                    "git_hash": existing_git_hash,
+                }
+                self._get_set_memory()(session_id, new_keyword, new_content, new_properties)
+
+                if merged_end == float('inf'):
+                    return (
+                        f"{filename} is already open (lines {existing_start}-"
+                        f"{'end' if existing_end is None else existing_end}). "
+                        f"Range expanded to lines {merged_start}-end."
+                    )
+                return (
+                    f"{filename} is already open (lines {existing_start}-"
+                    f"{'end' if existing_end is None else existing_end}). "
+                    f"Range expanded to lines {merged_start}-{int(merged_end)}."
+                )
+
+        return None
+
     async def open_file(self, path: str, line_start: int = None, line_end: int = None) -> str:
         """Open a file and add it to the file context.
         
         Fails with an actionable warning if the file is not git-tracked,
         because safe file editing (automatic rollback) requires git.
+        Rejects opening a range that is a subset of an already-open range.
+        Merges or expands when a superset/partial overlap is requested.
         """
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
@@ -339,6 +421,13 @@ class FileEditor:
         
         line_start = line_start if line_start is not None else 0
         line_end_str = str(line_end) if line_end is not None else "*"
+        
+        # Guard: reject subsets, merge/superset overlaps
+        guard_result = self._check_and_merge_open_range(
+            session_id, abs_path, line_start, line_end
+        )
+        if guard_result is not None:
+            return guard_result
         
         # Capture git hash at open time for conflict detection
         git_hash = _get_git_hash(abs_path)
