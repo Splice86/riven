@@ -355,6 +355,18 @@ def get_module() -> Module:
                 fn=open_function,
             ),
             CalledFn(
+                name="init_git_for_file",
+                description="Initialize git tracking for a file to enable safe rollback.\\n\\nRun this when open_file fails with a git-tracking warning.\\nIt will git init (if needed), git add, and git commit the file.\\n\\nArgs:\\n- path: Path to the file to track with git",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file to track with git"}
+                    },
+                    "required": ["path"]
+                },
+                fn=init_git_for_file,
+            ),
+            CalledFn(
                 name="replace_text",
                 description="Replace text in an open file using fuzzy matching. Auto-saves the file.\n\nArgs:\n- path: Path to the file\n- old_text: Text to find and replace\n- new_text: Replacement text\n- threshold: Minimum Jaro-Winkler similarity (default: 0.95)",
                 parameters={
@@ -569,6 +581,7 @@ __all__ = [
     "CodeDefinition",
     "DefinitionExtractor",
     # Functions
+    "init_git_for_file",
     "open_file",
     "close_file",
     "close_all_files",
