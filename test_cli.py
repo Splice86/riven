@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Test CLI for riven_core.
 
-Sends a message to the Riven API as a streaming background request,
-writes output to a file in real-time, and prints the PID so you can
+Sends a message to the Riven API via the process API, spawns a process,
+streams output to a file in real-time, and prints the PID so you can
 track whether it's still running.
 
 Usage:

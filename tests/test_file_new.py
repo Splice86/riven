@@ -12,6 +12,7 @@ and mock memory functions where needed for session-specific behavior.
 
 import ast
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -71,24 +72,28 @@ from modules.memory_utils import _set_memory, _search_memories, _delete_memory
 
 @pytest.fixture
 def temp_dir():
-    """Create a temp directory that gets cleaned up."""
+    """Create a temp directory that gets cleaned up, with git initialised."""
     with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(['git', 'init'], cwd=tmpdir, capture_output=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@test.com'], cwd=tmpdir, capture_output=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=tmpdir, capture_output=True)
         yield tmpdir
 
 
 @pytest.fixture
 def temp_file(temp_dir):
-    """Create a temp file with some content."""
+    """Create a temp file with some content, tracked by git."""
     path = os.path.join(temp_dir, "test.txt")
     content = "line 1\nline 2\nline 3\nline 4\nline 5\n"
     with open(path, 'w') as f:
         f.write(content)
+    subprocess.run(['git', 'add', path], cwd=temp_dir, capture_output=True)
     return path
 
 
 @pytest.fixture
 def temp_py_file(temp_dir):
-    """Create a temp Python file for testing."""
+    """Create a temp Python file for testing, tracked by git."""
     path = os.path.join(temp_dir, "test_module.py")
     content = '''"""Test module for unit tests."""
 
@@ -113,6 +118,7 @@ def goodbye():
 '''
     with open(path, 'w') as f:
         f.write(content)
+    subprocess.run(['git', 'add', path], cwd=temp_dir, capture_output=True)
     return path
 
 
@@ -986,7 +992,7 @@ class TestModuleIntegration:
         module = get_module()
         
         context_fn_names = [fn.tag for fn in module.context_fns]
-        assert "open_files" in context_fn_names
+        assert "file" in context_fn_names
 
     def test_all_exports_present(self):
         """Test that __all__ exports are all available."""

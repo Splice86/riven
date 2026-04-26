@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Stream worker - runs as a subprocess to stream output to a file.
+"""Stream worker — runs as a subprocess to stream process output to a file.
+
+Uses the new process API:
+1. POST /processes to spawn a process
+2. GET /processes/{id}/output/stream to stream SSE output
 
 Do not run this directly. Use test_cli.py instead.
 """
@@ -15,31 +19,50 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--message", required=True)
-    parser.add_argument("--session", required=True)
-    parser.add_argument("--shard", default="default")
+    parser.add_argument("--session", required=True, help="Process ID (session)")
+    parser.add_argument("--shard", default="codehammer")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
     output_file = open(args.output, "w", buffering=1)  # line-buffered
+    base = args.api_url
 
-    payload = json.dumps({
-        "message": args.message,
-        "session_id": args.session,
+    # Step 1: Spawn the process via the new process API
+    spawn_payload = json.dumps({
         "shard_name": args.shard,
-        "stream": True,
+        "message": args.message,
+        "process_id": args.session,
     }).encode("utf-8")
 
-    req = urllib.request.Request(
-        f"{args.api_url}/api/v1/messages",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-        },
+    spawn_req = urllib.request.Request(
+        f"{base}/processes",
+        data=spawn_payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
 
-    # Accumulate thinking so we can flush it as one block
+    try:
+        with urllib.request.urlopen(spawn_req, timeout=10) as resp:
+            spawn_data = json.loads(resp.read())
+            process_id = spawn_data["process_id"]
+            output_file.write(f"[Spawned] id={process_id} shard={args.shard} status={spawn_data.get('status', '?')}\n")
+            output_file.flush()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        output_file.write(f"[SPAWN ERROR {e.code}] {body}\n")
+        output_file.flush()
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        output_file.write(f"[CONNECTION ERROR on spawn] {e.reason}\n")
+        output_file.flush()
+        sys.exit(1)
+
+    # Step 2: Stream output from the process
+    stream_req = urllib.request.Request(
+        f"{base}/processes/{process_id}/output/stream",
+        headers={"Accept": "text/event-stream"},
+    )
+
     thinking_buf = ""
 
     def flush_thinking():
@@ -50,7 +73,7 @@ def main():
             thinking_buf = ""
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(stream_req, timeout=300) as resp:
             for line in resp:
                 line = line.decode("utf-8", errors="replace")
                 if not line.startswith("data: "):
@@ -65,66 +88,53 @@ def main():
                     output_file.flush()
                     continue
 
-                # Buffer thinking content
-                if "thinking" in event:
-                    thinking_buf += event["thinking"]
-                    continue
+                etype = event.get("type")
 
-                # Non-thinking event arrived - flush thinking first, then handle
-                flush_thinking()
-
-                # Write token
-                if "token" in event:
-                    output_file.write(event["token"])
+                if etype == "token":
+                    output_file.write(event.get("content", ""))
                     output_file.flush()
-
-                # Write tool call
-                elif "tool_call" in event:
-                    tc = event["tool_call"]
+                elif etype == "thinking":
+                    thinking_buf += event.get("content", "")
+                elif etype == "tool_call":
+                    flush_thinking()
+                    tc = event.get("content", {})
+                    args_str = tc.get("arguments", {}) if isinstance(tc, dict) else {}
+                    name = tc.get("name", "?") if isinstance(tc, dict) else "?"
                     output_file.write(
-                        f"\n[call] {tc.get('name', '?')}({json.dumps(tc.get('arguments', {}))})"
-                        f" [id={tc.get('id', '?')}]\n"
+                        f"\n[call] {name}({json.dumps(args_str) if isinstance(args_str, dict) else args_str})\n"
                     )
                     output_file.flush()
-
-                # Write tool result
-                elif "tool_result" in event:
-                    tr = event["tool_result"]
-                    if tr.get("error"):
-                        output_file.write(
-                            f"[result ERROR: {tr['error']}] {tr.get('content', '')}\n"
-                        )
-                    else:
-                        output_file.write(f"[result] {tr.get('content', '')}\n")
-                    output_file.flush()
-
-                # Write error
-                elif "error" in event:
-                    output_file.write(f"\n[ERROR] {event['error']}\n")
-                    output_file.flush()
-
-                # Done - flush any remaining thinking
-                elif "done" in event:
+                elif etype == "tool_result":
                     flush_thinking()
-                    output_file.write("\n[done]\n")
+                    tr = event.get("content", {})
+                    if isinstance(tr, dict):
+                        if tr.get("error"):
+                            output_file.write(f"[result ERROR: {tr['error']}] {tr.get('content', '')}\n")
+                        else:
+                            output_file.write(f"[result] {tr.get('content', '')}\n")
+                    else:
+                        output_file.write(f"[result] {tr}\n")
                     output_file.flush()
+                elif etype == "error":
+                    flush_thinking()
+                    output_file.write(f"\n[ERROR] {event.get('content', event)}\n")
+                    output_file.flush()
+                elif etype in ("status", "done"):
+                    flush_thinking()
+                    if etype == "done":
+                        output_file.write(f"\n[done] status={event.get('status', 'done')}\n")
+                        output_file.flush()
+                        return
 
     except urllib.error.HTTPError as e:
-        output_file.write(f"\n[HTTP ERROR {e.code}] {e.reason}\n")
-        output_file.flush()
-        try:
-            body = e.read().decode("utf-8", errors="replace")
-            output_file.write(f"{body}\n")
-        except Exception:
-            pass
+        body = e.read().decode("utf-8", errors="replace")
+        output_file.write(f"\n[HTTP ERROR {e.code}] {body}\n")
         output_file.flush()
         sys.exit(1)
-
     except urllib.error.URLError as e:
         output_file.write(f"\n[CONNECTION ERROR] {e.reason}\n")
         output_file.flush()
         sys.exit(1)
-
     finally:
         flush_thinking()
         output_file.close()

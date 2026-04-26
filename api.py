@@ -135,7 +135,7 @@ async def send_message(req: MessageRequest):
 
     Session ID is passed directly to Memory API for context retrieval.
     No session state is stored in this API.
-    
+
     The harness controls the agent loop: after each LLM turn, if tools were
     executed and context was rebuilt, it calls run_stream() again for the next turn.
     """
@@ -168,7 +168,7 @@ async def send_message(req: MessageRequest):
                 while True:
                     turn_count += 1
                     _debug(f"API: starting turn {turn_count}", req.session_id)
-                    
+
                     # Use a generator variable to ensure proper cleanup
                     generator = core.run_stream(req.session_id)
                     async for event in generator:
@@ -268,11 +268,47 @@ class ProcessOutputParams:
 def list_processes(
     shard_name: str = None,
     status: str = None,
+    action: str = None,
 ):
-    """List all processes, optionally filtered."""
+    """List processes, or perform an action.
+    
+    Actions:
+        action=discover   Return shard list (same info as old /api/v1/shards)
+    """
+    # Shard discovery via the new process API
+    if action == "discover":
+        shards = []
+        for filepath in _shard_files():
+            with open(filepath) as f:
+                data = yaml.safe_load(f)
+                if data and "name" in data:
+                    name = data.get("name")
+                    llm_cfg = data.get("llm_config", "primary")
+                    llm_info = {}
+                    if llm_cfg in get("llm", {}):
+                        llm_info = {
+                            "config_name": llm_cfg,
+                            "model": get(f"llm.{llm_cfg}.model"),
+                            "url": get(f"llm.{llm_cfg}.url"),
+                        }
+                    shards.append({
+                        "name": name,
+                        "display_name": data.get("display_name", name),
+                        "description": data.get("description", ""),
+                        "modules": data.get("modules", []),
+                        "llm_config": llm_info,
+                        "system": (data.get("system", "") or "")[:200] + "..."
+                            if len((data.get("system") or "")) > 200
+                            else (data.get("system") or ""),
+                    })
+        return {
+            "shards": shards,
+            "default_shard": get("default_shard", "codehammer"),
+        }
+
     status_enum = ProcessStatus(status) if status else None
     procs = process_manager.list(shard_name=shard_name, status=status_enum)
-    
+
     return {
         "processes": [
             {
@@ -291,9 +327,9 @@ def list_processes(
 
 
 @app.post("/processes")
-def spawn_process(req: Request):
+async def spawn_process(req: Request):
     """Spawn a new process."""
-    body = req.json()
+    body = await req.json()
     
     shard_name = body.get("shard_name")
     if not shard_name:
@@ -431,20 +467,22 @@ async def stream_process_output(
 
 
 @app.post("/processes/{process_id}/input")
-def send_process_message(process_id: str, req: Request):
+async def send_process_message(process_id: str, req: Request):
     """Send a message to a process.
     
     Only works if process is in idle state (waiting for input after context_rebuilt).
     """
+    body = await req.json()
+    message = body.get("message")
+    if not message:
+        raise HTTPException(400, "message is required")
+    
     proc = process_manager.get(process_id)
     if not proc:
         raise HTTPException(404, f"Process '{process_id}' not found")
     
     if proc.status != ProcessStatus.IDLE:
         raise HTTPException(409, f"Process is {proc.status.value}, not idle")
-    
-    body = req.json()
-    message = body.get("message")
     if not message:
         raise HTTPException(400, "message is required")
     
@@ -463,7 +501,7 @@ def stop_process(process_id: str):
         raise HTTPException(404, f"Process '{process_id}' not found")
     
     process_manager.stop(process_id)
-    return {"status": "ok", "process_id": process_id, "status": ProcessStatus.STOPPED.value}
+    return {"ok": True, "process_id": process_id, "stopped_status": ProcessStatus.STOPPED.value}
 
 
 @app.delete("/processes/{process_id}/cleanup")

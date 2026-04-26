@@ -108,7 +108,8 @@ class MemoryClient:
         resp = requests.post(
             f"{self.base_url}/context",
             json=payload,
-            params={"trigger_limit": self._trigger_limit}
+            params={"trigger_limit": self._trigger_limit},
+            timeout=30,  # 30s timeout to prevent hangs
         )
         _debug(f"MEMORY: add_context done", session)
         resp.raise_for_status()
@@ -126,7 +127,8 @@ class MemoryClient:
         _debug(f"MEMORY: get_context(max_summaries={effective_max_summaries})", session)
         resp = requests.get(
             f"{self.base_url}/context",
-            params={"max_summaries": effective_max_summaries, "session": session}
+            params={"max_summaries": effective_max_summaries, "session": session},
+            timeout=30,  # 30s timeout to prevent hangs
         )
         _debug(f"MEMORY: get_context done", session)
         resp.raise_for_status()

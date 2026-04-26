@@ -133,7 +133,10 @@ class Process:
         Returns:
             List of filtered event dicts
         """
-        self._last_poll = time.time()
+        # Only update _last_poll if last_only=False; otherwise preserve the
+        # caller-set value so it can be used as the cutoff timestamp.
+        if not last_only:
+            self._last_poll = time.time()
         
         output = []
         events = self._events

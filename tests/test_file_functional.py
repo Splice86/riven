@@ -7,6 +7,7 @@ Tests are designed to validate session-based file tracking and database integrat
 import asyncio
 import hashlib
 import os
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -26,13 +27,32 @@ from modules.file.constants import PROP_FILENAME
 
 
 # =============================================================================
+# Test Helpers
+# =============================================================================
+
+def _init_git_repo(temp_dir: str) -> None:
+    """Init a git repo in temp_dir so file operations can succeed."""
+    subprocess.run(['git', 'init'], cwd=temp_dir, capture_output=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@test.com'], cwd=temp_dir, capture_output=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=temp_dir, capture_output=True)
+    subprocess.run(['git', 'add', '.'], cwd=temp_dir, capture_output=True)
+
+
+# =============================================================================
 # Test Fixtures
 # =============================================================================
 
 @pytest.fixture
 def temp_dir():
-    """Create a temporary directory for test files."""
+    """Create a temporary directory for test files, with git already initialised.
+
+    Most file operations (open_file, etc.) require a git repo for safe rollback.
+    Initialising it here means individual tests don't need to repeat this setup.
+    """
     with tempfile.TemporaryDirectory() as td:
+        subprocess.run(['git', 'init'], cwd=td, capture_output=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@test.com'], cwd=td, capture_output=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=td, capture_output=True)
         yield td
 
 
@@ -291,16 +311,17 @@ class TestOpenFile:
         """open_file should return file type and line count."""
         file_path = os.path.join(temp_dir, "test.py")
         Path(file_path).write_text("line1\nline2\nline3")
-        
+        _init_git_repo(temp_dir)
+
         async def run():
             result = await editor.open_file(file_path)
             return result
-        
+
         result = asyncio.run(run())
-        
+
         assert "Python" in result
         assert "3 lines" in result
-        
+
         # Verify memory was stored - search by property (keyword supports wildcards in properties)
         memories = _search_memories(session_id, f"p:{PROP_FILENAME}=test.py", limit=10)
         assert len(memories) >= 1
@@ -309,12 +330,13 @@ class TestOpenFile:
         """open_file should store tracking info in database."""
         file_path = os.path.join(temp_dir, "track.py")
         Path(file_path).write_text("code line 1\ncode line 2")
-        
+        _init_git_repo(temp_dir)
+
         async def run():
             await editor.open_file(file_path)
-        
+
         asyncio.run(run())
-        
+
         # Verify memory was stored - search by session and filter for track.py
         memories = _search_memories(session_id, "", limit=10)
         assert len(memories) >= 1
@@ -324,13 +346,14 @@ class TestOpenFile:
         """open_file should support line range specification."""
         file_path = os.path.join(temp_dir, "range.py")
         Path(file_path).write_text("\n".join([f"line {i}" for i in range(20)]))
-        
+        _init_git_repo(temp_dir)
+
         async def run():
             result = await editor.open_file(file_path, line_start=5, line_end=10)
             return result
-        
+
         result = asyncio.run(run())
-        
+
         assert "lines 5-10" in result
 
     def test_open_nonexistent_file_returns_error(self, editor, temp_dir):
@@ -350,13 +373,14 @@ class TestOpenFile:
         file_path = os.path.join(temp_dir, "large.py")
         # Create a file with more than 1000 lines
         Path(file_path).write_text("\n".join([f"# line {i}" for i in range(1500)]))
-        
+        _init_git_repo(temp_dir)
+
         async def run():
             result = await editor.open_file(file_path)
             return result
-        
+
         result = asyncio.run(run())
-        
+
         assert "LARGE" in result
 
 
@@ -626,6 +650,8 @@ class TestDeleteFile:
         filename = "cleanup.txt"
         Path(file_path).write_text("Content")
         
+        _init_git_repo(temp_dir)
+
         async def run():
             # First open the file to create a memory entry
             await editor.open_file(file_path)
@@ -670,17 +696,19 @@ class TestCloseFile:
         filename = "close_test.txt"
         file_path = os.path.join(temp_dir, filename)
         Path(file_path).write_text("Content")
-        
+
+        _init_git_repo(temp_dir)
+
         async def run():
             # First open the file to create a memory entry
             await editor.open_file(file_path)
-        
+
         asyncio.run(run())
-        
+
         # Verify memory entry exists - search using property
         memories_before = _search_memories(session_id, f"p:filename={filename}", limit=10)
         assert len(memories_before) >= 1
-        
+
         async def run_close():
             result = await editor.close_file(filename)
             return result
@@ -740,6 +768,8 @@ class TestCloseAllFiles:
             Path(file_path).write_text(f"Content of {name}")
             files.append((file_path, name))
         
+        _init_git_repo(temp_dir)
+
         async def run():
             # Open all files
             for path, _ in files:
@@ -788,10 +818,12 @@ class TestListOpenFiles:
             Path(file_path).write_text(f"# content of {name}")
             files.append(file_path)
         
+        _init_git_repo(temp_dir)
+
         async def run():
             for path in files:
                 await editor.open_file(path)
-        
+
         asyncio.run(run())
         
         result = editor.list_open_files()
@@ -1055,39 +1087,39 @@ class TestEndToEndWorkflow:
         """Test complete file lifecycle: create -> open -> edit -> close -> delete."""
         file_path = os.path.join(temp_dir, "lifecycle.txt")
         filename = "lifecycle.txt"
-        
+
+        # Create file and stage it in git before async run
+        Path(file_path).write_text("Initial content")
+        _init_git_repo(temp_dir)  # git add . stages the created file
+
         async def run():
-            # Step 1: Create file
-            await editor.write_text(file_path, "Initial content")
-            assert os.path.exists(file_path)
-            
             # Step 2: Open file
             open_result = await editor.open_file(file_path)
             assert "lifecycle.txt" in open_result
-            
+
             # Verify memory was stored - search using property
             memories = _search_memories(session_id, f"p:filename={filename}", limit=10)
             assert len(memories) >= 1
-            
+
             # Step 3: Replace text
             replace_result = await editor.replace_text(file_path, "Initial", "Modified")
             assert "success" in replace_result.lower() or "modified" in replace_result.lower()
-            
+
             # Verify content was changed
             with open(file_path) as f:
                 content = f.read()
             assert "Modified content" in content
-            
+
             # Step 4: Close file
             close_result = await editor.close_file(filename)
             assert "closed" in close_result.lower()
-            
+
             # Verify memory was cleaned up - search using property
             memories_after = _search_memories(session_id, f"p:filename={filename}", limit=10)
             assert len(memories_after) == 0
-            
+
             return "All steps completed successfully"
-        
+
         result = asyncio.run(run())
         assert result == "All steps completed successfully"
 
@@ -1099,6 +1131,8 @@ class TestEndToEndWorkflow:
             Path(file_path).write_text(f"Content {i}")
             files.append((file_path, f"file_{i}.txt"))
         
+        _init_git_repo(temp_dir)
+
         async def run():
             # Open all files
             for path, name in files:
