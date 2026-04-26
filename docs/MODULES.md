@@ -2,7 +2,7 @@
 
 | Module | Called Functions (Tools) | Static Tag | Dynamic Tag |
 |--------|--------------------------|------------|-------------|
-| **file** | `open_file`, `replace_text`, `close_file`, `close_all_files`, `file_info` | `{file_help}` | `{file}` |
+| **file** | `open_file`, `close_file`, `close_all_files`, `replace_text`, `batch_edit`, `delete_snippet`, `write_text`, `delete_file`, `open_function`, `restore_from_git`, `preview_replace`, `diff_text`, `search_files`, `list_dir`, `pwd`, `chdir`, `list_open_files`, `get_file_history`, `file_info` | `{file_help}` | `{file}` |
 | **shell** | `run`, `run_background`, `kill`, `cd`, `get_cwd`, `which` | `{shell_help}` | `{shell}` |
 | **memory** | `search_memories`, `add_memory`, `get_memory`, `list_memories`, `get_memory_stats`, `add_link`, `delete_memory`, `update_memory`, `execute_sql` | `{memory_help}` | — |
 | **time** | — (context only) | — | `{time}` |
@@ -17,14 +17,28 @@
 
 ### file module
 
-> Manages open files in context. Files are tracked in Memory API and actual content is injected via `{file}`.
+> Manages open files in context. Files are tracked in Memory API and actual content is injected via `{file}`. Git tracking is required before opening files to enable safe rollback.
 
 | Function | Description | Parameters |
 |----------|-------------|------------|
 | `open_file` | Open a file and add to context | `path`, `line_start?`, `line_end?` |
-| `replace_text` | Fuzzy-match text replacement (auto-saves) | `path`, `old_text`, `new_text` |
-| `close_file` | Close a specific file/range | `filename`, `line_start?`, `line_end?` |
+| `close_file` | Close a specific file/range | `name`, `line_start?`, `line_end?` |
 | `close_all_files` | Close all open files | _(none)_ |
+| `replace_text` | Fuzzy-match text replacement (auto-saves) | `path`, `old_text`, `new_text`, `threshold?` |
+| `batch_edit` | Multiple replacements in one file | `path`, `replacements[]` |
+| `delete_snippet` | Fuzzy-match delete (auto-saves) | `path`, `snippet`, `threshold?` |
+| `write_text` | Write or overwrite a file | `path`, `content`, `create_parent_dirs?` |
+| `delete_file` | Delete a file | `path` |
+| `open_function` | Open a specific function in a file | `path`, `function_name` |
+| `restore_from_git` | Restore file to last git commit | `path` |
+| `preview_replace` | Preview replacement without modifying | `path`, `old_text`, `threshold?` |
+| `diff_text` | Show before/after diff without modifying | `path`, `old_text`, `new_text`, `threshold?` |
+| `search_files` | Recursive file search by glob pattern | `pattern`, `path?` |
+| `list_dir` | List directory contents | `path?` |
+| `pwd` | Print working directory | _(none)_ |
+| `chdir` | Change working directory | `path` |
+| `list_open_files` | List currently open files | _(none)_ |
+| `get_file_history` | Get file operation history | `path?` |
 | `file_info` | Get file metadata | `path` |
 
 **Context Output:** Lists all open files with their actual content, file context stats
@@ -130,6 +144,9 @@ modules:
   - web        # {web_help} (static)
   - planning   # {planning_help} (static), {planning} (dynamic)
 
+# shards/testhammer.yaml — runs tests, validates code
+# shards/scribe.yaml       — writes documentation
+
 system: |
   ## Context (Static - cacheable)
   
@@ -148,4 +165,4 @@ system: |
   {time}  # Bottom - always changes
 ```
 
-**Convention:** Static context (`_help`) goes at TOP of prompt (cacheable). Dynamic context (`_context`) goes AFTER statics. `{time}` always at bottom since it changes every call.
+**Convention:** Static context (`_help`) goes at TOP of prompt (cacheable). Dynamic context goes AFTER statics. `{time}` always at bottom since it changes every call.

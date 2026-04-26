@@ -19,11 +19,12 @@ system: |
   You are CodeHammer. No fluff. Just clean code.
 
 modules:
-  - file      # Provides {file} context
-  - shell     # Provides {shell} context
-  - memory    # Provides {memory} context
-  - time      # Provides {time} context
-  - web       # Provides {web} context
+  - file      # Provides {file_help} (static), {file} (dynamic)
+  - shell     # Provides {shell_help} (static), {shell} (dynamic)
+  - memory    # Provides {memory_help} (static only)
+  - time      # Provides {time} (dynamic only)
+  - web       # Provides {web_help} (static)
+  - planning  # Provides {planning_help} (static), {planning} (dynamic)
 
 tool_timeout: 60
 max_function_calls: 20
@@ -50,7 +51,7 @@ Each module provides two things:
 ### The Context Function Pattern
 
 ```python
-def _open_files_context() -> str:
+def file_context() -> str:
     """Context function that returns open files content."""
     session_id = get_session_id()
     memories = _search_memories(session_id, "k:file")
@@ -58,7 +59,7 @@ def _open_files_context() -> str:
     return context_string
 ```
 
-When the system prompt contains `{file}`, the Core calls `_open_files_context()` and substitutes the result.
+When the system prompt contains `{file}`, the Core calls `file_context()` and substitutes the result.
 
 ---
 
@@ -95,7 +96,7 @@ LLM sees: "=== file.py [lines 50-100] ===\n<actual content>"
    requests.post(f"{MEMORY_API_URL}/memories", json=payload)
    ```
 
-2. **`_open_files_context()`** reads from Memory API:
+2. **`file_context()`** reads from Memory API:
    ```python
    memories = _search_memories(session_id, "k:file")
    for mem in memories:
@@ -137,12 +138,12 @@ Instead of repeating information, use references:
 
 ```
 System: "Fix the bug in the currently open file."
-{files}: "=== api.py ===\n<actual code>"
+{file}: "=== api.py ===\n<actual code>"
 Conversation: "User: fix the bug"
 Tool: "Opened api.py"
 ```
 
-The LLM learns to look at `{files}` rather than expecting file content to be repeated.
+The LLM learns to look at `{file}` rather than expecting file content to be repeated.
 
 #### Strategy 2: Tool Results as Ground Truth
 
@@ -188,9 +189,10 @@ This is handled by the Memory API's `/context` endpoint with the `summarize` par
    └─ Core loads modules (file, shell, memory, time, web)
    
 3. Core builds system prompt
-   └─ {file} → _open_files_context() → actual file content
+   └─ {file} → file_context() → actual file content
    └─ {shell} → current directory + available commands
-   └─ {memory} → recent memories and search tips
+   └─ {memory_help} → memory tool documentation (static)
+   └─ {planning} → active goals with linked files
    └─ {time} → current time
    └─ {web} → web tool documentation
 

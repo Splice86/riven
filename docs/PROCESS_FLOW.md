@@ -138,39 +138,19 @@ Next iteration:
 | GET | `/context` | Fetch history + context for session |
 | GET | `/context/state` | Fetch just context data (not history) |
 
-## Current Implementation Issues
+## Implementation Status
 
-### Issue 1: Mid-Run vs. Fetch Cycle
+### ✅ Issue 1: Mid-Run vs. Fetch Cycle
 
-Current flow stores to Memory during run, but local_messages keeps growing without re-fetching:
+Context functions already read from Memory API on each iteration. `file_context()` calls `_search_memories()` every time, so file state is always fresh. No local accumulation of context state.
 
-```
-Iteration 1: history=[user] → local_messages=[user] → call LLM
-Iteration 2: history=[user] → local_messages=[user, tool, assistant] → call LLM
-```
+### ⚠️ Issue 2: Context Storage
 
-This works for conversation history, but if TOOL modifies context that affects `context_fns`, the next iteration's `_build_context()` still runs fresh context functions - which may read from Memory.
+Tool results are stored to Memory, but the **output of context functions is not stored separately**. Context is rebuilt fresh each iteration from Memory and the file system — this works because all context sources (open files, goals, cwd) are backed by Memory.
 
-**Fix needed**: Ensure context functions can read from Memory API to get tool-modified state.
+### ⚠️ Issue 3: Assistant Message with tool_calls
 
-### Issue 2: Context Storage
-
-Currently we only store:
-- User messages (pre-core)
-- Tool results (during run)
-- Assistant messages (during run)
-
-But we DON'T store the output of `context_fns` to Memory. If a tool modifies context that affects future context_fns output, we need to persist that.
-
-**Fix needed**: After tool execution, if context was modified, store the new context state to Memory.
-
-### Issue 3: Assistant Message with tool_calls
-
-Storing assistant messages with `tool_calls` field may cause serialization issues or confusion on re-fetch.
-
-**Current**: `{"role": "assistant", "content": "...", "tool_calls": [...]}`
-
-**Better**: Store separately or normalize on fetch.
+Assisted messages with `tool_calls` are stored as-is to Memory API. The LLM re-fetches them on subsequent iterations. This is acceptable in practice but could be normalized.
 
 ## Proposed Solution
 
@@ -223,8 +203,8 @@ On each LLM call iteration:
 
 ## TODO
 
-- [ ] Implement context state storage to Memory API
-- [ ] Update context functions to optionally read from Memory
-- [ ] Verify fetch pattern on each LLM call iteration
-- [ ] Test tool call modifying context → next LLM call sees update
-- [ ] Document any changes to Memory API if needed
+- [ ] Consider normalizing assistant messages with `tool_calls` on re-fetch
+- [ ] Add unit test: tool call modifies context → next LLM call sees update
+- [ ] Add unit test: verify fetch pattern on each LLM call iteration
+
+> **Deferred**: Explicit context state storage to Memory API — not needed since context functions rebuild from Memory + file system each turn. Current design is sufficient.

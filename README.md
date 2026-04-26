@@ -187,21 +187,27 @@ riven_core/
 ├── config.yaml        # Default config
 ├── secrets.yaml       # API keys (gitignored)
 ├── context.py         # Context manager + memory client
+├── process_manager.py # Process management for core instances
 ├── _stream_worker.py  # Streaming utilities
 ├── killcheck.py       # Process cleanup helpers
+├── test_cli.py        # CLI process launcher
+├── __main__.py        # CLI entry point
 ├── shards/
 │   ├── codehammer.yaml  # The coding shard config
 │   ├── scribe.yaml      # Documentation shard
 │   └── testhammer.yaml  # Testing shard
-├── modules/
-│   ├── file/          # File tracking & editing (package)
-│   ├── file.py        # File module entry point
-│   ├── shell.py       # Command execution
-│   ├── memory.py      # Memory API client
-│   ├── memory_utils.py    # Memory API utilities
-│   ├── planning.py    # Goal tracking
-│   ├── shards.py      # Shard loading & execution
-│   ├── time.py        # Timestamp context
-│   └── web.py         # Web fetching
-└── tests/             # Test suite
+└── modules/
+    ├── file/          # File tracking & editing (package)
+    │   ├── __init__.py     # File module entry point
+    │   ├── editor.py       # FileEditor + all edit tools
+    │   ├── memory.py       # File memory search helpers
+    │   ├── context.py      # File context functions
+    │   ├── git.py          # Git helpers
+    │   └── constants.py    # File operation constants
+    ├── shell.py       # Command execution
+    ├── memory.py      # Memory API client
+    ├── memory_utils.py    # Memory API utilities
+    ├── planning.py    # Goal tracking
+    ├── time.py        # Timestamp context
+    └── web.py         # Web fetching
 ```

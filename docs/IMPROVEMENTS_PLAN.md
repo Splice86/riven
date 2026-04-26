@@ -1,6 +1,6 @@
 # Riven Core — Improvement Plan
 
-## Status: COMPLETE (all actionable items fixed)
+## Status: COMPLETE (all actionable items fixed, outstanding items documented below)
 
 ## Issues Found & Fixed
 
@@ -75,20 +75,20 @@
 
 ## Items NOT Fixed (documented as non-issues or low-priority)
 
-### 11. ⬜ Magic numbers in `truncate_tool_result` (200, 150)
+### 11. Magic numbers in `truncate_tool_result` (200, 150)
 - **Location**: `context.py` `ContextManager.__init__`
 - **Note**: These are reasonable defaults. Could be made configurable via config.yaml if desired.
 - **Decision**: Left as-is — not a bug, just a potential future config improvement.
 
-### 12. ⬜ `aclose()` on async generator
-- **Location**: `api.py` `generate()` 
+### 12. `aclose()` on async generator
+- **Location**: `api.py` `generate()`
 - **Note**: `aclose()` is Python 3.11+. Project uses Python 3.13, so no issue.
 - **Decision**: Left as-is — acceptable given Python version.
 
-### 13. ⬜ Non-streaming mode loop behavior
+### 13. Non-streaming mode loop behavior
 - **Location**: `api.py`, non-streaming path
-- **Note**: When `context_rebuilt` fires, `break` falls through to `return` — outer `while True` never loops. This may be intentional (single-turn non-streaming).
-- **Decision**: Left as-is — needs verification with actual harness behavior.
+- **Status**: Verified — single-turn non-streaming is intentional behavior. Harness sends one message per request, so `break` → `return` is correct. The outer `while True` exists for streaming multi-turn sessions.
+- **Decision**: Closed as intentional.
 
 ### 14. ⬜ `__pycache__` in modules/
 - **Status**: Already covered by `.gitignore`
