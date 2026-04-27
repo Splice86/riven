@@ -24,7 +24,7 @@
   - `core.py` error message hardcoded `port 8030`
 - **Fix**: 
   - Removed `debug_dir` from `codehammer.yaml` (now from config.yaml)
-  - `core.py` uses `os.path.dirname(__file__)` for relative resolution
+  - `core.py` uses `os.path.expanduser()` to resolve `~/.riven/logs` to home directory
   - Error message now uses actual `memory_url`
   - `context.py` `ContextManager` resolves relative paths to absolute using `Path(__file__).parent`
   - `config.yaml` now has `debug_dir` and `debug_snapshots` settings

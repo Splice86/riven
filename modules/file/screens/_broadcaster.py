@@ -266,6 +266,9 @@ async def broadcast_release_for_path(path: str) -> int:
             count += 1
         else:
             logger.warning(f"[Screens] Failed to notify screen {screen.uid} of close")
-    logger.debug(f"[Screens] broadcast_release_for_path: {path} → {count} screen(s)")
+    if count > 0:
+        logger.info(f"[Screens] Released {count} screen(s) for closed file: {path}")
+    else:
+        logger.debug(f"[Screens] broadcast_release_for_path: {path} → 0 screens (no match in registry)")
     return count
 

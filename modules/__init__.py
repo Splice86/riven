@@ -18,7 +18,7 @@ import time as _stdlib_time  # noqa: E402 - alias to avoid collision with module
 _session_id: ContextVar[str] = ContextVar('session_id', default='')
 
 # High-level debug flag
-DEBUG_HANG = True
+DEBUG_HANG = False
 
 def _debug(step: str, session_id: str = None) -> None:
     """Print timestamped debug messages to trace execution flow."""

@@ -158,14 +158,18 @@ async def screen_stream(ws: WebSocket):
                     path = msg.get("path", "")
                     section = msg.get("section", "")
                     try:
-                        bound_screen = await bc.bind(screen, path, section)
-                        if bound_screen:
+                        ok = await registry.bind(screen.uid, path, section)
+                        if ok:
+                            # Re-fetch screen so bound_* fields are up to date
+                            screen = await registry.get(screen.uid)
                             await ws.send_text(json.dumps({
                                 "type": "bound",
                                 "path": path,
                                 "section": section,
-                                "version": bound_screen.bound_version,
+                                "version": screen.bound_version,
                             }))
+                            # Push content immediately so screen doesn't need a refresh
+                            await bc.send_snapshot(screen)
                         else:
                             await ws.send_text(json.dumps({
                                 "type": "error", "message": "Failed to bind to file", "status": "error"

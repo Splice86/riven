@@ -3,7 +3,6 @@
 Called by Riven via the tool interface. All state is in-memory
 via the registry — no DB needed.
 """
-
 from __future__ import annotations
 
 import logging
@@ -55,8 +54,17 @@ async def screen_bind(
     # Record binding in memory so broadcast can find it by path
     track_screen_bound(session_id, path, screen_uid)
 
-    # Send snapshot to the screen
+    # Re-fetch so bound_* fields are current, then notify the client
+    # (bound message sets currentPath so the client is in a consistent state
+    # before the snapshot arrives)
     screen = await registry.get(screen_uid)
+    if screen:
+        await bc.broadcast_bind(screen)  # → client sets currentPath + setFilePath
+        await bc.send_snapshot(screen)   # → client renders content
+        # Update the shared SnapshotStore so subsequent diffs use this as the
+        # baseline instead of an empty store
+        abs_path = os.path.abspath(path)
+        bc.snapshots.update(abs_path, screen.bound_version)
     if screen:
         await bc.send_snapshot(screen)
         # Update the shared SnapshotStore so subsequent diffs use this as the baseline

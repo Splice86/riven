@@ -67,6 +67,20 @@ from modules.file.memory import (
     track_file_change,
 )
 
+# Screen subsystem
+from modules.file.screens import (
+    screen_list,
+    screen_bind,
+    screen_bind_section,
+    screen_release,
+    screen_status,
+    broadcast_edit,
+    send_snapshot_to_uid,
+    register_routes as _register_screen_routes,
+)
+from modules.file.screens.constants import MEMORY_KEYWORD_PREFIX as SCREEN_KW_PREFIX
+from modules.file.screens import constants as _screen_const
+
 from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword, build_search_query, PROP_FILENAME, PROP_PATH, PROP_LINE_START, PROP_LINE_END
 
 
@@ -75,6 +89,77 @@ from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword
 # =============================================================================
 
 _file_editor = FileEditor()
+
+
+async def _broadcast_after_edit(path: str, session_id: str = "") -> None:
+    """Broadcast a file edit to bound screens.
+
+    Called after every successful edit. Errors are swallowed so they never
+    interfere with the edit operation.
+    """
+    if not session_id:
+        return
+    try:
+        from modules.file.memory import get_screen_uids_for_path
+        from modules.file.screens import broadcast_edit as _bc
+        uids = get_screen_uids_for_path(session_id, path)
+        if uids:
+            await _bc(path, uids)
+    except Exception as e:
+        import logging
+        logging.getLogger("modules.file").warning(f"Screen broadcast error: {e}")
+
+
+async def _broadcast_after_close(path: str, session_id: str = "") -> None:
+    """Broadcast a file close to screens bound to that path.
+
+    Called after a file is closed so screens can clear their content and go idle.
+    Errors are swallowed so they never interfere with the close operation.
+    """
+    if not session_id:
+        return
+    try:
+        from modules.file.screens import broadcast_release_for_path as _br
+        # Normalize path so it matches what was stored during open/screen_bind
+        abs_path = os.path.abspath(path)
+        await _br(abs_path)
+    except Exception as e:
+        import logging
+        logging.getLogger("modules.file").warning(f"Screen close broadcast error: {e}")
+
+
+async def _broadcast_after_open(path: str, session_id: str = "") -> None:
+    """Broadcast a file open to screens already bound to that path.
+
+    Called after a file is opened so any screen already watching the file
+    receives the current content. Errors are swallowed silently.
+    """
+    if not session_id:
+        return
+    try:
+        from modules.file.screens import send_snapshots_for_path as _ss
+        # Normalize path so it matches what was stored during open/screen_bind
+        abs_path = os.path.abspath(path)
+        await _ss(abs_path)
+    except Exception as e:
+        import logging
+        logging.getLogger("modules.file").warning(f"Screen open broadcast error: {e}")
+
+
+def register_routes(app) -> None:
+    """Register all file module routes (including screens) with the FastAPI app."""
+    from fastapi.staticfiles import StaticFiles
+    import os
+
+    # Mount static files for screen.html
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_dir):
+        app.mount("/static/file", StaticFiles(directory=static_dir), name="file_static")
+
+    # Screen WebSocket and HTTP routes
+    from modules.file.screens import register_routes as _sr
+    _sr(app)
+    # Screen broadcasting is enabled lazily on first edit
 
 
 # =============================================================================
@@ -289,7 +374,19 @@ Every file open consumes context space. LLM context windows are finite.
 3. If open_file() fails with a git-tracking warning, call init_git_for_file() first
 4. open_file() only files you will actively edit/read in the next few steps
 5. For large Python files, prefer open_function() over open_file() with wide line ranges
-6. As soon as you finish a task or switch goals, close_file() the now-irrelevant files"""
+6. As soon as you finish a task or switch goals, close_file() the now-irrelevant files
+
+### Screen Broadcasts (Live File View)
+Screens are remote clients (e.g., a workshop monitor) that show a live view of the file
+being edited. Bind screens to files to broadcast edits in real-time:
+- **screen_list()** — See all registered screens for this session
+- **screen_bind(path, screen_uid, section?)** — Bind a screen to a file (full snapshot + live diffs)
+- **screen_bind_section(path, screen_uid, start, end)** — Bind to a specific line range
+- **screen_release(screen_uid)** — Stop broadcasts for a screen
+- **screen_status(screen_uid)** — Check detailed screen state
+
+Screens connect via WebSocket at: ws://host/module/file/screens/stream
+They reconnect automatically and restore their binding from DB."""
 
 
 def file_context() -> str:
@@ -620,6 +717,65 @@ def get_module() -> Module:
                 },
                 fn=chdir,
             ),
+            CalledFn(
+                name="screen_list",
+                description="List all screens registered to this Riven session.\n\nShows screen UIDs, binding status, and online/offline state.\nUse screen_bind() to bind a screen to a file for live edit broadcasts.",
+                parameters={"type": "object", "properties": {}},
+                fn=screen_list,
+            ),
+            CalledFn(
+                name="screen_bind",
+                description="Bind a screen to a file for live edit broadcasts.\n\nOnce bound, the screen receives a full file snapshot, then incremental diffs\non every edit. The screen will remain bound until explicitly released.\n\nArgs:\n- path: Path to the file\n- screen_uid: UID of the screen to bind (from screen_list())\n- section: Optional line range (e.g., '0-30') for partial view",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "screen_uid": {"type": "string", "description": "Screen UID from screen_list()"},
+                        "section": {"type": "string", "description": "Line range (e.g., '0-30') or None for full file"}
+                    },
+                    "required": ["path", "screen_uid"]
+                },
+                fn=screen_bind,
+            ),
+            CalledFn(
+                name="screen_bind_section",
+                description="Bind a screen to a specific line range of a file.\n\nArgs:\n- path: Path to the file\n- screen_uid: UID of the screen to bind\n- start: Start line (0-indexed)\n- end: End line (exclusive)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "screen_uid": {"type": "string", "description": "Screen UID"},
+                        "start": {"type": "integer", "description": "Start line (0-indexed)"},
+                        "end": {"type": "integer", "description": "End line (exclusive)"}
+                    },
+                    "required": ["path", "screen_uid", "start", "end"]
+                },
+                fn=screen_bind_section,
+            ),
+            CalledFn(
+                name="screen_release",
+                description="Release a screen from its current binding.\n\nArgs:\n- screen_uid: UID of the screen to release",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "screen_uid": {"type": "string", "description": "Screen UID"}
+                    },
+                    "required": ["screen_uid"]
+                },
+                fn=screen_release,
+            ),
+            CalledFn(
+                name="screen_status",
+                description="Get detailed status for a specific screen.\n\nArgs:\n- screen_uid: UID of the screen to check",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "screen_uid": {"type": "string", "description": "Screen UID"}
+                    },
+                    "required": ["screen_uid"]
+                },
+                fn=screen_status,
+            ),
             # NOTE: read_file is intentionally not exposed as a tool.
             # Files should be opened via open_file() and their contents
             # will be automatically injected into the system prompt via file_context().
@@ -646,7 +802,7 @@ __all__ = [
     "Replacement",
     "CodeDefinition",
     "DefinitionExtractor",
-    # Functions
+    # File functions
     "init_git_for_file",
     "open_file",
     "close_file",
@@ -693,4 +849,15 @@ __all__ = [
     "_git_status",
     "_git_warning",
     "_git_status_summary",
+    # Screen broadcast functions
+    "screen_list",
+    "screen_bind",
+    "screen_bind_section",
+    "screen_release",
+    "screen_status",
+    "broadcast_edit",
+    "send_snapshot_to_uid",
+    "_ensure_screen_broadcast",
+    "_broadcast_after_edit",
+    "_screen_broadcast_initialized",
 ]

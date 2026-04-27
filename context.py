@@ -17,7 +17,7 @@ import requests
 from config import get
 
 # High-level debug flag
-DEBUG_HANG = True
+DEBUG_HANG = False
 
 def _debug(step: str, session_id: str = None) -> None:
     """Print timestamped debug messages to trace execution flow."""
@@ -378,16 +378,15 @@ class ContextManager:
                     msg['name'] = msg['function']
                     del msg['function']
 
-            # Guard: ensure non-tool messages never have empty/missing content
-            # MiniMax returns 400 "zero-length document" if content is "" or absent
+            # Guard: ensure no message ever has empty/missing content
+            # MiniMax returns 400 "zero-length document" if content is "" or absent for any role
             role = msg.get('role', 'unknown')
-            if role not in ('tool', 'system'):
-                content = msg.get('content')
-                if content is None:
-                    _debug(f"sanitize: WARNING message [{role}] has content=None, setting to ''", None)
-                    msg['content'] = ''
-                elif content == '':
-                    _debug(f"sanitize: WARNING message [{role}] has empty content (tool-call-only?) role={role}", None)
-                    # Keep as '' — empty string is safer than None for MiniMax
+            content = msg.get('content')
+            if content is None:
+                _debug(f"sanitize: WARNING message [{role}] has content=None, setting to '(no output)'", None)
+                msg['content'] = '(no output)'
+            elif content == '':
+                _debug(f"sanitize: WARNING message [{role}] has empty content, setting to '(no output)'", None)
+                msg['content'] = '(no output)'
 
         return api_messages

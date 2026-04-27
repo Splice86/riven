@@ -117,8 +117,16 @@ class Replacement:
 # Robustness Helpers
 # =============================================================================
 
-def _atomic_write(path: str, content: str) -> None:
-    """Write content atomically using temp file + rename."""
+async def _atomic_write(path: str, content: str, session_id: str = "", after_write=None) -> None:
+    """Write content atomically using temp file + rename.
+
+    Args:
+        path: File path to write to
+        content: Full file content as string
+        session_id: Current session ID, passed to after_write callback
+        after_write: Optional async callable(path, session_id) called after successful write.
+                     Used by the file module to broadcast edits to screens.
+    """
     dir_path = os.path.dirname(path) or '.'
     fd, temp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp')
     try:
@@ -129,6 +137,17 @@ def _atomic_write(path: str, content: str) -> None:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
         raise
+
+    # Broadcast to screens after the write succeeds
+    if after_write is not None:
+        try:
+            await after_write(path, session_id)
+        except Exception:
+            # Never let broadcast errors affect the edit result
+            import logging
+            logging.getLogger("modules.file.editor").warning(
+                f"Screen broadcast after_write failed"
+            )
 
 
 def _sanitize_content(content: str) -> str:
@@ -515,24 +534,57 @@ class FileEditor:
         if total_lines != "?" and total_lines > 1000:
             large_warning = " [!LARGE FILE - consider using line_start/line_end to limit scope]"
         
+        # Notify any screens already bound to this path
+        try:
+            from modules.file import _broadcast_after_open as _bo
+            await _bo(abs_path, session_id)
+        except Exception:
+            pass
+        
         return f"Opened {filename} ({file_type_str}, {total_lines} lines){line_info}{large_warning}"
     
     async def close_file(self, name: str, line_start: int = None, line_end: int = None) -> str:
         """Close a file from the file context.
         
         Args:
-            name: Filename to close
+            name: Filename to close (can be full path or just filename — normalized automatically)
             line_start: Optional specific line range start (unused - kept for API compat)
             line_end: Optional specific line range end (unused - kept for API compat)
         """
         session_id = self._get_session_id()
         
-        # Use the specific keyword for this file
-        keyword = make_open_file_keyword(name)
+        # Normalize name to absolute path, then extract filename for keyword lookup.
+        # This ensures close_file(path) and open_file(path) use the same keyword
+        # regardless of whether the path is passed as ./file.py, file.py, or /abs/path.py
+        abs_path = os.path.abspath(os.path.expanduser(name))
+        filename = os.path.basename(abs_path)
+        keyword = make_open_file_keyword(filename)
         memories = self._get_search_memories()(session_id, keyword, limit=100)
         
         if not memories:
-            return f"File {name} not in context"
+            return f"File {name} not in context (checked as {filename})"
+        
+        # Collect paths before deleting memories
+        closed_paths = set()
+        for mem in memories:
+            props = mem.get("properties", {})
+            if isinstance(props, dict):
+                closed_paths.add(props.get(PROP_PATH, ""))
+            elif isinstance(props, list):
+                for p in props:
+                    if isinstance(p, dict) and p.get("key") == PROP_PATH:
+                        closed_paths.add(p.get("value", ""))
+        closed_paths.discard("")
+        
+        # Broadcast close to all screens watching these paths BEFORE deleting memory
+        # (get_screen_uids_for_path needs the memory entries to be present)
+        if closed_paths:
+            try:
+                from modules.file import _broadcast_after_close as _bc
+                for path in closed_paths:
+                    await _bc(path, session_id)
+            except Exception:
+                pass
         
         deleted_count = 0
         for mem in memories:
@@ -554,6 +606,28 @@ class FileEditor:
         
         if not memories:
             return "No open files to close"
+        
+        # Collect paths before deleting
+        closed_paths = set()
+        for mem in memories:
+            props = mem.get("properties", {})
+            if isinstance(props, dict):
+                closed_paths.add(props.get(PROP_PATH, ""))
+            elif isinstance(props, list):
+                for p in props:
+                    if isinstance(p, dict) and p.get("key") == PROP_PATH:
+                        closed_paths.add(p.get("value", ""))
+        closed_paths.discard("")
+        
+        # Broadcast close to all screens watching closed paths BEFORE deleting memory
+        # (get_screen_uids_for_path needs the memory entries to be present)
+        if closed_paths:
+            try:
+                from modules.file import _broadcast_after_close as _bc
+                for path in closed_paths:
+                    await _bc(path, session_id)
+            except Exception:
+                pass
         
         count = 0
         for mem in memories:
@@ -686,13 +760,12 @@ class FileEditor:
             if not is_valid:
                 return f"Syntax validation failed: {syntax_error}"
         
+        session_id = self._get_session_id()
         try:
-            _atomic_write(abs_path, new_content)
+            from modules.file import _broadcast_after_edit as _bc
+            await _atomic_write(abs_path, new_content, session_id, _bc)
         except Exception as e:
             return f"Error writing {abs_path}: {e}"
-        
-        # Track change in memory
-        session_id = self._get_session_id()
         diff = _generate_diff(abs_path, lines, new_content.splitlines(keepends=True))
         track_file_change(session_id, abs_path, "replace_text", diff)
         
@@ -780,15 +853,14 @@ class FileEditor:
                     syntax_error=syntax_error
                 )
         
+        session_id = self._get_session_id()
         diff = _generate_diff(abs_path, original_lines, final_content.splitlines(keepends=True))
         
         try:
-            _atomic_write(abs_path, final_content)
+            from modules.file import _broadcast_after_edit as _bc
+            await _atomic_write(abs_path, final_content, session_id, _bc)
         except Exception as e:
             return EditResult(False, abs_path, f"Failed to write: {e}")
-        
-        # Track change
-        session_id = self._get_session_id()
         track_file_change(session_id, abs_path, f"batch_edit({len(replacements)})", diff)
         
         return EditResult(
@@ -848,15 +920,14 @@ class FileEditor:
             # Clean up double newlines
             modified = modified.replace('\n\n\n', '\n')
         
+        session_id = self._get_session_id()
         diff = _generate_diff(abs_path, original_lines, modified.splitlines(keepends=True))
         
         try:
-            _atomic_write(abs_path, modified)
+            from modules.file import _broadcast_after_edit as _bc
+            await _atomic_write(abs_path, modified, session_id, _bc)
         except Exception as e:
             return EditResult(False, abs_path, f"Failed to write: {e}")
-        
-        # Track change
-        session_id = self._get_session_id()
         track_file_change(session_id, abs_path, "delete_snippet", diff)
         
         return EditResult(
@@ -885,8 +956,10 @@ class FileEditor:
             if parent and not os.path.exists(parent):
                 os.makedirs(parent)
         
+        session_id = self._get_session_id()
         try:
-            _atomic_write(abs_path, content)
+            from modules.file import _broadcast_after_edit as _bc
+            await _atomic_write(abs_path, content, session_id, _bc)
         except Exception as e:
             return f"Error writing {abs_path}: {e}"
         

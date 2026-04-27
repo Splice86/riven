@@ -27,7 +27,7 @@ from modules import CalledFn, ContextFn, Module
 from config import get
 
 # High-level debug flag
-DEBUG_HANG = True
+DEBUG_HANG = False
 
 def _debug(step: str) -> None:
     """Print timestamped debug messages to trace execution flow."""

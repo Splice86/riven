@@ -102,6 +102,7 @@ PROP_FILENAME = "filename"
 PROP_PATH = "path"
 PROP_LINE_START = "line_start"
 PROP_LINE_END = "line_end"
+PROP_SCREEN_UIDS = "screen_uids"
 
 
 # =============================================================================

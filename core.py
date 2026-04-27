@@ -37,7 +37,7 @@ from modules import registry, Module, CalledFn, ContextFn, _session_id
 logger = logging.getLogger(__name__)
 
 # High-level debug flag - set to True to enable trace prints
-DEBUG_HANG = True
+DEBUG_HANG = False
 
 def _debug(step: str, session_id: str = None) -> None:
     """Print timestamped debug messages to trace execution flow."""
@@ -301,13 +301,19 @@ class Core:
         """Save the full LLM request context to a timestamped file.
         
         Saves to debug_dir as JSON with metadata. Useful for tracing and debugging
-        what was actually sent to the LLM.
+        what was actually sent to the LLM. Respects debug_snapshots flag.
         """
-        debug_dir = get('debug_dir', 'context_logs')
+        # Check debug_snapshots flag first - if false, skip saving entirely
+        debug_snapshots = get('debug_snapshots', False)
+        if not debug_snapshots:
+            return
+        
+        debug_dir = get('debug_dir', '~/.riven/logs')
         if not debug_dir:
             return
         
-        # Create debug dir if it doesn't exist
+        # Expand ~ to home directory and create debug dir if it doesn't exist
+        debug_dir = os.path.expanduser(debug_dir)
         try:
             os.makedirs(debug_dir, exist_ok=True)
         except OSError:

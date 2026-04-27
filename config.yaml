@@ -66,5 +66,5 @@ modules:
   - web
 
 # Debug settings
-debug_dir: "context_logs"
+debug_dir: "~/.riven/logs"
 debug_snapshots: false

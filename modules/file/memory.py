@@ -26,11 +26,6 @@ except ImportError:
     from constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword, build_search_query
 
 
-def _get_set_memory():
-    """Lazy import to avoid circular dependencies."""
-    from modules.memory_utils import _set_memory
-    return _set_memory
-
 
 def _get_search_memories():
     """Lazy import to avoid circular dependencies.

@@ -103,7 +103,6 @@ modules:
   - file       # {file_help} (static), {file} (dynamic)
   - memory     # {memory_help} (static)
   - web        # {web_help} (static)
-  - motd       # POST /module/motd/, post_motd tool for remote screen broadcast
   - planning   # {planning_help} (static), {planning} (dynamic)
   - shards     # {shards_help} (static), {shards_context} (dynamic)
 

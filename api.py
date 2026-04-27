@@ -23,7 +23,7 @@ from core import Core
 from config import get_llm_config, get
 
 # High-level debug flag
-DEBUG_HANG = True
+DEBUG_HANG = False
 
 def _debug(step: str, session_id: str = None) -> None:
     """Print timestamped debug messages to trace execution flow."""
@@ -111,9 +111,9 @@ def _load_shard(shard_name: str) -> dict:
             "max_function_calls": get("max_function_calls", 20),
         }
         available = sorted(os.path.basename(f)[:-5] for f in _shard_files())
-        print(f"[WARNING] Shard '{shard_name}' not found (no YAML matches). Using config defaults. Available: {available}", flush=True)
+        pass  # Shard fallback handled silently
     else:
-        print(f"[INFO] Shard '{shard_name}' loaded (modules={shard.get('modules', [])})", flush=True)
+        pass  # Shard loaded silently
 
     # Ensure memory_api is always set from config (even if shard file doesn't have it)
     shard.setdefault("memory_api", {
@@ -544,9 +544,9 @@ def _discover_modules():
             mod = importlib.import_module(f"modules.{name}")
             if hasattr(mod, "register_routes"):
                 discovered.append(name)
-                print(f"[INFO] Auto-registering routes from modules.{name}")
+                pass  # Module discovery logged silently
         except Exception as e:
-            print(f"[WARNING] Could not load modules.{name}: {e}")
+            pass  # Module load failure handled silently
 
     return discovered
 
@@ -558,11 +558,12 @@ def _register_module_routes(app, module_name: str):
         mod.register_routes(app)
         return True
     except Exception as e:
-        print(f"[WARNING] modules.{module_name}.register_routes failed: {e}")
+        pass  # Route registration failure handled silently
         return False
 
 
 # Discover and register all module routes at startup
+# (modules.file auto-includes screen WebSocket routes via its register_routes)
 _registered_modules = _discover_modules()
 for name in _registered_modules:
     _register_module_routes(app, name)

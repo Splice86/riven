@@ -1,5 +1,7 @@
 # Riven CodeHammer
 
+
+
 A focused coding assistant that keeps working context **live in the system prompt** instead of relying on conversation history. This eliminates duplicate data, reduces token usage, and keeps the LLM focused.
 
 ---
