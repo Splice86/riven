@@ -81,9 +81,9 @@ _file_editor = FileEditor()
 # Forwarding Functions (connect FileEditor to CalledFn interface)
 # =============================================================================
 
-async def open_file(path: str, line_start: int = None, line_end: int = None) -> str:
+async def open_file(path: str, line_start: int = None, line_end: int = None, allow_untracked: bool = False) -> str:
     """Open a file and add it to the file context."""
-    return await _file_editor.open_file(path, line_start, line_end)
+    return await _file_editor.open_file(path, line_start, line_end, allow_untracked)
 
 
 async def close_file(name: str, line_start: int = None, line_end: int = None) -> str:
@@ -234,15 +234,17 @@ Every file open consumes context space. LLM context windows are finite.
 ### Tool Reference
 
 **Opening & Closing:**
-- **open_file(path, line_start?, line_end?)** — Add file to context.
+- **open_file(path, line_start?, line_end?, allow_untracked?)** — Add file to context.
   line_start is 0-indexed. Omit line_end to read to end of file.
-  Range validation rules:
+  allow_untracked (default: False) bypasses the git-tracking gate — rollback protection
+  will be disabled for that file. Range validation rules:
   - If the requested range is a SUBSET of an already-open range, it is REJECTED.
     Read the file from context instead.
   - If the requested range SUPERSETS or PARTIALLY OVERLAPS an existing range, the
     existing entry is expanded to cover the union of both ranges.
   - If the file is not open yet, it is added normally.
-  IMPORTANT: If open_file fails with a git-tracking warning, call init_git_for_file(path) first.
+  IMPORTANT: If open_file fails with a git-tracking warning, call init_git_for_file(path) first,
+  or re-call with allow_untracked=True to proceed without rollback protection.
 - **open_function(path, name, include_docstring?, include_decorators?)** — Extract a specific
   class/function using AST. Only works on .py files. Replaces the file's context entry with the
   function's definition. If name not found, returns a list of available definitions.
@@ -384,7 +386,8 @@ def get_module() -> Module:
                     "properties": {
                         "path": {"type": "string", "description": "Path to the file to open"},
                         "line_start": {"type": "integer", "description": "Start line for partial opening (0-indexed)"},
-                        "line_end": {"type": "integer", "description": "End line for partial opening (default: None = to end)"}
+                        "line_end": {"type": "integer", "description": "End line for partial opening (default: None = to end)"},
+                        "allow_untracked": {"type": "boolean", "description": "Override git-tracking gate (default: False). Rollback disabled if true."}
                     },
                     "required": ["path"]
                 },

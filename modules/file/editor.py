@@ -398,11 +398,13 @@ class FileEditor:
 
         return None
 
-    async def open_file(self, path: str, line_start: int = None, line_end: int = None) -> str:
+    async def open_file(self, path: str, line_start: int = None, line_end: int = None, allow_untracked: bool = False) -> str:
         """Open a file and add it to the file context.
         
         Fails with an actionable warning if the file is not git-tracked,
         because safe file editing (automatic rollback) requires git.
+        Pass allow_untracked=True to override this gate (rollback protection
+        will be disabled for this file).
         Rejects opening a range that is a subset of an already-open range.
         Merges or expands when a superset/partial overlap is requested.
         """
@@ -414,7 +416,19 @@ class FileEditor:
         
         # Gate: require git tracking for safe rollback
         if not _is_git_tracked(abs_path):
-            return _git_warning(path, abs_path)
+            if not allow_untracked:
+                return (
+                    f"⚠️  Cannot safely open {os.path.basename(path)} — not tracked by git.\n\n"
+                    f"    Safe file editing (automatic rollback on validation failure) requires git.\n\n"
+                    f"    To fix this, run init_git_for_file('{path}') and I'll run git init/add/commit for you.\n\n"
+                    f"    Alternatively, open the file with allow_untracked=True to proceed anyway.\n"
+                    f"    WARNING: rollback protection will be DISABLED for this file."
+                )
+            # Soft override: warn but continue
+            return (
+                f"⚠️  Opening {os.path.basename(path)} WITHOUT git tracking — rollback protection is DISABLED.\n"
+                f"    Proceed with caution. Consider calling init_git_for_file('{path}') later."
+            )
         
         filename = os.path.basename(abs_path)
         session_id = self._get_session_id()
