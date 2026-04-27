@@ -455,6 +455,18 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_replace_text_success(self, temp_file, mock_session_id, mock_memory_utils):
         """Test replace_text with valid match."""
+        # Pre-seed open-file entry so the edit guard passes
+        import os
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -473,6 +485,16 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_replace_text_not_found(self, temp_file, mock_session_id, mock_memory_utils):
         """Test replace_text when text not found."""
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -490,6 +512,16 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_batch_edit_success(self, temp_file, mock_session_id, mock_memory_utils):
         """Test batch_edit with multiple replacements."""
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -515,6 +547,16 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_batch_edit_not_found(self, temp_file, mock_session_id, mock_memory_utils):
         """Test batch_edit when one replacement not found."""
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -533,6 +575,16 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_delete_snippet_success(self, temp_file, mock_session_id, mock_memory_utils):
         """Test delete_snippet operation."""
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -551,12 +603,26 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_write_text(self, temp_dir, mock_session_id, mock_memory_utils):
         """Test write_text operation."""
+        path = os.path.join(temp_dir, "new_file.txt")
+        # Pre-create the file so write_text has something to overwrite
+        with open(path, 'w') as f:
+            f.write("existing\n")
+        
+        filename = os.path.basename(path)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": path,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
         )
         
-        path = os.path.join(temp_dir, "new_file.txt")
         result = await editor.write_text(path, "Hello, World!\n")
         
         assert "✅" in result
@@ -568,16 +634,96 @@ class TestFileEditor:
     @pytest.mark.asyncio
     async def test_write_text_with_parent_dirs(self, temp_dir, mock_session_id, mock_memory_utils):
         """Test write_text with create_parent_dirs=True."""
+        path = os.path.join(temp_dir, "nested/dir/new_file.txt")
+        # Pre-create the file so write_text has something to overwrite
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write("existing\n")
+        
+        filename = os.path.basename(path)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": path,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
         )
         
-        path = os.path.join(temp_dir, "nested/dir/new_file.txt")
         result = await editor.write_text(path, "Nested content\n", create_parent_dirs=True)
         
         assert "✅" in result
         assert os.path.exists(path)
+
+    # -------------------------------------------------------------------------
+    # Edit Guard Tests — must call open_file() before edit operations
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    @patch('modules.file.editor.config_get', lambda key, default=True: True)
+    async def test_replace_text_blocked_when_not_open(self, temp_file, mock_session_id, mock_memory_utils):
+        """Test that replace_text is rejected when the file has not been opened."""
+        editor = FileEditor(
+            session_id_func=lambda: mock_session_id,
+            memory_utils_module=mock_memory_utils
+        )
+        
+        result = await editor.replace_text(temp_file, "line 2", "REPLACED LINE 2")
+        
+        assert "NOT IN CONTEXT" in result
+        assert "open_file" in result
+
+    @pytest.mark.asyncio
+    @patch('modules.file.editor.config_get', lambda key, default=True: True)
+    async def test_batch_edit_blocked_when_not_open(self, temp_file, mock_session_id, mock_memory_utils):
+        """Test that batch_edit is rejected when the file has not been opened."""
+        editor = FileEditor(
+            session_id_func=lambda: mock_session_id,
+            memory_utils_module=mock_memory_utils
+        )
+        
+        result = await editor.batch_edit(temp_file, [
+            Replacement(old_str="line 1", new_str="FIRST LINE"),
+        ])
+        
+        assert result.success is False
+        assert "NOT IN CONTEXT" in result.message
+
+    @pytest.mark.asyncio
+    @patch('modules.file.editor.config_get', lambda key, default=True: True)
+    async def test_delete_snippet_blocked_when_not_open(self, temp_file, mock_session_id, mock_memory_utils):
+        """Test that delete_snippet is rejected when the file has not been opened."""
+        editor = FileEditor(
+            session_id_func=lambda: mock_session_id,
+            memory_utils_module=mock_memory_utils
+        )
+        
+        result = await editor.delete_snippet(temp_file, "line 2")
+        
+        assert result.success is False
+        assert "NOT IN CONTEXT" in result.message
+
+    @pytest.mark.asyncio
+    @patch('modules.file.editor.config_get', lambda key, default=True: True)
+    async def test_write_text_blocked_when_not_open(self, temp_dir, mock_session_id, mock_memory_utils):
+        """Test that write_text is rejected when the file has not been opened."""
+        path = os.path.join(temp_dir, "new_file.txt")
+        with open(path, 'w') as f:
+            f.write("existing\n")
+        
+        editor = FileEditor(
+            session_id_func=lambda: mock_session_id,
+            memory_utils_module=mock_memory_utils
+        )
+        
+        result = await editor.write_text(path, "Hello, World!\n")
+        
+        assert "NOT IN CONTEXT" in result
 
     @pytest.mark.asyncio
     async def test_delete_file(self, temp_file, mock_session_id, mock_memory_utils):
@@ -1045,6 +1191,16 @@ class TestEndToEnd:
         with open(test_file, 'w') as f:
             f.write(original)
         
+        filename = os.path.basename(test_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": test_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -1183,6 +1339,16 @@ class TestFileEditorEdgeCases:
         with open(temp_file, 'w') as f:
             f.write("def hello():\n    print('hello')\n")
         
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -1202,6 +1368,16 @@ class TestFileEditorEdgeCases:
     @pytest.mark.asyncio
     async def test_replace_text_skip_validation(self, temp_py_file, mock_session_id, mock_memory_utils):
         """Test replace_text with syntax validation skipped."""
+        filename = os.path.basename(temp_py_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_py_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -1222,6 +1398,16 @@ class TestFileEditorEdgeCases:
     @pytest.mark.asyncio
     async def test_batch_edit_empty_list(self, temp_file, mock_session_id, mock_memory_utils):
         """Test batch_edit with empty replacements list."""
+        filename = os.path.basename(temp_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -1235,6 +1421,16 @@ class TestFileEditorEdgeCases:
     @pytest.mark.asyncio
     async def test_batch_edit_skip_validation(self, temp_py_file, mock_session_id, mock_memory_utils):
         """Test batch_edit with syntax validation skipped."""
+        filename = os.path.basename(temp_py_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": temp_py_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -1260,6 +1456,16 @@ class TestFileEditorEdgeCases:
         with open(test_file, 'w') as f:
             f.write("line one\nline two\nline three\n")
         
+        filename = os.path.basename(test_file)
+        mock_memory_utils._search_memories.return_value = [
+            {
+                "id": "mem-open-1",
+                "keywords": [mock_session_id, f"open_file:{filename}"],
+                "properties": {"filename": filename, "path": test_file,
+                                "line_start": "0", "line_end": "*", "git_hash": "*"},
+            }
+        ]
+        
         editor = FileEditor(
             session_id_func=lambda: mock_session_id,
             memory_utils_module=mock_memory_utils
@@ -1272,8 +1478,8 @@ class TestFileEditorEdgeCases:
             threshold=0.7
         )
         
-        # Result depends on similarity - either success or "not found"
-        assert result.success or "not found" in result.message.lower()
+        # Result depends on similarity - either success, "not found", or guard rejection
+        assert result.success or "not found" in result.message.lower() or "not in context" in result.message.lower()
 
     @pytest.mark.asyncio
     async def test_open_function_non_py_file(self, temp_file, mock_session_id, mock_memory_utils):

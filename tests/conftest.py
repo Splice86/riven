@@ -8,6 +8,10 @@ from unittest.mock import patch, MagicMock
 # Add riven_core to path so tests can import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Disable file context guard for functional tests (they test the editing ops
+# directly; open_file is a separate concern they don't exercise).
+os.environ.setdefault('RV_FILE__CONTEXT_REQUIRED', 'false')
+
 
 @pytest.fixture
 def mock_session_id():

@@ -25,6 +25,12 @@ from .git import (
 )
 
 try:
+    from ..config import get as config_get
+except ImportError:
+    # Running as standalone module
+    from config import get as config_get
+
+try:
     from .code_parser import (
         CodeDefinition,
         _extract_code_definitions,
@@ -398,6 +404,38 @@ class FileEditor:
 
         return None
 
+    def _check_file_open(self, abs_path: str) -> str | None:
+        """Verify a file is open in context before an edit operation.
+        
+        Uses the memory database (with session scope) to check for an open-file
+        entry matching the given path. Can be disabled via
+        config: file.context_required = false.
+        
+        Returns:
+            None         - file is open (or guard disabled), proceed normally
+            str (error)  - rejection message, caller should return it
+        """
+        if not config_get('file.context_required', True):
+            return None  # guard disabled via config
+        
+        import os
+        
+        session_id = self._get_session_id()
+        filename = os.path.basename(abs_path)
+        keyword = make_open_file_keyword(filename)
+        memories = self._get_search_memories()(session_id, keyword, limit=10)
+        
+        for mem in memories:
+            props = mem.get("properties", {})
+            existing_path = props.get(PROP_PATH, "")
+            if existing_path and os.path.abspath(existing_path) == os.path.abspath(abs_path):
+                return None  # found a match — file is open
+        
+        return (
+            f"[NOT IN CONTEXT] {filename} is not open. "
+            f"Call open_file('{filename}') first to add it to context before editing."
+        )
+
     async def open_file(self, path: str, line_start: int = None, line_end: int = None, allow_untracked: bool = False) -> str:
         """Open a file and add it to the file context.
         
@@ -586,6 +624,11 @@ class FileEditor:
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
         
+        # Guard: file must be open in context
+        guard = self._check_file_open(abs_path)
+        if guard is not None:
+            return guard
+        
         try:
             with open(abs_path, 'r') as f:
                 content = f.read()
@@ -665,6 +708,11 @@ class FileEditor:
         """Apply multiple replacements in a single pass."""
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
+        
+        # Guard: file must be open in context
+        guard = self._check_file_open(abs_path)
+        if guard is not None:
+            return EditResult(False, abs_path, guard)
         
         try:
             with open(abs_path, 'r', encoding='utf-8') as f:
@@ -758,6 +806,11 @@ class FileEditor:
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
         
+        # Guard: file must be open in context
+        guard = self._check_file_open(abs_path)
+        if guard is not None:
+            return EditResult(False, abs_path, guard)
+        
         try:
             with open(abs_path, 'r') as f:
                 original = f.read()
@@ -821,6 +874,11 @@ class FileEditor:
         """Write content to a file."""
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
+        
+        # Guard: file must be open in context
+        guard = self._check_file_open(abs_path)
+        if guard is not None:
+            return guard
         
         if create_parent_dirs:
             parent = os.path.dirname(abs_path)

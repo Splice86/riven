@@ -1,0 +1,4 @@
+This is a sample data file.
+Line 2 of sample data
+Line 3 of sample data
+End of file.
