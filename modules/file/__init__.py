@@ -33,6 +33,7 @@ from modules.file.editor import (
     FileEditor,
     Replacement,
     _atomic_write,
+    _atomic_write_sync,
     _file_type,
     _find_best_window,
     _generate_diff,
@@ -49,7 +50,6 @@ from modules.file.code_parser import (
 )
 
 from modules.file.git import (
-    init_git_for_file,
     _run_git,
     _is_git_repo,
     _is_git_tracked,
@@ -327,8 +327,9 @@ Every file open consumes context space. LLM context windows are finite.
   - If the requested range SUPERSETS or PARTIALLY OVERLAPS an existing range, the
     existing entry is expanded to cover the union of both ranges.
   - If the file is not open yet, it is added normally.
-  IMPORTANT: If open_file fails with a git-tracking warning, call init_git_for_file(path) first,
-  or re-call with allow_untracked=True to proceed without rollback protection.
+  IMPORTANT: If open_file fails with a git-tracking warning, call create_project(path) first
+  to initialize a Riven project (which handles git init for you), then open again.
+  Alternatively, re-call with allow_untracked=True to proceed without rollback protection.
 - **open_function(path, name, include_docstring?, include_decorators?)** — Extract a specific
   class/function using AST. Only works on .py files. Replaces the file's context entry with the
   function's definition. If name not found, returns a list of available definitions.
@@ -362,36 +363,48 @@ Every file open consumes context space. LLM context windows are finite.
 - **get_file_history(path?)** — Get file change history for this session.
 
 **Git Integration:**
-- **init_git_for_file(path)** — Initialize git tracking for a file. Runs git init (if needed),
-  git add, and git commit. Call this when open_file fails with a git-tracking warning.
 - **restore_from_git(path)** — Restore file to its last committed state in git.
   Requires the file to already be git-tracked. Use this to undo unwanted changes.
 
 ### Workflow
 1. Call list_open_files() to see what's in context
 2. Use search_files() to locate code before opening
-3. If open_file() fails with a git-tracking warning, call init_git_for_file() first
+3. If open_file() fails with a git-tracking warning, call create_project('.') first
 4. open_file() only files you will actively edit/read in the next few steps
 5. For large Python files, prefer open_function() over open_file() with wide line ranges
 6. As soon as you finish a task or switch goals, close_file() the now-irrelevant files
 
 ### Screen Broadcasts (Live File View)
-Screens are remote browser clients (e.g., a workshop monitor) that show a live view of
-the file being edited. Changes appear instantly when you edit.
+Screens are browser windows (e.g., a workshop monitor or split-pane editor) that show a
+live view of the file being edited. Changes appear in the browser within ~1 second of
+each edit. Any number of screens can be open simultaneously, watching the same or different
+files.
 
-**To set up a screen:**
-1. Open a browser tab and navigate to: `/module/file/screens`
-   (e.g. `http://localhost:8000/module/file/screens`)
-2. The page will auto-connect and show a screen UID (e.g. `screen-abc123`)
-3. Copy the screen UID and call `screen_bind(path, screen_uid)` to start broadcasting
+**One-time browser setup:**
+1. Open a new browser tab (or a separate browser window/monitor)
+2. Navigate to: `http://localhost:8000/module/file/screens`
+   — substitute your server host/port if Riven runs elsewhere
+   — A screen card appears showing its UID (e.g. `screen-abc123`) and status (⚪ idle)
+3. Copy the UID from the browser — you'll pass it to screen_bind()
+4. Call `screen_bind("path/to/file.py", "screen-abc123")` to bind it
+5. The browser immediately shows the full file content; subsequent edits stream in live
+
+**Screen lifecycle:**
+- A screen stays bound to its file across edits until you call screen_release()
+- To watch a different file on the same screen: bind it to the new path (binding transfers)
+- Browser tab closed and reopened: binding auto-restores (the server remembers per screen)
+- Call screen_list() anytime to see which screens are bound to which files
 
 **Screen tools:**
-- **screen_list()** — See all registered screens and their UIDs
+- **screen_list()** — See all screens and their current bindings
 - **screen_bind(path, screen_uid)** — Bind a screen to a file (full snapshot + live diffs)
-- **screen_release(screen_uid)** — Stop broadcasts for a screen
-- **screen_status(screen_uid)** — Check detailed screen state
+- **screen_release(screen_uid)** — Stop broadcasting to a screen (screen goes idle)
+- **screen_status(screen_uid)** — Get detailed per-screen state (bound path, version, etc.)
 
-Screens reconnect automatically and restore their binding from DB."""
+**When to use screens:**
+- Useful when you want to verify edit results visually without re-reading file context
+- For read-only verification, the file context (injected by file_context()) is usually enough
+- Screens add value when editing large files or when visually confirming layout changes"""
 
 
 def file_context() -> str:
@@ -509,18 +522,6 @@ def get_module() -> Module:
                     "required": ["path", "name"]
                 },
                 fn=open_function,
-            ),
-            CalledFn(
-                name="init_git_for_file",
-                description="Initialize git tracking for a file to enable safe rollback.\\n\\nRun this when open_file fails with a git-tracking warning.\\nIt will git init (if needed), git add, and git commit the file.\\n\\nArgs:\\n- path: Path to the file to track with git",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Path to the file to track with git"}
-                    },
-                    "required": ["path"]
-                },
-                fn=init_git_for_file,
             ),
             CalledFn(
                 name="restore_from_git",
@@ -793,7 +794,7 @@ __all__ = [
     "CodeDefinition",
     "DefinitionExtractor",
     # File functions
-    "init_git_for_file",
+
     "open_file",
     "close_file",
     "close_all_files",
@@ -818,6 +819,7 @@ __all__ = [
     "_file_editor",
     # Helpers
     "_atomic_write",
+    "_atomic_write_sync",
     "_file_type",
     "_find_best_window",
     "_generate_diff",
@@ -846,7 +848,5 @@ __all__ = [
     "screen_status",
     "broadcast_edit",
     "send_snapshot_to_uid",
-    "_ensure_screen_broadcast",
     "_broadcast_after_edit",
-    "_screen_broadcast_initialized",
 ]

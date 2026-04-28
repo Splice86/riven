@@ -18,6 +18,7 @@ from modules.file import (
     FileEditor,
     Replacement,
     _atomic_write,
+    _atomic_write_sync,
     _file_type,
     _validate_python,
     hash_content,
@@ -107,7 +108,7 @@ class TestAtomicWrite:
         file_path = os.path.join(temp_dir, "atomic_test.txt")
         content = "Hello, World!\nLine 2\nLine 3"
         
-        _atomic_write(file_path, content)
+        _atomic_write_sync(file_path, content)
         
         assert os.path.exists(file_path)
         with open(file_path) as f:
@@ -117,8 +118,8 @@ class TestAtomicWrite:
         """Atomic write should overwrite existing content."""
         file_path = os.path.join(temp_dir, "atomic_overwrite.txt")
         
-        _atomic_write(file_path, "Original content")
-        _atomic_write(file_path, "New content")
+        _atomic_write_sync(file_path, "Original content")
+        _atomic_write_sync(file_path, "New content")
         
         with open(file_path) as f:
             assert f.read() == "New content"
@@ -128,11 +129,11 @@ class TestAtomicWrite:
         file_path = os.path.join(temp_dir, "atomic_error.txt")
         
         # Create initial file
-        _atomic_write(file_path, "Original content")
+        _atomic_write_sync(file_path, "Original content")
         
         # Try to write to a directory (should fail)
         with pytest.raises(Exception):
-            _atomic_write(os.path.join(temp_dir), "Should fail")
+            _atomic_write_sync(os.path.join(temp_dir), "Should fail")
         
         # Original should be unchanged
         with open(file_path) as f:

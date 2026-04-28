@@ -196,10 +196,11 @@ async def broadcast_edit(path: str, uids: list[str]) -> tuple[int, int]:
         # No actual changes (might be a save without modifications)
         return 0, 0
 
-    # Increment registry version, collect screens, and update their versions
-    # — all under a SINGLE lock to avoid a double-lock deadlock with bump_version
+    # Increment registry version OUTSIDE the lock (bump_version acquires its own lock,
+    # so nesting would deadlock). Collect screens and update their versions under a
+    # single lock to keep the state update atomic.
+    new_version = await registry.bump_version(path)
     async with registry._lock:
-        new_version = await registry.bump_version(path)
         screens = []
         for uid in uids:
             screen = registry._connections.get(uid)

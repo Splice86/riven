@@ -18,19 +18,28 @@ import subprocess
 from typing import Any
 
 # Cached project root — recomputed if not yet set
-_project_root_cache: str | None = None
+_project_root_cache: dict[str, str | None] = {}
 
 # The riven project data directory
 RIVEN_DIR = ".riven"
 
 
 def _walk_up(path: str, stop_at: str | None = None) -> list[str]:
-    """Walk from path up to stop_at (or filesystem root), yield each dir."""
+    """Walk from path up to stop_at (or filesystem root), yield each dir.
+
+    stop_at can be a string (stop when current equals this path) or a
+    callable stop_at(dir) that returns the "stop-found" value or None/False
+    to continue (e.g. _git_is_repo returns the git root or False).
+    """
     parts = []
     current = os.path.abspath(path)
-    stop = os.path.abspath(stop_at) if stop_at else None
-    while current and current != stop:
+    stop = os.path.abspath(stop_at) if isinstance(stop_at, str) else stop_at
+    while current and (stop is None or (not isinstance(stop, str) and current != stop)):
         parts.append(current)
+        if callable(stop):
+            found = stop(current)
+            if found:
+                return parts
         parent = os.path.dirname(current)
         if parent == current:
             break
@@ -39,7 +48,16 @@ def _walk_up(path: str, stop_at: str | None = None) -> list[str]:
 
 
 def _run_git(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
-    """Run a git command, returning the result. Errors are silenced."""
+    """Run a git command, returning the result. Errors are silenced.
+
+    cwd is normalized to a directory (not a file) to prevent NotADirectoryError
+    when a file path is accidentally passed as the working directory.
+    """
+    if cwd:
+        if os.path.isfile(cwd):
+            cwd = os.path.dirname(cwd)
+        if not os.path.isdir(cwd):
+            cwd = None  # Fall back to os.getcwd() below
     return subprocess.run(
         ['git'] + args,
         capture_output=True,
@@ -75,36 +93,38 @@ def find_project_root(from_path: str | None = None) -> str | None:
     Result is cached after first call.
     """
     global _project_root_cache
-    if _project_root_cache:
-        return _project_root_cache
+    start = os.path.abspath(from_path or os.getcwd())
+
+    # Check per-path cache first
+    if start in _project_root_cache:
+        return _project_root_cache[start]
 
     # 1. Env var override
     env_root = os.environ.get('RV_PROJECT_ROOT')
     if env_root and os.path.isdir(env_root):
-        _project_root_cache = os.path.abspath(env_root)
-        return _project_root_cache
-
-    start = os.path.abspath(from_path or os.getcwd())
+        _project_root_cache[start] = os.path.abspath(env_root)
+        return _project_root_cache[start]
 
     # 2. Check for .riven/ at start and walk up
     for directory in _walk_up(start):
         if os.path.isdir(os.path.join(directory, RIVEN_DIR)):
-            _project_root_cache = directory
-            return _project_root_cache
+            _project_root_cache[start] = directory
+            return _project_root_cache[start]
 
     # 3. Git toplevel fallback
     git_root = _git_toplevel(start)
     if git_root:
-        _project_root_cache = git_root
-        return _project_root_cache
+        _project_root_cache[start] = git_root
+        return _project_root_cache[start]
 
+    _project_root_cache[start] = None
     return None
 
 
 def clear_project_root_cache() -> None:
-    """Clear the cached project root. Call after create_project."""
+    """Clear the cached project roots. Call after create_project."""
     global _project_root_cache
-    _project_root_cache = None
+    _project_root_cache.clear()
 
 
 def _find_project_root() -> str:

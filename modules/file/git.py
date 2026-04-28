@@ -50,7 +50,7 @@ def _is_git_tracked(path: str) -> bool:
     """
     abs_path = os.path.abspath(path)
     root = find_project_root(abs_path)
-    if root is None:
+    if root is None or not os.path.isdir(root):
         return False
 
     # git ls-files needs the relative path from repo root
@@ -72,7 +72,7 @@ def _get_git_hash(path: str) -> str | None:
     """
     abs_path = os.path.abspath(path)
     root = find_project_root(abs_path)
-    if root is None:
+    if root is None or not os.path.isdir(root):
         return None
 
     try:
@@ -90,7 +90,7 @@ def _git_status(path: str) -> str:
     """Get the short git status code for a file (e.g. ' M', '??', 'A ')."""
     abs_path = os.path.abspath(path)
     root = find_project_root(abs_path)
-    if root is None:
+    if root is None or not os.path.isdir(root):
         return ''
 
     try:
@@ -126,7 +126,7 @@ def _git_warning(path: str, abs_path: str) -> str:
     filename = os.path.basename(path)
     root = find_project_root(abs_path)
 
-    if root is None or not _is_git_repo(root):
+    if root is None or not os.path.isdir(root) or not _is_git_repo(root):
         return (
             f"⚠️  Cannot safely open {filename} — no git repository found.\n\n"
             f"    Safe file editing (automatic rollback on validation failure) requires git.\n"

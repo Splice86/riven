@@ -82,176 +82,146 @@ class TestCreateGoal:
     """Test create_goal function."""
 
     @pytest.mark.asyncio
-    async def test_create_goal_with_minimal_args(self, mock_memory_api, mock_config_singleton):
+    async def test_create_goal_with_minimal_args(self, mock_memory_api, mock_config_singleton, planning_tmp_path):
         """Test creating a goal with just a title."""
         from modules import _session_id
         from modules.planning import create_goal
-        
+
         _session_id.set("test-session-123")
-        
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": 42, "content": "Goal: Test Goal"}
-        mock_memory_api.post.return_value = mock_resp
-        
-        result = await create_goal(title="Test Goal")
-        
-        assert "42" in result
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path)):
+            result = await create_goal(title="Test Goal")
+
+        assert "1" in result
         assert "Test Goal" in result
-        mock_memory_api.post.assert_called_once()
+        assert "priority: medium" in result
 
     @pytest.mark.asyncio
-    async def test_create_goal_with_priority(self, mock_memory_api, mock_config_singleton):
+    async def test_create_goal_with_priority(self, mock_memory_api, mock_config_singleton, planning_tmp_path):
         """Test creating a goal with priority."""
         from modules import _session_id
         from modules.planning import create_goal
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": 1, "content": "Goal: High Priority Task"}
-        mock_memory_api.post.return_value = mock_resp
-        
-        result = await create_goal(title="High Priority Task", priority="high")
-        
-        # Check that the request included priority in properties
-        call_args = mock_memory_api.post.call_args
-        json_data = call_args[1]['json']
-        assert json_data['properties']['priority'] == 'high'
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path)):
+            result = await create_goal(title="High Priority Task", priority="high")
+
+        assert "high" in result
+        assert "High Priority Task" in result
 
     @pytest.mark.asyncio
-    async def test_create_goal_invalid_priority_defaults_to_medium(self, mock_memory_api, mock_config_singleton):
+    async def test_create_goal_invalid_priority_defaults_to_medium(self, mock_memory_api, mock_config_singleton, planning_tmp_path):
         """Test that invalid priority defaults to medium."""
         from modules import _session_id
         from modules.planning import create_goal
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": 1, "content": "Goal: Test"}
-        mock_memory_api.post.return_value = mock_resp
-        
-        result = await create_goal(title="Test", priority="invalid")
-        
-        call_args = mock_memory_api.post.call_args
-        json_data = call_args[1]['json']
-        assert json_data['properties']['priority'] == 'medium'
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path)):
+            result = await create_goal(title="Test", priority="invalid")
+
+        assert "priority: medium" in result
 
 
 class TestAddFileToGoal:
     """Test add_file_to_goal function."""
 
     @pytest.mark.asyncio
-    async def test_add_file_to_existing_goal(self, mock_memory_api, mock_config_singleton):
+    async def test_add_file_to_existing_goal(self, mock_memory_api, mock_config_singleton, planning_tmp_path_with_goals):
         """Test adding a file to an existing goal."""
         from modules import _session_id
         from modules.planning import add_file_to_goal
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        # Mock GET returning existing goal
-        get_resp = MagicMock()
-        get_resp.status_code = 200
-        get_resp.json.return_value = {
-            "id": 1,
-            "content": "Goal: Test",
-            "properties": {"files": "[]", "status": "active", "priority": "medium"}
-        }
-        
-        # Mock PUT for update
-        put_resp = MagicMock()
-        put_resp.status_code = 200
-        put_resp.json.return_value = {"id": 1}
-        
-        mock_memory_api.get.return_value = get_resp
-        mock_memory_api.put.return_value = put_resp
-        
-        result = await add_file_to_goal(1, "/tmp/test_file.py")
-        
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path_with_goals)):
+            result = await add_file_to_goal(1, "/tmp/test_file.py")
+
         assert "test_file.py" in result
-        mock_memory_api.put.assert_called_once()
+        assert "added" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_add_file_already_linked(self, mock_memory_api, mock_config_singleton):
+    async def test_add_file_already_linked(self, mock_memory_api, mock_config_singleton, planning_tmp_path_with_goals):
         """Test adding a file that's already linked."""
         from modules import _session_id
         from modules.planning import add_file_to_goal
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        # Mock GET returning goal with file already linked
-        get_resp = MagicMock()
-        get_resp.status_code = 200
-        get_resp.json.return_value = {
-            "id": 1,
-            "content": "Goal: Test",
-            "properties": {
-                "files": json.dumps(["/tmp/test_file.py"]),
-                "status": "active",
-                "priority": "medium"
-            }
-        }
-        mock_memory_api.get.return_value = get_resp
-        
-        result = await add_file_to_goal(1, "/tmp/test_file.py")
-        
+
+        # Pre-populate the goal's files
+        import yaml
+        riven_dir = planning_tmp_path_with_goals / ".riven"
+        with open(riven_dir / "plan.yaml", "w") as f:
+            yaml.safe_dump({
+                "goals": [{
+                    "id": 1,
+                    "title": "Existing Goal",
+                    "description": "Test description",
+                    "status": "open",
+                    "priority": "medium",
+                    "created_at": "2025-01-01T00:00:00+00:00",
+                    "updated_at": "2025-01-01T00:00:00+00:00",
+                    "properties": {"files": json.dumps(["/tmp/test_file.py"])},
+                }]
+            }, f)
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path_with_goals)):
+            result = await add_file_to_goal(1, "/tmp/test_file.py")
+
         assert "already linked" in result.lower()
-        mock_memory_api.put.assert_not_called()
 
 
 class TestUpdateGoalStatus:
     """Test update_goal_status function."""
 
     @pytest.mark.asyncio
-    async def test_valid_status_update(self, mock_memory_api, mock_config_singleton):
+    async def test_valid_status_update(self, mock_memory_api, mock_config_singleton, planning_tmp_path_with_goals):
         """Test updating goal status with valid status."""
         from modules import _session_id
         from modules.planning import update_goal_status
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_memory_api.put.return_value = mock_resp
-        
-        result = await update_goal_status(1, "complete")
-        
-        assert "complete" in result
-        call_args = mock_memory_api.put.call_args
-        assert call_args[1]['json']['properties']['status'] == 'complete'
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path_with_goals)):
+            result = await update_goal_status(1, "in_progress")
+
+        assert "in_progress" in result
 
     @pytest.mark.asyncio
-    async def test_invalid_status_returns_error(self, mock_memory_api, mock_config_singleton):
+    async def test_invalid_status_returns_error(self, mock_memory_api, mock_config_singleton, planning_tmp_path_with_goals):
         """Test that invalid status returns error."""
         from modules import _session_id
         from modules.planning import update_goal_status
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        result = await update_goal_status(1, "invalid_status")
-        
-        assert "[ERROR]" in result
-        mock_memory_api.put.assert_not_called()
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path_with_goals)):
+            result = await update_goal_status(1, "invalid_status")
+
+        assert "Error:" in result
+        assert "invalid_status" in result
 
 
 class TestCloseGoal:
     """Test close_goal function."""
 
     @pytest.mark.asyncio
-    async def test_close_goal_calls_update_status(self, mock_memory_api, mock_config_singleton):
+    async def test_close_goal_calls_update_status(self, mock_memory_api, mock_config_singleton, planning_tmp_path_with_goals):
         """Test that close_goal delegates to update_goal_status."""
         from modules import _session_id
         from modules.planning import close_goal
-        
+        from modules.project import get_project_root
+
         _session_id.set("test-session-123")
-        
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_memory_api.put.return_value = mock_resp
-        
-        result = await close_goal(1)
-        
-        assert "complete" in result
-        mock_memory_api.put.assert_called_once()
+
+        with patch('modules.project.get_project_root', return_value=str(planning_tmp_path_with_goals)):
+            result = await close_goal(1)
+
+        assert "done" in result

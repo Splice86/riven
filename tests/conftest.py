@@ -1,9 +1,12 @@
 """Pytest fixtures and configuration for riven_core tests."""
 
-import pytest
+import json
 import os
 import sys
 from unittest.mock import patch, MagicMock
+
+import pytest
+import yaml
 
 # Add riven_core to path so tests can import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,7 +25,7 @@ def mock_session_id():
 @pytest.fixture
 def mock_memory_api():
     """Mock memory API responses."""
-    with patch("modules.planning.requests") as mock_req:
+    with patch("modules.memory_utils.requests") as mock_req:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
@@ -37,7 +40,7 @@ def mock_memory_api():
         yield mock_req
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def clean_context():
     """Reset context variables between tests."""
     from modules import _session_id
@@ -61,3 +64,34 @@ def mock_config_singleton():
             "tool_timeout": 60.0,
         }
         yield mock_config
+
+
+@pytest.fixture
+def planning_tmp_path(tmp_path):
+    """Create a fake .riven/ project directory for planning module tests."""
+    riven_dir = tmp_path / ".riven"
+    riven_dir.mkdir()
+    # Write an empty plan
+    with open(riven_dir / "plan.yaml", "w") as f:
+        yaml.safe_dump({"goals": []}, f)
+    return tmp_path
+
+
+@pytest.fixture
+def planning_tmp_path_with_goals(planning_tmp_path):
+    """Create a .riven/ project with a pre-existing goal (id=1)."""
+    riven_dir = planning_tmp_path / ".riven"
+    with open(riven_dir / "plan.yaml", "w") as f:
+        yaml.safe_dump({
+            "goals": [{
+                "id": 1,
+                "title": "Existing Goal",
+                "description": "Test description",
+                "status": "open",
+                "priority": "medium",
+                "created_at": "2025-01-01T00:00:00+00:00",
+                "updated_at": "2025-01-01T00:00:00+00:00",
+                "properties": {"files": "[]"},
+            }]
+        }, f)
+    return planning_tmp_path

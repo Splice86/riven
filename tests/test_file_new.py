@@ -46,6 +46,7 @@ from modules.file import (
     file_context,
     get_module,
     _atomic_write,
+    _atomic_write_sync,
     _file_type,
     _find_best_window,
     _generate_diff,
@@ -273,7 +274,7 @@ def foo(:  # Missing closing paren
         path = os.path.join(temp_dir, "atomic_test.txt")
         content = "atomic write test content\nwith multiple lines\n"
         
-        _atomic_write(path, content)
+        _atomic_write_sync(path, content)
         
         with open(path, 'r') as f:
             assert f.read() == content

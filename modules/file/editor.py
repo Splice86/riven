@@ -132,15 +132,13 @@ class Replacement:
 # Robustness Helpers
 # =============================================================================
 
-async def _atomic_write(path: str, content: str, session_id: str = "", after_write=None) -> None:
-    """Write content atomically using temp file + rename.
+def _atomic_write_sync(path: str, content: str) -> None:
+    """Synchronous atomic file write (file I/O only, no broadcast).
 
-    Args:
-        path: File path to write to
-        content: Full file content as string
-        session_id: Current session ID, passed to after_write callback
-        after_write: Optional async callable(path, session_id) called after successful write.
-                     Used by the file module to broadcast edits to screens.
+    This is a pure-sync version for use in tests and any context where
+    async/await is not needed. The production _atomic_write is async and
+    handles broadcasting. This function provides the core atomic write
+    logic without the async overhead.
     """
     dir_path = os.path.dirname(path) or '.'
     fd, temp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp')
@@ -152,6 +150,19 @@ async def _atomic_write(path: str, content: str, session_id: str = "", after_wri
         if os.path.exists(temp_path):
             os.unlink(temp_path)
         raise
+
+
+async def _atomic_write(path: str, content: str, session_id: str = "", after_write=None) -> None:
+    """Write content atomically using temp file + rename.
+
+    Args:
+        path: File path to write to
+        content: Full file content as string
+        session_id: Current session ID, passed to after_write callback
+        after_write: Optional async callable(path, session_id) called after successful write.
+                     Used by the file module to broadcast edits to screens.
+    """
+    _atomic_write_sync(path, content)
 
     # Broadcast to screens after the write succeeds
     if after_write is not None:
@@ -494,14 +505,15 @@ class FileEditor:
                 return (
                     f"⚠️  Cannot safely open {os.path.basename(path)} — not tracked by git.\n\n"
                     f"    Safe file editing (automatic rollback on validation failure) requires git.\n\n"
-                    f"    To fix this, run init_git_for_file('{path}') and I'll run git init/add/commit for you.\n\n"
+                    f"    To fix this, call create_project('{os.path.dirname(path)}') to initialize a Riven project\n"
+                    f"    (which runs git init for you). Then open the file again.\n\n"
                     f"    Alternatively, open the file with allow_untracked=True to proceed anyway.\n"
                     f"    WARNING: rollback protection will be DISABLED for this file."
                 )
             # Soft override: warn but continue
             return (
                 f"⚠️  Opening {os.path.basename(path)} WITHOUT git tracking — rollback protection is DISABLED.\n"
-                f"    Proceed with caution. Consider calling init_git_for_file('{path}') later."
+                f"    Proceed with caution. Consider calling create_project('{os.path.dirname(path)}') later."
             )
         
         filename = os.path.basename(abs_path)
@@ -624,7 +636,8 @@ class FileEditor:
         if not memories:
             return "No open files to close"
         
-        # Collect paths before deleting
+        # Collect paths and broadcast close BEFORE deleting memory
+        # (get_screen_uids_for_path needs the memory entries to be present)
         closed_paths = set()
         for mem in memories:
             props = mem.get("properties", {})
@@ -635,9 +648,7 @@ class FileEditor:
                     if isinstance(p, dict) and p.get("key") == PROP_PATH:
                         closed_paths.add(p.get("value", ""))
         closed_paths.discard("")
-        
-        # Broadcast close to all screens watching closed paths BEFORE deleting memory
-        # (get_screen_uids_for_path needs the memory entries to be present)
+
         if closed_paths:
             try:
                 from modules.file import _broadcast_after_close as _bc
