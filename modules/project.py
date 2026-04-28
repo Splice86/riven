@@ -175,13 +175,16 @@ async def create_project(path: str | None = None) -> str:
         commit_result = _run_git(['commit', '-m', 'Initialize riven project'], cwd=target)
         if commit_result.returncode != 0:
             pass  # Non-fatal for fresh repos too
+        git_note = "\n   git initialised with initial commit."
+    else:
+        git_note = "\n   git already set up — existing repo preserved."
 
     # Re-cache so subsequent calls see this project
     clear_project_root_cache()
     find_project_root(target)
 
     return (
-        f"✅ Riven project created at {target}\n\n"
+        f"✅ Riven project created at {target}{git_note}\n\n"
         f"   .riven/project.yaml — project metadata + plan\n\n"
         f"   Next step: use plan tools to build your project plan.\n"
         f"   Try: set_plan_title('My Project') then add_plan_item('First task')"
