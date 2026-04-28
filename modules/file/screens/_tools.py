@@ -98,3 +98,39 @@ async def screen_status(screen_uid: str) -> str:
         f"  Bound version: {screen.bound_version}",
     ]
     return "\n".join(lines)
+
+
+async def screen_highlight(
+    path: str,
+    start: int,
+    end: int,
+    label: str = "",
+    scroll: bool = True,
+) -> str:
+    """Highlight a line range on all screens showing a file.
+
+    Riven uses this to direct the user's attention to a specific section.
+    The screen scrolls to the range, flashes the lines, and shows an optional
+    toast with the label.
+
+    Args:
+        path: Path to the file to highlight in
+        start: First line to highlight (1-based, inclusive)
+        end: Last line to highlight (1-based, inclusive)
+        label: Optional toast message to show alongside the highlight
+        scroll: Whether to auto-scroll to the range (default True)
+    """
+    screens = await bc.broadcast_highlight(
+        path=path,
+        start=start,
+        end=end,
+        label=label,
+        scroll=scroll,
+    )
+
+    if screens == 0:
+        return f"[ERROR] No screens are currently bound to {path}."
+
+    return f"Highlighted lines {start}-{end} on {screens} screen(s)" + (
+        f": {label}" if label else ""
+    )

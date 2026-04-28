@@ -17,7 +17,7 @@ import requests
 from config import get
 
 # High-level debug flag
-DEBUG_HANG = False
+DEBUG_HANG = True  # Enable for lock-up debugging
 
 def _debug(step: str, session_id: str = None) -> None:
     """Print timestamped debug messages to trace execution flow."""
@@ -226,6 +226,7 @@ class ContextManager:
         i = 0
         while i < len(messages):
             msg = messages[i]
+            original_content = msg.get('content', '<KEY_MISSING>')
             
             # Parse embedded tool_calls from content if present
             if msg.get('role') == 'assistant' and msg.get('content') and '[tool_calls]' in msg.get('content', ''):
@@ -241,12 +242,16 @@ class ContextManager:
                         # rather than deleting it — MiniMax rejects messages with no content field.
                         if not msg['content']:
                             msg['content'] = ''
-                    except json.JSONDecodeError:
+                        _debug(f"reorder: parsed [tool_calls] from msg[{i}] content={repr(original_content[:80])} -> content_after={repr(msg['content'][:80])} tool_calls_count={len(tool_calls)}", None)
+                    except json.JSONDecodeError as e:
+                        _debug(f"reorder: FAILED to parse [tool_calls] from msg[{i}]: {e}", None)
                         pass
             
             # If this is a tool message, find its matching assistant and insert after it
             if msg.get('role') == 'tool':
                 tool_call_id = msg.get('tool_call_id', '')
+                content_after = msg.get('content', '<KEY_MISSING>')
+                _debug(f"reorder: msg[{i}] is tool role tool_call_id={tool_call_id[:16] if tool_call_id else 'NONE'} content={repr(content_after[:80])}", None)
                 if tool_call_id:
                     inserted = False
                     for j, existing_msg in enumerate(result):
@@ -256,17 +261,20 @@ class ContextManager:
                                 if tc.get('id') == tool_call_id:
                                     result.insert(j + 1, msg)
                                     inserted = True
+                                    _debug(f"reorder: inserted msg[{i}] tool after assistant msg[{j}] (matched tc id)", None)
                                     break
                             if inserted:
                                 break
                     if not inserted:
                         result.append(msg)
+                        _debug(f"reorder: msg[{i}] tool NOT matched to any assistant, appended at end", None)
                 else:
                     result.append(msg)
             else:
                 result.append(msg)
             i += 1
         
+        _debug(f"reorder: DONE {len(messages)} -> {len(result)} msgs, final roles={[m.get('role') for m in result]}", None)
         return result
     
     @staticmethod
@@ -333,7 +341,15 @@ class ContextManager:
             
             api_messages.append(msg_copy)
         
-        _debug(f"ContextManager.prepare_messages_for_llm: {len(api_messages)} history messages")
+        _debug(f"ContextManager.prepare_messages_for_llm: {len(api_messages)} history messages:")
+        for i, m in enumerate(api_messages):
+            role = m.get('role', '?')
+            content = m.get('content', '<KEY_MISSING>')
+            has_tc = bool(m.get('tool_calls'))
+            tc_id = m.get('tool_call_id', '')
+            func_name = m.get('function', '')
+            _debug(f"  raw[{i}] role={role} has_content_key={'content' in m} content_len={len(content) if isinstance(content, str) else 'N/A'} has_tc={has_tc} tool_call_id={tc_id[:16] if tc_id else 'NONE'} function={func_name}", None)
+            _debug(f"    content: {repr(content[:150]) if isinstance(content, str) else '<NOT_STRING>'}", None)
         
         # Reorder: ensure tool results follow their assistant message
         api_messages = self.reorder_messages(api_messages)
@@ -350,8 +366,11 @@ class ContextManager:
         # Add system prompt at the front
         _debug("ContextManager.prepare_messages_for_llm: building system prompt")
         system = self.build_system_prompt(system_template, registry)
-        if system:
+        _debug(f"ContextManager.prepare_messages_for_llm: system prompt length={len(system) if system else 0}", None)
+        if system and system.strip():
             api_messages.insert(0, {"role": "system", "content": system})
+        else:
+            _debug("ContextManager.prepare_messages_for_llm: WARNING - system prompt is EMPTY, NOT inserting", None)
         
         _debug(f"ContextManager.prepare_messages_for_llm: DONE ({len(api_messages)} total messages, system len={len(system)})")
         return api_messages, system
@@ -370,7 +389,11 @@ class ContextManager:
         """
         api_messages = _json_safe(api_messages)
 
-        for msg in api_messages:
+        for i, msg in enumerate(api_messages):
+            role = msg.get('role', 'unknown')
+            had_tool_calls = bool(msg.get('tool_calls'))
+            original_content = msg.get('content', '<KEY_MISSING>')
+            
             if msg.get('role') == 'tool':
                 # Keep role as "tool" — standard OpenAI format for tool results
                 # Extract function name from stored 'function' property into 'name' field
@@ -380,13 +403,14 @@ class ContextManager:
 
             # Guard: ensure no message ever has empty/missing content
             # MiniMax returns 400 "zero-length document" if content is "" or absent for any role
-            role = msg.get('role', 'unknown')
             content = msg.get('content')
             if content is None:
-                _debug(f"sanitize: WARNING message [{role}] has content=None, setting to '(no output)'", None)
+                _debug(f"sanitize[{i}]: [{role}] content=None, fixing to '(no output)' (original: {repr(original_content)[:100]})", None)
                 msg['content'] = '(no output)'
             elif content == '':
-                _debug(f"sanitize: WARNING message [{role}] has empty content, setting to '(no output)'", None)
+                _debug(f"sanitize[{i}]: [{role}] content='', fixing to '(no output)' (has_tc={had_tool_calls})", None)
                 msg['content'] = '(no output)'
+            else:
+                _debug(f"sanitize[{i}]: [{role}] content OK ({len(content)} chars)", None)
 
         return api_messages

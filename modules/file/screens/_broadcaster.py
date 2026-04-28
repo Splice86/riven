@@ -181,11 +181,14 @@ async def broadcast_edit(path: str, uids: list[str]) -> tuple[int, int]:
     """
     path = os.path.abspath(path)
 
+    # Bump version FIRST so it's available for the diff call
+    new_version = await registry.bump_version(path)
+
     # Get the previous version from the stored snapshot so the diff metadata is accurate
     prev_snap = snapshots.get(path)
     old_version = prev_snap.version if prev_snap else 0
 
-    # Compute diff against the snapshot store (increments version atomically)
+    # Compute diff against the snapshot store
     diff = snapshots.compute_diff(path, old_version=old_version, new_version=new_version)
 
     if diff is None:
@@ -196,10 +199,9 @@ async def broadcast_edit(path: str, uids: list[str]) -> tuple[int, int]:
         # No actual changes (might be a save without modifications)
         return 0, 0
 
-    # Increment registry version OUTSIDE the lock (bump_version acquires its own lock,
-    # so nesting would deadlock). Collect screens and update their versions under a
-    # single lock to keep the state update atomic.
-    new_version = await registry.bump_version(path)
+    # Collect screens and update their versions under a single lock to keep the
+    # state update atomic. bump_version already acquired its own lock, so nesting
+    # would deadlock — we do this OUTSIDE bump_version's lock scope.
     async with registry._lock:
         screens = []
         for uid in uids:
@@ -260,4 +262,51 @@ async def broadcast_release_for_path(path: str) -> int:
     else:
         logger.debug(f"[Screens] broadcast_release_for_path: {path} → 0 screens (no match in registry)")
     return count
+
+
+# =============================================================================
+# Highlight broadcast (Riven directing user attention)
+# =============================================================================
+
+async def broadcast_highlight(
+    path: str,
+    start: int,
+    end: int,
+    label: str = "",
+    scroll: bool = True,
+) -> int:
+    """Highlight a line range on all screens showing a file.
+
+    Used by Riven to direct the user's attention to a specific section.
+    The client scrolls to the range, applies a flash highlight, and optionally
+    shows a toast with the label.
+
+    Args:
+        path: Absolute path of the file to highlight in
+        start: First line to highlight (1-based, inclusive)
+        end: Last line to highlight (1-based, inclusive)
+        label: Optional text to show in the toast (e.g. "look at this function")
+        scroll: Whether to auto-scroll to the highlighted range (default True)
+
+    Returns:
+        Number of screens that received the highlight
+    """
+    path = os.path.abspath(path)
+    screens = await registry.get_by_path(path)
+    if not screens:
+        return 0
+
+    msg = _build_message(
+        "highlight",
+        path=path,
+        start=start,
+        end=end,
+        label=label,
+        scroll=scroll,
+    )
+
+    sent, failed = await _send_to_all(screens, msg)
+    if sent > 0:
+        logger.info(f"[Screens] Highlighted {path}:{start}-{end} → {sent} screen(s)")
+    return sent
 

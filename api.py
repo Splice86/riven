@@ -16,8 +16,10 @@ from typing import Optional
 
 import requests
 import yaml
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 from core import Core
@@ -589,10 +591,112 @@ def list_modules():
         "count": len(_registered_modules),
     }
 
+# =============================================================================
+# Screens
+# =============================================================================
+
+from modules.file.screens._registry import registry as screen_registry
+
+
+@app.get("/api/v1/screens")
+async def list_screens():
+    """List all connected screens."""
+    screens = await screen_registry.list_all()
+    return {
+        "screens": [
+            {
+                "uid": s.uid,
+                "bound_path": s.bound_path,
+                "bound_version": s.bound_version,
+                "client_name": s.client_name,
+                "status": "bound" if s.bound_path else "idle",
+            }
+            for s in screens
+        ]
+    }
+
+
+@app.post("/api/v1/screens/{screen_uid}/bind")
+async def bind_screen(screen_uid: str, path: str):
+    """Bind a screen to a file path."""
+    ok = await screen_registry.bind(screen_uid, path)
+    if not ok:
+        raise HTTPException(404, f"Screen '{screen_uid}' not found or not connected")
+    return {"ok": True, "uid": screen_uid, "path": path}
+
+
+@app.post("/api/v1/screens/{screen_uid}/release")
+async def release_screen(screen_uid: str):
+    """Release a screen from its current binding."""
+    ok = await screen_registry.release(screen_uid)
+    if not ok:
+        raise HTTPException(404, f"Screen '{screen_uid}' not found or not connected")
+    return {"ok": True, "uid": screen_uid}
+
+
+# =============================================================================
+# History API (for webui)
+# =============================================================================
+
+@app.get("/api/v1/history")
+def get_history(session_id: str, response: Response):
+    """Get conversation history for a session from Memory API."""
+    # No caching - always fetch fresh data
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    
+    memory_url = get("memory_api.url")
+    try:
+        resp = requests.get(
+            f"{memory_url}/context",
+            params={"session": session_id, "max_summaries": 0},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        history = resp.json().get("context", [])
+        # Debug: log the structure of each message type
+        for i, msg in enumerate(history):
+            role = msg.get('role', '?')
+            content = msg.get('content', '<MISSING>')
+            name_field = msg.get('name', msg.get('function', '<MISSING>'))
+            tc_id = msg.get('tool_call_id', '<MISSING>')
+            _debug(f"history[{i}] role={role} name={name_field} content_len={len(str(content)) if content else 0} tc_id={tc_id[:16] if tc_id and tc_id != '<MISSING>' else tc_id}", session_id)
+        return {"messages": history, "count": len(history)}
+    except requests.RequestException as e:
+        _debug(f"API: history fetch error: {e}", session_id)
+        raise HTTPException(500, f"Memory API error: {e}")
+
+
+# =============================================================================
+# Web UI
+# =============================================================================
+
+# Mount webui/ as /ui so the browser can reach index.html, style.css, etc.
+WEBUI_PATH = os.path.join(os.path.dirname(__file__), "webui")
+if os.path.isdir(WEBUI_PATH):
+    # Custom StaticFiles with no-cache headers for webui
+    class NoCacheStaticFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+    
+    app.mount("/ui", NoCacheStaticFiles(directory=WEBUI_PATH, html=True), name="webui")
+
+    @app.get("/", response_class=HTMLResponse)
+    def root():
+        """Redirect / → /ui/."""
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/ui/", status_code=302)
+
 
 # =============================================================================
 # Run
 # =============================================================================
+
 
 def run(host: str = None, port: int = None):
     """Run the API server."""

@@ -175,12 +175,44 @@
     100% { background: transparent; }
   }
   .line.flash { animation: line-flash 1.2s ease-out forwards; }
+
+  /* Riven-directed highlight (gold, fades over time) */
+  @keyframes riven-highlight {
+    0%   { background: rgba(255, 197, 61, 0.45); }
+    60%  { background: rgba(255, 197, 61, 0.25); }
+    100% { background: transparent; }
+  }
+  .line.highlighted { animation: riven-highlight 3s ease-out forwards; }
+
+  /* Toast notification */
+  #riven-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #21262d;
+    border: 1px solid #484f58;
+    color: #c9d1d9;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 13px;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #riven-toast.visible { opacity: 1; }
 </style>
 </head>
 <body>
 
 <!-- Status overlay (shown when disconnected) -->
 <div id="status-overlay" class="visible">
+
+<!-- Riven highlight toast -->
+<div id="riven-toast"></div>
   <div class="dot" id="overlay-dot"></div>
   <div class="msg" id="overlay-msg">Connecting...</div>
   <div class="sub" id="overlay-sub">WebSocket connecting to the editor</div>
@@ -214,7 +246,10 @@
 // State
 // =============================================================================
 
-let uid        = localStorage.getItem('screen_uid') || '';
+// uid starts empty — server is ALWAYS authoritative and assigns the uid on
+// registration. Client-sent uids are ignored. Storing the server-assigned uid
+// in localStorage only helps with browser-refresh recovery (not tab duplication).
+let uid        = '';
 let sessionId  = new URLSearchParams(location.search).get('session_id') || localStorage.getItem('screen_session') || '';
 let clientName = localStorage.getItem('screen_name') || 'Workshop Screen';
 
@@ -396,29 +431,36 @@ function renderLines(rawLines, action) {
 
   if (action === 'added') {
     // Sections contain {start, end, action, lines}
-    // Process removals first (in reverse) so indices stay valid,
-    // then apply additions with a running offset to handle cascading shifts.
+    //
+    // Coordinate system: 'removed' sections use OLD file line indices;
+    // 'added' sections use NEW file line indices (the current state).
+    // Because these coordinate spaces differ, we process them separately.
+    //
+    // Process removals in reverse order (highest index first) so that
+    // DOM removal indices stay valid — deleting from the end never shifts
+    // the indices of elements we haven't processed yet.
+    const removals = rawLines.filter(s => s.action === 'removed').reverse();
     let offset = 0;
-    for (const section of rawLines) {
-      const idx = section.start + offset;
-      if (section.action === 'removed') {
-        // Remove from end to start so DOM index 0 stays valid
-        for (let i = section.lines.length - 1; i >= 0; i--) {
-          lines.splice(idx, 1);
-          container.removeChild(container.children[idx]);
-        }
-        offset -= section.lines.length;
+    for (const section of removals) {
+      // section.end - 1 is the last line to remove; subtract cumulative
+      // removals so far to get the stable DOM index at processing time.
+      const domStart = section.end - 1 - offset;
+      for (let i = 0; i < section.lines.length; i++) {
+        lines.splice(domStart, 1);
+        container.removeChild(container.children[domStart]);
       }
+      offset += section.lines.length;
     }
-    offset = 0;
-    for (const section of rawLines) {
-      if (section.action === 'added') {
-        // section.start is in new-file coords → insert at that position directly
-        for (let i = 0; i < section.lines.length; i++) {
-          const idx = section.start + i;
-          lines.splice(idx, 0, section.lines[i]);
-          container.insertBefore(makeLineEl(idx, section.lines[i], 'added'), container.children[idx] || null);
-        }
+
+    // Process additions in DOM order. section.start is already in NEW file
+    // coordinates (the current state), so we insert directly without any
+    // offset adjustment.
+    const additions = rawLines.filter(s => s.action === 'added');
+    for (const section of additions) {
+      for (let i = 0; i < section.lines.length; i++) {
+        const idx = section.start + i;
+        lines.splice(idx, 0, section.lines[i]);
+        container.insertBefore(makeLineEl(idx, section.lines[i], 'added'), container.children[idx] || null);
       }
     }
     return;
@@ -470,10 +512,10 @@ function connect() {
     setStatus('Connecting...', 'idle');
     showOverlay('Registering...', 'Authenticating with Riven', 'idle');
 
-    // Register with the server
+    // Register with the server — uid is intentionally omitted; the server
+    // is always authoritative and assigns a unique uid on registration.
     ws.send(JSON.stringify({
       type: 'register',
-      uid: uid,
       session_id: sessionId,
       client_name: clientName,
     }));
@@ -557,6 +599,15 @@ function connect() {
     } else if (type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong' }));
 
+    } else if (type === 'highlight') {
+      // Riven is directing user attention to a specific line range
+      if (msg.path && msg.path !== currentPath) return;  // not this file
+      if (msg.start == null || msg.end == null) return;
+      _highlightLines(msg.start, msg.end, msg.label || '');
+      if (msg.scroll !== false) {
+        scrollToLine(Math.max(0, msg.start - 1), true);
+      }
+
     } else if (type === 'error') {
       showNotification('Error: ' + msg.message, 'error');
     }
@@ -590,6 +641,41 @@ function showNotification(text, type) {
   if (!type) type = 'info';
   // Simple in-page flash — no external notifications needed
   console.log('[' + type.toUpperCase() + ']', text);
+}
+
+let _toastTimer = null;
+
+function showToast(message, durationMs) {
+  if (durationMs === undefined) durationMs = 3500;
+  const el = document.getElementById('riven-toast');
+  if (!el) return;
+  if (_toastTimer) clearTimeout(_toastTimer);
+  el.textContent = message;
+  el.classList.add('visible');
+  _toastTimer = setTimeout(() => el.classList.remove('visible'), durationMs);
+}
+
+function _highlightLines(start, end, label) {
+  // Convert 1-based server coords to 0-based DOM indices
+  const domStart = Math.max(0, start - 1);
+  const domEnd   = Math.min(lines.length, end);
+
+  const el = document.getElementById('lines');
+  if (!el) return;
+
+  for (let i = domStart; i < domEnd; i++) {
+    const lineEl = el.children[i];
+    if (lineEl) {
+      // Remove any previous highlight (clears pending animation)
+      lineEl.classList.remove('highlighted');
+      void lineEl.offsetWidth; // force reflow
+      lineEl.classList.add('highlighted');
+    }
+  }
+
+  if (label) {
+    showToast(label);
+  }
 }
 
 // =============================================================================

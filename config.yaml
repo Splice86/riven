@@ -12,6 +12,10 @@ file:
   # Require files to be opened via open_file() before edit operations.
   # Set to false to disable the context guard (useful for testing).
   context_required: true
+  # Maximum combined token count for all open files in file_context.
+  # If open files exceed this, a warning is returned with the tool call.
+  # Set to 0 to disable token checking.
+  token_limit: 8000
 
 # Memory API settings
 memory_api:

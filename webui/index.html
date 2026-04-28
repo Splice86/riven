@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Riven Chat</title>
+  <link rel="stylesheet" href="/ui/style.css?v=5">
+</head>
+<body>
+
+<div id="app">
+  <!-- Header -->
+  <header id="header">
+    <div class="logo">
+      <span class="logo-icon">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </span>
+      Riven
+    </div>
+
+    <div class="header-actions">
+      <label for="shard-select" style="font-size:12px;color:var(--text-muted);">Shard:</label>
+      <select id="shard-select" style="
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-size: 12px;
+        padding: 4px 8px;
+        outline: none;
+      ">
+        <option value="codehammer">CodeHammer</option>
+        <option value="scribe">Scribe</option>
+        <option value="testhammer">TestHammer</option>
+      </select>
+
+      <button class="btn" id="new-screen-btn" title="Open a new code view window">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h6"/></svg>
+        New Screen
+      </button>
+
+      <button class="btn" id="clear-session-btn" title="Clear session and messages">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+        Clear
+      </button>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <div id="main">
+    <div id="chat-area">
+      <!-- Messages -->
+      <div id="messages"></div>
+
+      <!-- Input -->
+      <div id="input-area">
+        <textarea
+          id="message-input"
+          placeholder="Ask Riven something..."
+          rows="1"
+        ></textarea>
+        <button id="send-btn" title="Send">
+          <svg viewBox="0 0 24 24">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar">
+    <div class="status-item">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">Ready</span>
+    </div>
+    <div class="status-item">
+      Session: <span id="session-display">—</span>
+    </div>
+  </div>
+</div>
+
+<!-- Error banner -->
+<div id="error-banner" class="error-banner" style="display:none">
+  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  <span id="error-text"></span>
+</div>
+
+
+<script>
+(function() {
+  // ── State ──────────────────────────────────────────────
+  let sessionId = localStorage.getItem('riven_session') || generateSessionId();
+  localStorage.setItem('riven_session', sessionId);
+  document.getElementById('session-display').textContent = sessionId;
+
+  let isStreaming = false;
+  let currentEventSource = null;
+  let pendingThinking = null;   // {element, buffer}
+  let thinkingId = 0;           // track thinking blocks to create new elements
+
+  // ── Helpers ────────────────────────────────────────────
+  function generateSessionId() {
+    return 'sess-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function scrollToBottom() {
+    const msgs = document.getElementById('messages');
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function cleanToken(token) {
+    // Strip timestamps like [2026-04-28 17:13] or [2026-04-28 17:27] and leading newlines
+    return token.replace(/\[\d{4}-\d{2}-\d{2} [\d:]+\]/g, '').replace(/^[\n\r]+/, '');
+  }
+
+  function cleanContent(content) {
+    if (!content) return '';
+    let text = String(content);
+    // Strip timestamps
+    text = cleanToken(text);
+    return text;
+  }
+
+  function extractToolCalls(content) {
+    // Extract [tool_calls]JSON[/tool_calls] from content and parse
+    if (!content) return [];
+    const match = String(content).match(/\[tool_calls\]\s*([\s\S]*?)\s*\[\/tool_calls\]/);
+    if (!match) {
+      console.log('extractToolCalls: no match in', content?.slice(0, 100));
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(match[1]);
+      console.log('extractToolCalls: parsed', parsed);
+      return parsed;
+    } catch (e) {
+      console.error('Failed to parse tool_calls:', e, 'raw:', match[1]);
+      return [];
+    }
+  }
+
+  function setStatus(connected, msg) {
+    const dot = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    dot.className = 'dot' + (connected ? (connected === 'error' ? ' error' : ' connected') : '');
+    text.textContent = msg || (connected ? 'Connected' : 'Ready');
+  }
+
+  function showError(msg) {
+    const banner = document.getElementById('error-banner');
+    document.getElementById('error-text').textContent = msg;
+    banner.style.display = 'flex';
+    scrollToBottom();
+  }
+
+  function hideError() {
+    document.getElementById('error-banner').style.display = 'none';
+  }
+
+  function setInputEnabled(enabled) {
+    document.getElementById('message-input').disabled = !enabled;
+    document.getElementById('send-btn').disabled = !enabled;
+    isStreaming = !enabled;
+  }
+
+  // ── Message builders ────────────────────────────────────
+  function appendMessage(role, content) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+
+    if (role === 'user' || role === 'assistant') {
+      const label = role === 'assistant' ? 'Riven' : 'User';
+      div.innerHTML = `
+        <div class="message-role">${label}</div>
+        <div class="message-content">${escapeHtml(cleanContent(content))}</div>
+      `;
+    } else if (role === 'thinking') {
+      div.innerHTML = `
+        <div class="thinking-header">
+          <span class="thinking-label">Thinking</span>
+        </div>
+        <div class="thinking-content"></div>
+      `;
+    } else if (role === 'tool-call') {
+      div.innerHTML = `
+        <div class="tool-call-header">
+          <span class="tool-call-name">${escapeHtml(content.name)}</span>
+          <span>⚡</span>
+        </div>
+        ${content.args ? `<div class="tool-call-args">${escapeHtml(JSON.stringify(content.args, null, 2))}</div>` : ''}
+      `;
+    } else if (role === 'tool-result') {
+      const isError = !!content.error;
+      div.innerHTML = `
+        <div class="tool-result-header">↩ ${escapeHtml(content.name)} ${isError ? '❌' : '✓'}</div>
+        <div class="tool-result-body">${escapeHtml(content.result || content.error || '(empty)')}</div>
+      `;
+    }
+
+    msgs.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function streamToken(token) {
+    // Skip empty tokens
+    const cleaned = cleanToken(token);
+    if (!cleaned) return;
+    
+    const msgs = document.getElementById('messages');
+    let last = msgs.lastElementChild;
+    if (!last || !last.classList.contains('assistant') || last.dataset.streaming !== 'true') {
+      last = appendMessage('assistant', '');
+      last.dataset.streaming = 'true';
+    }
+    const contentDiv = last.querySelector('.message-content');
+    contentDiv.textContent += cleaned;
+    scrollToBottom();
+  }
+
+  // ── SSE streaming ────────────────────────────────────────
+  async function sendMessage(text) {
+    if (isStreaming || !text.trim()) return;
+
+    hideError();
+    setInputEnabled(false);
+    setStatus(true, 'Waiting for response...');
+
+    // Show user message
+    appendMessage('user', text);
+    document.getElementById('message-input').value = '';
+    pendingThinking = null;  // Reset thinking state
+    thinkingId = 0;
+
+    const shard = document.getElementById('shard-select').value;
+
+    try {
+      const response = await fetch('/api/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          stream: true,
+          session_id: sessionId,
+          shard_name: shard,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+
+      setStatus(true, 'Receiving stream...');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let pendingToolCall = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw) continue;
+
+          let event;
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.token !== undefined) {
+            pendingThinking = null;  // End thinking block, next one gets new element
+            streamToken(event.token);
+          }
+          else if (event.thinking !== undefined) {
+            if (!pendingThinking) {
+              thinkingId++;
+              pendingThinking = { id: thinkingId, element: appendMessage('thinking', {}), buffer: '' };
+            }
+            pendingThinking.buffer += cleanToken(event.thinking);
+            const contentEl = pendingThinking.element.querySelector('.thinking-content');
+            if (contentEl) contentEl.textContent = pendingThinking.buffer;
+          }
+          else if (event.tool_call !== undefined) {
+            pendingThinking = null;  // End thinking block
+            pendingToolCall = event.tool_call;
+            appendMessage('tool-call', { name: event.tool_call.name, args: event.tool_call.args });
+          }
+          else if (event.tool_result !== undefined) {
+            if (pendingToolCall) {
+              pendingToolCall = null;
+            }
+            const res = event.tool_result;
+            appendMessage('tool-result', {
+              name: res.name || 'tool',
+              result: res.content,  // Backend yields 'content', not 'result'
+              error: res.error,
+            });
+          }
+          else if (event.error !== undefined) {
+            showError(event.error);
+          }
+          else if (event.done !== undefined) {
+            // Mark last assistant message as no longer streaming
+            const msgs = document.getElementById('messages');
+            const last = msgs.lastElementChild;
+            if (last && last.dataset.streaming === 'true') {
+              last.dataset.streaming = 'false';
+            }
+          }
+        }
+      }
+
+      setStatus(true, 'Done');
+    } catch (e) {
+      showError(e.message);
+      setStatus(false, 'Error');
+    } finally {
+      setInputEnabled(true);
+    }
+  }
+
+  // ── Form handling ───────────────────────────────────────
+  const form = document.getElementById('chat-form');
+  const input = document.getElementById('message-input');
+  const sendBtn = document.getElementById('send-btn');
+
+  // Auto-grow textarea
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  });
+
+  // Enter to send (Shift+Enter for newline)
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(input.value);
+    }
+  });
+
+  sendBtn.addEventListener('click', () => {
+    sendMessage(input.value);
+  });
+
+  const screenBtn = document.getElementById('new-screen-btn');
+  screenBtn.addEventListener('click', () => {
+    window.open('/module/file/screens', '_blank', 'width=1100,height=700');
+  });
+
+  const clearSessionBtn = document.getElementById('clear-session-btn');
+  clearSessionBtn.addEventListener('click', () => {
+    // Clear messages
+    document.getElementById('messages').innerHTML = '';
+    hideError();
+    // Generate new session ID
+    sessionId = generateSessionId();
+    localStorage.setItem('riven_session', sessionId);
+    document.getElementById('session-display').textContent = sessionId;
+    setStatus(false, 'Ready');
+    document.getElementById('message-input').focus();
+  });
+
+  // ── Load history ─────────────────────────────────────────
+  async function loadHistory() {
+    try {
+      // Add random cache-buster to URL to prevent any caching
+      const cacheBuster = `_cb=${Date.now()}${Math.random()}`;
+      const resp = await fetch(`/api/v1/history?session_id=${encodeURIComponent(sessionId)}&${cacheBuster}`, {
+        cache: 'reload',  // Force fetch from network, ignore cache
+        credentials: 'same-origin',
+      });
+      if (!resp.ok) {
+        console.error('History fetch failed:', resp.status);
+        return;
+      }
+      const data = await resp.json();
+      const messages = data.messages || [];
+      
+      for (const msg of messages) {
+        const role = msg.role;
+        const content = msg.content;
+        
+        if (role === 'user') {
+          appendMessage('user', cleanContent(content));
+        } else if (role === 'assistant') {
+          // Extract tool calls from [tool_calls]...[/tool_calls] wrapper in content
+          const extractedToolCalls = extractToolCalls(content);
+          
+          // Strip [tool_calls] wrapper and timestamps to get text content
+          let textContent = String(content || '').replace(/\[tool_calls\][\s\S]*?\[\/tool_calls\]/g, '');
+          textContent = cleanToken(textContent);
+          
+          // Render tool calls first (before any assistant text)
+          if (extractedToolCalls.length > 0) {
+            const msgs = document.getElementById('messages');
+            for (const tc of extractedToolCalls) {
+              msgs.appendChild(createToolCallElement(tc));
+            }
+          }
+          
+          // Only create assistant bubble if there's actual text content
+          if (textContent.trim()) {
+            const div = appendMessage('assistant', textContent);
+            div.dataset.streaming = 'false';
+          }
+        } else if (role === 'tool') {
+          // Tool results have content, name/function fields
+          const toolName = msg.name || msg.function || 'tool';
+          const toolResult = content || '';
+          appendMessage('tool-result', {
+            name: toolName,
+            result: toolResult,
+          });
+        }
+      }
+      
+      if (messages.length > 0) {
+        scrollToBottom();
+      }
+    } catch (e) {
+      console.error('Failed to load history:', e);
+    }
+  }
+
+  function createToolCallElement(toolCall) {
+    const div = document.createElement('div');
+    div.className = 'message tool-call';
+    // Tool calls from [tool_calls] wrapper have {id, function: {name, arguments}}
+    const name = toolCall.function?.name || toolCall.name || 'unknown';
+    const args = toolCall.function?.arguments || toolCall.args || {};
+    const hasArgs = args && typeof args === 'object' && Object.keys(args).length > 0;
+    div.innerHTML = `
+      <div class="tool-call-header">
+        <span class="tool-call-name">${escapeHtml(name)}</span>
+        <span>⚡</span>
+      </div>
+      ${hasArgs ? `<div class="tool-call-args">${escapeHtml(JSON.stringify(args, null, 2))}</div>` : ''}
+    `;
+    return div;
+  }
+
+  // ── Initialize ───────────────────────────────────────────
+  setStatus(false, 'Ready');
+  loadHistory();  // Load previous messages on page load
+  document.getElementById('message-input').focus();
+})();
+</script>
+
+<!-- Fix: the form wrapping caused issues, attach handler directly -->
+<form id="chat-form" onsubmit="return false;" style="display:none"></form>
+<script>
+  // Remove the hidden form since we handle events directly
+  document.getElementById('chat-form').remove();
+</script>
+
+</body>
+</html>

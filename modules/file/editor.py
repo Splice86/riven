@@ -70,6 +70,17 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken if available, else rough estimate."""
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except (ImportError, Exception):
+        # Rough fallback: ~4 chars per token for typical code/text
+        return len(text) // 4
+
+
 def _warn_no_riven_project(abs_path: str) -> str | None:
     """Return a warning if abs_path is not inside a Riven project, else None."""
     if not is_riven_project(abs_path):
@@ -553,7 +564,23 @@ class FileEditor:
                 content = f.read()
             total_lines = len(content.splitlines())
         except Exception:
+            content = ""
             total_lines = "?"
+        
+        # Count tokens for the content that will be in context
+        # (applying same 1200-line truncation as file_context())
+        all_lines = content.split('\n')
+        if line_end is None or line_end == "*":
+            ranged_content = '\n'.join(all_lines[line_start:])
+        else:
+            ranged_content = '\n'.join(all_lines[line_start:line_end])
+        
+        MAX_LINES = 1200
+        content_lines = ranged_content.split('\n')
+        if len(content_lines) > MAX_LINES:
+            ranged_content = '\n'.join(content_lines[:MAX_LINES])
+        
+        token_count = _count_tokens(ranged_content)
         
         file_type_str = _file_type(abs_path)
         line_info = ""
@@ -571,7 +598,7 @@ class FileEditor:
         except Exception:
             pass
         
-        return f"Opened {filename} ({file_type_str}, {total_lines} lines){line_info}{large_warning}"
+        return f"Opened {filename} ({file_type_str}, {total_lines} lines, ~{token_count} tokens){line_info}{large_warning}"
     
     async def close_file(self, name: str, line_start: int = None, line_end: int = None) -> str:
         """Close a file from the file context.

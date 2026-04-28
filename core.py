@@ -444,6 +444,13 @@ class Core:
             # Sanitize messages for LLM API
             api_messages = self._ctx.sanitize_messages_for_llm(api_messages)
             
+            # --- RAW PRINT: dump raw api_messages with repr (outside all try/except) ---
+            # Using raw print() so it cannot be silenced by any exception handler
+            import pprint as _pprint
+            print(f"[RAW_PRINT {time.time():.3f}] [{session_id[:8]}] api_messages after sanitize ({len(api_messages)} msgs):", flush=True)
+            for i, msg in enumerate(api_messages):
+                print(f"  [RAW_PRINT] msg[{i}] type={type(msg).__name__} repr_keys={repr(list(msg.keys()))} full_repr={repr(msg)[:500]}", flush=True)
+            
             # --- Save LLM request context snapshot ---
             self._save_llm_context(api_messages, session_id)
             
@@ -451,23 +458,80 @@ class Core:
             # Check for both '' content AND missing content key (the bug that caused MiniMax 400)
             issues = []
             for i, msg in enumerate(api_messages):
-                role = msg.get('role', '?')
-                if role in ('tool', 'system'):
-                    continue
-                content = msg.get('content')
-                has_tc = bool(msg.get('tool_calls'))
-                if content is None:
-                    issues.append(f"msg[{i}][{role}] content=None")
-                elif content == '':
-                    issues.append(f"msg[{i}][{role}] content='' {'(tool-call-only)' if has_tc else ''}")
+                try:
+                    role = msg.get('role', '?')
+                    content = msg.get('content')
+                    has_tc = bool(msg.get('tool_calls'))
+                    has_content_key = 'content' in msg
+                    content_repr = repr(content[:100]) if content else f"{'MISSING_KEY' if not has_content_key else 'EMPTY'}"
+                    
+                    # Detailed per-message debug
+                    _debug(f"run_stream: msg[{i}] role={role} has_content_key={has_content_key} content={content_repr} has_tool_calls={has_tc}", session_id)
+                    
+                    if content is None:
+                        issues.append(f"msg[{i}][{role}] content=None (key missing)")
+                    elif content == '':
+                        issues.append(f"msg[{i}][{role}] content='' {'(tool-call-only)' if has_tc else ''}")
+                except Exception as e:
+                    _debug(f"run_stream: msg[{i}] AUDIT CRASH: {type(e).__name__}: {e}", session_id)
+            
             if issues:
                 _debug(f"run_stream: WARNING - empty content issues detected: {'; '.join(issues)}", session_id)
             else:
                 _debug(f"run_stream: LLM call ready - {len(api_messages)} messages, roles={[m.get('role') for m in api_messages]}", session_id)
             
+            # Dump full message list for deep debugging (crash-proof)
+            _debug(f"run_stream: FULL MESSAGE DUMP ({len(api_messages)} msgs):", session_id)
+            for i, msg in enumerate(api_messages):
+                try:
+                    role = msg.get('role', '?')
+                    content = msg.get('content')
+                    has_content_key = 'content' in msg
+                    tc_info = ''
+                    if msg.get('tool_calls'):
+                        tc_names = [tc.get('function', {}).get('name', '?') for tc in msg['tool_calls']]
+                        tc_info = f' tool_calls={tc_names}'
+                    
+                    # Handle all content types safely
+                    if content is None:
+                        _debug(f"  msg[{i}] role={role} content=NONE has_key={has_content_key}{tc_info}", session_id)
+                        _debug(f"    content_preview: <NONE>", session_id)
+                    elif isinstance(content, str):
+                        preview = content[:200] if content else '<EMPTY_STRING>'
+                        _debug(f"  msg[{i}] role={role} content_len={len(content)} has_key={has_content_key}{tc_info}", session_id)
+                        _debug(f"    content_preview: {repr(preview)}", session_id)
+                    else:
+                        _debug(f"  msg[{i}] role={role} content_type={type(content).__name__} has_key={has_content_key}{tc_info}", session_id)
+                        _debug(f"    content_preview: {repr(str(content)[:200])}", session_id)
+                except Exception as e:
+                    _debug(f"  msg[{i}] DUMP ERROR: {type(e).__name__}: {e} msg_keys={list(msg.keys()) if isinstance(msg, dict) else type(msg)}", session_id)
+            
             # --- Call LLM ---
             _debug("run_stream: calling LLM (streaming)", session_id)
             _llm_start = time.time()
+            
+            # FINAL GUARD: check all messages right before LLM call and fix any remaining issues
+            for i, msg in enumerate(api_messages):
+                role = msg.get('role', '?')
+                content = msg.get('content')
+                has_tc = bool(msg.get('tool_calls'))
+                if content is None:
+                    _debug(f"run_stream: URGENT FIX: msg[{i}][{role}] content=None, forcing to '(no output)'", session_id)
+                    msg['content'] = '(no output)'
+                elif content == '' and not has_tc:
+                    _debug(f"run_stream: URGENT FIX: msg[{i}][{role}] content='' no-tool-calls, forcing to '(no output)'", session_id)
+                    msg['content'] = '(no output)'
+            
+            # Dump the exact payload being sent
+            import json as _json_mod
+            _debug(f"run_stream: LLM REQUEST PAYLOAD:", session_id)
+            for i, msg in enumerate(api_messages):
+                role = msg.get('role', '?')
+                content = msg.get('content', '<MISSING>')
+                tcs = msg.get('tool_calls')
+                tc_str = f" tool_calls[{len(tcs)}]" if tcs else ""
+                _debug(f"  [{i}] role={role} content_len={len(content) if content else 0}{tc_str}: {repr(content[:300] if content else '<EMPTY>')}", session_id)
+            
             try:
                 stream = await self._client.chat.completions.create(
                     model=self._llm_model,

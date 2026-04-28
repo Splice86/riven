@@ -73,7 +73,12 @@ from modules.file.screens import (
     screen_bind,
     screen_release,
     screen_status,
-    broadcast_edit,
+    screen_highlight,
+)
+from modules.file.screens import (
+    broadcast_edit as _bc,
+    broadcast_release_for_path,
+    send_snapshots_for_path,
     send_snapshot_to_uid,
     register_routes as _register_screen_routes,
 )
@@ -355,6 +360,31 @@ files.
 - Screens add value when editing large files or when visually confirming layout changes"""
 
 
+def _count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken if available, else rough estimate.
+    
+    Uses cl100k_base encoding (GPT-4/GPT-3.5-turbo) which is a good general-purpose
+    tokenizer. Falls back to char/4 estimate if tiktoken not installed.
+    """
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except (ImportError, Exception):
+        # Rough fallback: ~4 chars per token for typical code/text
+        return len(text) // 4
+
+
+def _get_token_limit() -> int:
+    """Get the file.token_limit config value, defaulting to 0 (disabled)."""
+    try:
+        from config import get
+        limit = get('file.token_limit', 0)
+        return int(limit) if limit else 0
+    except Exception:
+        return 0
+
+
 def file_context() -> str:
     """Context function that injects open file information and contents.
     
@@ -377,6 +407,10 @@ def file_context() -> str:
         "=" * 60,
         "",
     ]
+    
+    # Track total tokens across all open files
+    total_tokens = 0
+    file_contents: list[tuple[str, str, int]] = []  # (path, content, tokens)
     
     for i, mem in enumerate(memories, 1):
         props = mem.get("properties", {})
@@ -419,6 +453,11 @@ def file_context() -> str:
             else:
                 lines.append(f"  Showing {num_lines_in_context} lines of {total_lines_in_file} total lines in file.")
             
+            # Count tokens for this file's content
+            file_tokens = _count_tokens(file_content)
+            total_tokens += file_tokens
+            
+            lines.append(f"  Tokens: ~{file_tokens}")
             lines.append("")
             lines.append(file_content)
             
@@ -428,6 +467,17 @@ def file_context() -> str:
         lines.append("")
         lines.append("=" * 60)
         lines.append("")
+    
+    # Check token limit and add warning if exceeded
+    token_limit = _get_token_limit()
+    if token_limit > 0 and total_tokens > token_limit:
+        lines.insert(3, f"")
+        lines.insert(4, f"[WARNING] Total tokens ({total_tokens}) exceeds file.token_limit ({token_limit}).")
+        lines.insert(5, f"         Consider closing some files with close_file() to free up context.")
+        lines.insert(6, f"")
+    
+    # Add total token count at the top
+    lines.insert(3, f"[Token estimate] ~{total_tokens} tokens total (limit: {token_limit or 'disabled'})")
     
     return "\n".join(lines)
 
@@ -715,6 +765,22 @@ def get_module() -> Module:
                 },
                 fn=screen_status,
             ),
+            CalledFn(
+                name="screen_highlight",
+                description="Highlight a line range on all screens showing a file.\n\nRiven uses this to draw the user's attention to a specific section.\nThe screen scrolls to the range, flashes the lines, and optionally shows\na toast with the label.\n\nArgs:\n- path: Path to the file to highlight in\n- start: First line to highlight (1-based, inclusive)\n- end: Last line to highlight (1-based, inclusive)\n- label: Optional toast message to show alongside the highlight\n- scroll: Whether to auto-scroll to the range (default True)",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file"},
+                        "start": {"type": "integer", "description": "First line to highlight (1-based, inclusive)"},
+                        "end": {"type": "integer", "description": "Last line to highlight (1-based, inclusive)"},
+                        "label": {"type": "string", "description": "Optional toast message to show"},
+                        "scroll": {"type": "boolean", "description": "Whether to auto-scroll to the range"},
+                    },
+                    "required": ["path", "start", "end"],
+                },
+                fn=screen_highlight,
+            ),
             # NOTE: read_file is intentionally not exposed as a tool.
             # Files should be opened via open_file() and their contents
             # will be automatically injected into the system prompt via file_context().
@@ -794,6 +860,7 @@ __all__ = [
     "screen_bind",
     "screen_release",
     "screen_status",
+    "screen_highlight",
     "broadcast_edit",
     "send_snapshot_to_uid",
     "_broadcast_after_edit",
