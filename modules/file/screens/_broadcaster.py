@@ -181,14 +181,11 @@ async def broadcast_edit(path: str, uids: list[str]) -> tuple[int, int]:
     """
     path = os.path.abspath(path)
 
-    # Increment version
-    new_version = await registry.bump_version(path)
-
     # Get the previous version from the stored snapshot so the diff metadata is accurate
     prev_snap = snapshots.get(path)
     old_version = prev_snap.version if prev_snap else 0
 
-    # Compute diff
+    # Compute diff against the snapshot store (increments version atomically)
     diff = snapshots.compute_diff(path, old_version=old_version, new_version=new_version)
 
     if diff is None:
@@ -199,8 +196,10 @@ async def broadcast_edit(path: str, uids: list[str]) -> tuple[int, int]:
         # No actual changes (might be a save without modifications)
         return 0, 0
 
-    # Collect screens under a single lock to avoid race with disconnect
+    # Increment registry version, collect screens, and update their versions
+    # — all under a SINGLE lock to avoid a double-lock deadlock with bump_version
     async with registry._lock:
+        new_version = await registry.bump_version(path)
         screens = []
         for uid in uids:
             screen = registry._connections.get(uid)

@@ -88,10 +88,6 @@ async def screen_release(screen_uid: str) -> str:
 
     return f"Released screen {screen_uid}" + (f" from {was_path}" if was_path else "")
 
-
-
-
-
 async def screen_status(screen_uid: str) -> str:
     """Get the current status of a specific screen."""
     screen = await registry.get(screen_uid)

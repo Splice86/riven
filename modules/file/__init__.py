@@ -376,15 +376,22 @@ Every file open consumes context space. LLM context windows are finite.
 6. As soon as you finish a task or switch goals, close_file() the now-irrelevant files
 
 ### Screen Broadcasts (Live File View)
-Screens are remote clients (e.g., a workshop monitor) that show a live view of the file
-being edited. Bind screens to files to broadcast edits in real-time:
-- **screen_list()** — See all registered screens for this session
+Screens are remote browser clients (e.g., a workshop monitor) that show a live view of
+the file being edited. Changes appear instantly when you edit.
+
+**To set up a screen:**
+1. Open a browser tab and navigate to: `/module/file/screens`
+   (e.g. `http://localhost:8000/module/file/screens`)
+2. The page will auto-connect and show a screen UID (e.g. `screen-abc123`)
+3. Copy the screen UID and call `screen_bind(path, screen_uid)` to start broadcasting
+
+**Screen tools:**
+- **screen_list()** — See all registered screens and their UIDs
 - **screen_bind(path, screen_uid)** — Bind a screen to a file (full snapshot + live diffs)
 - **screen_release(screen_uid)** — Stop broadcasts for a screen
 - **screen_status(screen_uid)** — Check detailed screen state
 
-Screens connect via WebSocket at: ws://host/module/file/screens/stream
-They reconnect automatically and restore their binding from DB."""
+Screens reconnect automatically and restore their binding from DB."""
 
 
 def file_context() -> str:

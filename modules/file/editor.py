@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import logging
 import os
 import subprocess
 import tempfile
@@ -45,6 +46,7 @@ try:
         PROP_LINE_END,
     )
     from .memory import format_file_history, get_file_history, get_open_files, hash_content, track_file_change
+    from ..project import is_riven_project
 except ImportError:
     # Running as standalone module
     from code_parser import (
@@ -63,6 +65,21 @@ except ImportError:
         PROP_LINE_END,
     )
     from memory import format_file_history, get_file_history, get_open_files, hash_content, track_file_change
+    from project import is_riven_project
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_no_riven_project(abs_path: str) -> str | None:
+    """Return a warning if abs_path is not inside a Riven project, else None."""
+    if not is_riven_project(abs_path):
+        return (
+            f"Not inside a Riven project — goals, plans, and project metadata are not available.\n"
+            f"Working directory: {os.path.dirname(abs_path)}\n"
+            f"Run create_project('{os.path.dirname(abs_path)}') to initialize one.\n"
+            f"File operations will still work, but goal tracking will be disabled."
+        )
+    return None
 
 
 # =============================================================================
@@ -288,7 +305,6 @@ def _find_exact_span(
     
     return (start_line, end_line, char_offset, end_char_offset), 1.0
 
-
 # =============================================================================
 # FileEditor Class
 # =============================================================================
@@ -466,6 +482,11 @@ class FileEditor:
         
         if not os.path.exists(abs_path):
             return f"Error: File {abs_path} not found"
+        
+        # Warn if not inside a Riven project (logged, not returned — don't interrupt the flow)
+        project_warning = _warn_no_riven_project(abs_path)
+        if project_warning:
+            logger.warning(project_warning)
         
         # Gate: require git tracking for safe rollback
         if not _is_git_tracked(abs_path):
@@ -699,6 +720,11 @@ class FileEditor:
         if guard is not None:
             return guard
         
+        # Warn if not inside a Riven project
+        project_warning = _warn_no_riven_project(abs_path)
+        if project_warning:
+            logger.warning(project_warning)
+        
         try:
             with open(abs_path, 'r') as f:
                 content = f.read()
@@ -777,6 +803,11 @@ class FileEditor:
         """Apply multiple replacements in a single pass."""
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
+        
+        # Warn if not inside a Riven project
+        project_warning = _warn_no_riven_project(abs_path)
+        if project_warning:
+            logger.warning(project_warning)
         
         # Guard: file must be open in context
         guard = self._check_file_open(abs_path)
@@ -941,6 +972,11 @@ class FileEditor:
         """Write content to a file."""
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
+        
+        # Warn if not inside a Riven project
+        project_warning = _warn_no_riven_project(abs_path)
+        if project_warning:
+            logger.warning(project_warning)
         
         # Guard: file must be open in context
         guard = self._check_file_open(abs_path)
