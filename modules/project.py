@@ -130,10 +130,17 @@ async def create_project(path: str | None = None) -> str:
 
     riven_path = os.path.join(target, RIVEN_DIR)
 
+    # Detect preexisting .riven/ and check if it's already a riven project
+    if os.path.isdir(riven_path):
+        if os.path.isfile(os.path.join(riven_path, "project.yaml")):
+            return (
+                f"⚠️  Already a riven project: {target}\n"
+                f"   Use get_project_info() to see the current project."
+            )
+        return f"⚠️  {riven_path}/ already exists but is not a riven project.\n   Remove it first: shutil.rmtree({riven_path!r})"
+
     try:
-        os.makedirs(riven_path, exist_ok=False)
-    except FileExistsError:
-        return f"⚠️  {riven_path} already exists but is not a riven project."
+        os.makedirs(riven_path)
     except OSError as e:
         return f"[ERROR] Could not create {riven_path}: {e}"
 
@@ -157,18 +164,17 @@ async def create_project(path: str | None = None) -> str:
     except OSError as e:
         return f"[ERROR] Could not write project.yaml: {e}"
 
-    # Git init if not already a repo
+    # Git: init only if no repo exists yet
     is_git = _run_git(['rev-parse', '--is-inside-work-tree'], cwd=target).returncode == 0
     if not is_git:
         result = _run_git(['init'], cwd=target)
         if result.returncode != 0:
             return f"[ERROR] git init failed: {result.stderr}"
-
-    # Commit .riven/ so it's tracked from the start
-    _run_git(['add', '.riven/project.yaml'], cwd=target)
-    commit_result = _run_git(['commit', '-m', 'Initialize riven project'], cwd=target)
-    if commit_result.returncode != 0 and 'nothing to commit' not in commit_result.stdout.lower():
-        pass  # Non-fatal
+        # Commit .riven/ so it's tracked from the start (fresh repo only)
+        _run_git(['add', '.riven/project.yaml'], cwd=target)
+        commit_result = _run_git(['commit', '-m', 'Initialize riven project'], cwd=target)
+        if commit_result.returncode != 0:
+            pass  # Non-fatal for fresh repos too
 
     # Re-cache so subsequent calls see this project
     clear_project_root_cache()

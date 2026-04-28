@@ -132,11 +132,10 @@ def _git_warning(path: str, abs_path: str) -> str:
             f"    Safe file editing (automatic rollback on validation failure) requires git.\n"
             f"    The current directory is not inside a git repository.\n\n"
             f"    To fix this, run:\n\n"
-            f"      1. cd to your project root\n"
-            f"      2. git init\n"
-            f"      3. git add {filename}\n"
-            f"      4. git commit -m 'initial'\n\n"
-            f"    Or use create_project() which handles this automatically."
+            f"      git init\n"
+            f"      git add {filename}\n"
+            f"      git commit -m 'initial'\n\n"
+            f"    Or call create_project() which initialises git automatically."
         )
     else:
         return (
@@ -146,5 +145,6 @@ def _git_warning(path: str, abs_path: str) -> str:
             f"    To fix this, run:\n\n"
             f"      git add {path}\n"
             f"      git commit -m 'track {filename}'\n\n"
-            f"    Or use create_project() which handles this automatically."
+            f"    Then re-open the file. Riven project discovery uses the existing git repo —\n"
+            f"    create_project() is not needed for preexisting repositories."
         )
