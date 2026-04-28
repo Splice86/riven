@@ -1,9 +1,9 @@
 """Planning module — goals and plans stored in .riven/plan.yaml.
 
-This module provides the legacy goal-oriented planning API (create_goal,
+This module provides the goal-oriented planning API (list_goals, create_goal,
 add_file_to_goal, update_goal_status, close_goal) backed by .riven/plan.yaml.
 
-Goals are now stored in plan.yaml (the source of truth). The Memory API is
+Goals are stored in plan.yaml (the source of truth). The Memory API is
 still used for context-based search indexing (via _sync_to_memory).
 """
 
@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 import yaml
+
+from modules import CalledFn, ContextFn, Module
+from modules.project import get_project_root
 
 logger = logging.getLogger("modules.planning")
 
@@ -235,3 +238,114 @@ def _get_goal_files(goal: dict[str, Any]) -> list[str]:
         return json.loads(files_str)
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+async def list_goals(status: str = None) -> str:
+    """List all goals, optionally filtered by status (open, in_progress, done, closed)."""
+    project_root = get_project_root()
+    if not project_root:
+        return "Error: No Riven project found. Run create_project() first."
+
+    goals = _read_plan(project_root)
+    if not goals:
+        return "No goals yet. Use create_goal() to add one."
+
+    valid_statuses = {"open", "in_progress", "done", "closed"}
+    lines = ["Goals:"]
+    for goal in sorted(goals, key=lambda g: g.get("id", 0)):
+        if status and goal.get("status") != status:
+            continue
+        goal_id = goal.get("id", "?")
+        title = goal.get("title", "Untitled")
+        goal_status = goal.get("status", "open")
+        priority = goal.get("priority", "medium")
+        files = _get_goal_files(goal)
+
+        status_marker = {
+            "open": "🟢",
+            "in_progress": "🟡",
+            "done": "✅",
+            "closed": "⚪",
+        }.get(goal_status, "")
+        priority_marker = {"high": "🔥", "medium": "📌", "low": "🔽"}.get(priority, "")
+        files_str = f" [{len(files)} file{'s' if len(files) != 1 else ''}]" if files else ""
+        lines.append(f"  #{goal_id} {status_marker}{priority_marker} {title}{files_str}")
+
+    result = "\n".join(lines)
+    if status and status not in valid_statuses:
+        result += f"\n(Unknown status filter '{status}' — showing all)"
+    return result
+
+
+# =============================================================================
+# Module export
+# =============================================================================
+
+def get_module() -> Module:
+    return Module(
+        name="planning",
+        called_fns=[
+            CalledFn(
+                name="list_goals",
+                description="List all goals, optionally filtered by status (open, in_progress, done, closed).",
+                parameters={
+                    "type": "object",
+                    "properties": {"status": {"type": "string", "description": "Filter: open, in_progress, done, or closed"}},
+                    "required": [],
+                },
+                fn=list_goals,
+            ),
+            CalledFn(
+                name="create_goal",
+                description="Create a new goal. Goals are tracked in .riven/plan.yaml.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Goal title"},
+                        "description": {"type": "string", "description": "Optional description"},
+                        "priority": {"type": "string", "description": "Priority: low, medium, or high"},
+                        "files": {"type": "array", "items": {"type": "string"}, "description": "Optional file paths to link"},
+                    },
+                    "required": ["title"],
+                },
+                fn=create_goal,
+            ),
+            CalledFn(
+                name="add_file_to_goal",
+                description="Link a file to an existing goal.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "goal_id": {"type": "integer", "description": "Goal ID"},
+                        "file_path": {"type": "string", "description": "Path to the file"},
+                    },
+                    "required": ["goal_id", "file_path"],
+                },
+                fn=add_file_to_goal,
+            ),
+            CalledFn(
+                name="update_goal_status",
+                description="Update a goal's status.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "goal_id": {"type": "integer", "description": "Goal ID"},
+                        "status": {"type": "string", "description": "Status: open, in_progress, done, or closed"},
+                    },
+                    "required": ["goal_id", "status"],
+                },
+                fn=update_goal_status,
+            ),
+            CalledFn(
+                name="close_goal",
+                description="Close (mark as done) a goal.",
+                parameters={
+                    "type": "object",
+                    "properties": {"goal_id": {"type": "integer", "description": "Goal ID"}},
+                    "required": ["goal_id"],
+                },
+                fn=close_goal,
+            ),
+        ],
+        context_fns=[],
+    )
