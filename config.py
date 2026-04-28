@@ -86,8 +86,8 @@ def find_project_root(from_path: str | None = None) -> str | None:
     Discovery order:
       1. RV_PROJECT_ROOT env var (explicit override)
       2. .riven/ directory (primary — this IS the project root)
-      3. git rev-parse --show-toplevel (fallback for git repos without .riven/)
-      4. .riven/ or .git/ walk from from_path upward
+      3. Walk up from from_path checking for .riven/ or .git/
+      4. git rev-parse --show-toplevel (fallback — only if from_path is inside a git repo)
 
     Returns None if no project found.
     Result is cached after first call.
@@ -105,13 +105,19 @@ def find_project_root(from_path: str | None = None) -> str | None:
         _project_root_cache[start] = os.path.abspath(env_root)
         return _project_root_cache[start]
 
-    # 2. Check for .riven/ at start and walk up
+    # 2. Walk up looking for .riven/ (riven project takes priority)
     for directory in _walk_up(start):
         if os.path.isdir(os.path.join(directory, RIVEN_DIR)):
             _project_root_cache[start] = directory
             return _project_root_cache[start]
 
-    # 3. Git toplevel fallback
+    # 3. Walk up looking for .git/ (existing git repo without .riven/)
+    for directory in _walk_up(start):
+        if os.path.isdir(os.path.join(directory, '.git')):
+            _project_root_cache[start] = directory
+            return _project_root_cache[start]
+
+    # 4. Git toplevel fallback (only if from_path is inside a git work tree)
     git_root = _git_toplevel(start)
     if git_root:
         _project_root_cache[start] = git_root

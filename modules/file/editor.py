@@ -510,10 +510,11 @@ class FileEditor:
                     f"    Alternatively, open the file with allow_untracked=True to proceed anyway.\n"
                     f"    WARNING: rollback protection will be DISABLED for this file."
                 )
-            # Soft override: warn but continue
-            return (
-                f"⚠️  Opening {os.path.basename(path)} WITHOUT git tracking — rollback protection is DISABLED.\n"
-                f"    Proceed with caution. Consider calling create_project('{os.path.dirname(path)}') later."
+            # Soft override: warn but PROCEED with opening — no early return
+            logger.warning(
+                f"Opening {os.path.basename(path)} WITHOUT git tracking "
+                f"— rollback protection is DISABLED. "
+                f"Consider calling create_project('{os.path.dirname(path)}') later."
             )
         
         filename = os.path.basename(abs_path)
