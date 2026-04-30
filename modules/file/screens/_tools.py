@@ -134,3 +134,22 @@ async def screen_highlight(
     return f"Highlighted lines {start}-{end} on {screens} screen(s)" + (
         f": {label}" if label else ""
     )
+
+
+async def screen_speak(path: str, text: str) -> str:
+    """Send a formatted markdown message to all screens showing a file.
+
+    Riven uses this to communicate structured information to the user
+    directly on the screen — supporting **bold**, `inline code`,
+    ```code blocks```, and other markdown.
+
+    Args:
+        path: Path to the file this message relates to
+        text: Markdown-formatted message text
+    """
+    screens = await bc.broadcast_message(path=path, text=text)
+
+    if screens == 0:
+        return f"[ERROR] No screens are currently bound to {path}."
+
+    return f"Message sent to {screens} screen(s)."

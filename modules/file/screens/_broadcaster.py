@@ -310,3 +310,30 @@ async def broadcast_highlight(
         logger.info(f"[Screens] Highlighted {path}:{start}-{end} → {sent} screen(s)")
     return sent
 
+
+async def broadcast_message(path: str, text: str) -> int:
+    """Send a formatted markdown message to all screens showing a file.
+
+    Riven uses this to communicate structured information (code snippets,
+    bold labels, lists) to the user on the screen.
+
+    Args:
+        path: Absolute path of the file this message relates to
+        text: Markdown-formatted message text (supports **bold**, `code`,
+              ```python code blocks```, etc.)
+
+    Returns:
+        Number of screens that received the message
+    """
+    path = os.path.abspath(path)
+    screens = await registry.get_by_path(path)
+    if not screens:
+        return 0
+
+    msg = _build_message("message", path=path, text=text)
+
+    sent, failed = await _send_to_all(screens, msg)
+    if sent > 0:
+        logger.info(f"[Screens] Message sent to {path} → {sent} screen(s)")
+    return sent
+

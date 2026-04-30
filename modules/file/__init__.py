@@ -71,6 +71,7 @@ from modules.file.memory import (
 from modules.file.screens import (
     screen_bind,
     screen_release,
+    screen_speak,
     screen_status,
     screen_highlight,
 )
@@ -813,6 +814,19 @@ def get_module() -> Module:
                     "required": ["path", "start", "end"],
                 },
                 fn=screen_highlight,
+            ),
+            CalledFn(
+                name="screen_speak",
+                description="Send a formatted markdown message to all screens showing a file.\n\nRiven uses this to communicate structured information directly on the\nscreen — supports **bold**, `inline code`, ```code blocks```, and\nother standard markdown.\n\nUse this instead of plain text when explaining code, pointing out\npatterns, or giving multi-line examples.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file this message relates to"},
+                        "text": {"type": "string", "description": "Markdown-formatted message (bold, code blocks, etc.)"},
+                    },
+                    "required": ["path", "text"],
+                },
+                fn=screen_speak,
             ),
             # NOTE: read_file is intentionally not exposed as a tool.
             # Files should be opened via open_file() and their contents

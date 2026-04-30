@@ -184,6 +184,90 @@
   }
   .line.highlighted { animation: riven-highlight 3s ease-out forwards; }
 
+  /* Riven speech panel */
+  #riven-speech {
+    display: none;
+    flex-direction: column;
+    background: #161b22;
+    border-top: 1px solid #30363d;
+    max-height: 280px;
+    flex-shrink: 0;
+  }
+  #riven-speech.visible { display: flex; }
+
+  .speech-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid #21262d;
+    flex-shrink: 0;
+  }
+  .speech-label {
+    font-size: 12px;
+    color: #ffa657;
+    font-weight: 700;
+  }
+  .speech-close {
+    background: none;
+    border: none;
+    color: #484f58;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: color 0.15s;
+  }
+  .speech-close:hover { color: #8b949e; }
+
+  .speech-content {
+    padding: 10px 14px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #c9d1d9;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  }
+
+  .speech-content p { margin-bottom: 8px; }
+  .speech-content p:last-child { margin-bottom: 0; }
+  .speech-content strong { color: #ffa657; font-weight: 700; }
+  .speech-content em { color: #8b949e; font-style: italic; }
+  .speech-content code {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+    color: #79c0ff;
+  }
+  .speech-content pre {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 8px 0;
+    overflow-x: auto;
+  }
+  .speech-content pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #c9d1d9;
+    font-size: 12px;
+  }
+  .speech-content ul, .speech-content ol {
+    padding-left: 20px;
+    margin-bottom: 8px;
+  }
+  .speech-content li { margin-bottom: 4px; }
+  .speech-content h1, .speech-content h2, .speech-content h3 {
+    color: #58a6ff;
+    margin-bottom: 6px;
+    margin-top: 12px;
+  }
+  .speech-content h1:first-child, .speech-content h2:first-child, .speech-content h3:first-child { margin-top: 0; }
+
   /* Toast notification */
   #riven-toast {
     position: fixed;
@@ -210,12 +294,18 @@
 
 <!-- Status overlay (shown when disconnected) -->
 <div id="status-overlay" class="visible">
-
-<!-- Riven highlight toast -->
-<div id="riven-toast"></div>
   <div class="dot" id="overlay-dot"></div>
   <div class="msg" id="overlay-msg">Connecting...</div>
   <div class="sub" id="overlay-sub">WebSocket connecting to the editor</div>
+</div>
+
+<!-- Riven speech panel (formatted markdown messages from Riven) -->
+<div id="riven-speech">
+  <div class="speech-header">
+    <span class="speech-label">🐾 Riven</span>
+    <button class="speech-close" onclick="hideRivenSpeech()" title="Dismiss">✕</button>
+  </div>
+  <div class="speech-content" id="speech-content"></div>
 </div>
 
 <!-- Header -->
@@ -608,6 +698,11 @@ function connect() {
         scrollToLine(Math.max(0, msg.start - 1), true);
       }
 
+    } else if (type === 'message') {
+      // Riven sends a formatted text message (markdown) to the user
+      if (msg.path && msg.path !== currentPath) return;
+      showRivenSpeech(msg.text || msg.message || '');
+
     } else if (type === 'error') {
       showNotification('Error: ' + msg.message, 'error');
     }
@@ -635,6 +730,68 @@ function connect() {
 function getBaseName(path) {
   if (!path) return '';
   return path.split('/').pop();
+}
+
+// =============================================================================
+// Riven speech panel — renders formatted markdown messages
+// =============================================================================
+
+/**
+ * Lightweight markdown parser: handles code blocks, inline code,
+ * **bold**, _italic_, # headings, and line breaks.
+ */
+function parseMarkdown(text) {
+  if (!text) return '';
+
+  let html = text
+    // Code blocks: ```lang\n...\n```
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+      return '<pre><code>' + _escHtml(code.trim()) + '</code></pre>';
+    })
+    // Inline code: `...`
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Bold: **...**
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // Italic: _..._
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+    // Headings: ### ...
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    // Headings: ## ...
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    // Headings: # ...
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    // Inline list items: - item
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    // Wrap consecutive <li> lines in <ul>
+    .replace(/(<li>.*<\/li>)(?=\s*(<li>|\s*$))/gs, function(match) {
+      return '<ul>' + match + '</ul>';
+    })
+    // Line breaks
+    .replace(/\n/g, '<br>');
+
+  // Wrap non-block content in <p> tags (clean up stray <br>)
+  html = html
+    .replace(/<br><\/li>/g, '</li>')       // fix br before li
+    .replace(/<li>(.+?)(?=(?:<li>|\s*<\/ul>))/g, '<li>$1');
+
+  return html;
+}
+
+function _escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showRivenSpeech(text) {
+  const panel = document.getElementById('riven-speech');
+  const content = document.getElementById('speech-content');
+  if (!panel || !content) return;
+  content.innerHTML = parseMarkdown(text);
+  panel.classList.add('visible');
+}
+
+function hideRivenSpeech() {
+  const panel = document.getElementById('riven-speech');
+  if (panel) panel.classList.remove('visible');
 }
 
 function showNotification(text, type) {
