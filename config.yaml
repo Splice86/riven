@@ -22,7 +22,7 @@ memory_api:
   db_name: "riven"
   url: "http://127.0.0.1:8030"  # Template fallback
   # Prepend [YYYY-MM-DD HH:MM] timestamp to context content
-  include_timestamp: true
+  include_timestamp: false
 
 # Context settings
 context:
