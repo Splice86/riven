@@ -124,6 +124,8 @@ class ScreenRegistry:
             self._version[abs_path] = current + 1
             screen.bound_version = current + 1
 
+            self._sync_session_cache(screen)
+
         logger.info(f"[Screens] Bound: uid={uid} path={abs_path}")
         return True
 
@@ -135,8 +137,24 @@ class ScreenRegistry:
             screen.bound_path = ""
             screen.bound_version = 0
 
+            self._sync_session_cache(screen)
+
         logger.info(f"[Screens] Released: uid={uid}")
         return True
+
+    def _sync_session_cache(self, screen: ScreenConnection) -> None:
+        """Mutate the stale cache entry in _session_screens to match ScreenConnection.
+
+        Called after bind/release to keep the context cache in sync.
+        """
+        session_list = _session_screens.get(screen.session_id)
+        if not session_list:
+            return
+        for entry in session_list:
+            if entry.get("uid") == screen.uid:
+                entry["bound_path"] = screen.bound_path
+                entry["bound_version"] = screen.bound_version
+                return
 
     async def touch(self, uid: str) -> bool:
         """Update a screen's last-seen (keepalive)."""
