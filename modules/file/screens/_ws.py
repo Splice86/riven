@@ -155,6 +155,7 @@ async def screen_stream(ws: WebSocket):
                 screen = ScreenConnection(
                     uid=uid,
                     ws=ws,
+                    session_id=session_id,
                     client_name=client_name,
                 )
                 await registry.connect(screen)

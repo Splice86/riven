@@ -89,10 +89,17 @@ system: |
   {shards_help}
   {project_help}
 
+  ## Browser Screens
+
+  If a browser screen is bound to a file ({screens} shows online screens), use screen_highlight()
+  to scroll+flash a specific line or range after opening a function — it helps the user visually
+  track what you just opened. Call screen_bind() first if no screen is bound yet.
+
   --- Dynamic ---
 
   {planning}
   {file}
+  {screens}
   {shell}
   {shards_context}
   {project}

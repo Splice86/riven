@@ -297,6 +297,41 @@ async def get_file_history(path: str = None) -> str:
     return format_file_history(memories)
 
 
+def screen_context() -> str:
+    """Context function that injects current screen status for the session.
+
+    Reads live screen data from the sync-accessible session cache so it can be
+    called from the synchronous context-building path.
+    """
+    from config import get
+    session_id = get_session_id()
+    port = get('server.port', 8000)
+
+    try:
+        from modules.file.screens import get_session_screens_sync
+        screens = get_session_screens_sync(session_id)
+    except Exception:
+        return f"[Screens] No screens available. Open http://localhost:{port}/module/file/screens to register a screen."
+
+    if not screens:
+        return (
+            f"[Screens] No screens registered for this session.\n"
+            f"Open http://localhost:{port}/module/file/screens "
+            f"in a browser tab, then call screen_list() to see the UID."
+        )
+
+    lines = [f"[Screens] {len(screens)} screen(s) online for this session:"]
+    for s in screens:
+        bound = s.get("bound_path")
+        status = f"bound to {bound}" if bound else "idle (no file)"
+        lines.append(f"  [{s['uid']}] {s['client_name']} — {status}")
+
+    lines.append("")
+    lines.append(f"Call screen_bind(\"<path\", \"<uid>\") to bind a screen to a file.")
+    lines.append(f"Call screen_highlight(\"<path>\", start, end) to scroll+flash a line range.")
+    return "\n".join(lines)
+
+
 def _file_help() -> str:
     """Static tool documentation - does not change between calls."""
     from modules import _tool_ref  # Local import to avoid top-level cycle
@@ -314,11 +349,12 @@ Every file open consumes context space. LLM context windows are finite.
    - If the file is open with a partial range and you need the full file, close it first,
      then open it without line bounds. If it's already open with a wide range
      (e.g. lines 0-to-end or lines 0-1200+), just work with what's there — no need to re-open.
-2. **WHILE working**: if you switch to a new goal or task and the open files are no longer relevant,
+2. **When you open a file**: its content is immediately available in the {file} context block. Proceed to work with it — do not ask the user what to look at.
+3. **WHILE working**: if you switch to a new goal or task and the open files are no longer relevant,
    call close_file() on the old ones before opening new ones.
-3. **AFTER finishing**: when a file's work is done, close it immediately.
+4. **AFTER finishing**: when a file's work is done, close it immediately.
    Do NOT leave files open "just in case." Open them again when needed.
-4. **Large files**: files >1200 lines are truncated in context. Use open_function(path, name)
+5. **Large files**: files >1200 lines are truncated in context. Use open_function(path, name)
    to extract specific classes/functions via AST instead of opening the whole file.
 
 ### Tool Reference
@@ -341,12 +377,12 @@ files.
 
 **One-time browser setup:**
 1. Open a new browser tab (or a separate browser window/monitor)
-2. Navigate to: `http://localhost:8000/module/file/screens`
-   — substitute your server host/port if Riven runs elsewhere
+2. Navigate to the `/module/file/screens` endpoint — the URL is in server config
    — A screen card appears showing its UID (e.g. `screen-abc123`) and status (⚪ idle)
 3. Copy the UID from the browser — you'll pass it to screen_bind()
 4. Call `screen_bind("path/to/file.py", "screen-abc123")` to bind it
 5. The browser immediately shows the full file content; subsequent edits stream in live
+6. After binding, {screens} in context shows which screens are active
 
 **Screen lifecycle:**
 - A screen stays bound to its file across edits until you call screen_release()
@@ -357,7 +393,13 @@ files.
 **When to use screens:**
 - Useful when you want to verify edit results visually without re-reading file context
 - For read-only verification, the file context (injected by file_context()) is usually enough
-- Screens add value when editing large files or when visually confirming layout changes"""
+- Screens add value when editing large files or when visually confirming layout changes
+
+**Drawing attention to code:**
+After open_function(), consider calling screen_highlight(path, line_start, line_start)
+to scroll the browser screen to that function and flash it gold — useful when asking
+the user to look at a specific result. Check {screens} after binding to confirm
+the screen is online and watching the right file."""
 
 
 def _count_tokens(text: str) -> int:
@@ -795,6 +837,10 @@ def get_module() -> Module:
             ContextFn(
                 tag="file",
                 fn=file_context,
+            ),
+            ContextFn(
+                tag="screens",
+                fn=screen_context,
             ),
         ],
     )

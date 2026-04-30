@@ -24,7 +24,7 @@ from . import constants as C
 from . import _broadcaster as broadcaster
 from . import _db as _db_stub  # kept so existing imports don't break
 from ._broadcaster import broadcast_edit, broadcast_release_for_path, send_snapshot_to_uid, send_snapshots_for_path
-from ._registry import registry
+from ._registry import registry, get_session_screens_sync
 from ._tools import screen_bind, screen_list, screen_release, screen_status, screen_highlight
 
 if TYPE_CHECKING:

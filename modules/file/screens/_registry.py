@@ -19,10 +19,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Session-scoped sync-accessible cache for {screens} context injection.
+# Updated synchronously (no lock needed — only written by async connect/disconnect
+# after each yields, and read by the sync context builder between calls).
+_session_screens: dict[str, list[dict]] = {}
+
+
 class ScreenConnection:
     __slots__ = (
         "uid",
         "ws",
+        "session_id",
         "bound_path",
         "bound_version",
         "client_name",
@@ -32,12 +39,14 @@ class ScreenConnection:
         self,
         uid: str,
         ws: WebSocket,
+        session_id: str = "",
         bound_path: str = "",
         bound_version: int = 0,
         client_name: str = "Screen",
     ):
         self.uid = uid
         self.ws = ws
+        self.session_id = session_id
         self.bound_path = bound_path
         self.bound_version = bound_version
         self.client_name = client_name
@@ -45,6 +54,7 @@ class ScreenConnection:
     def to_dict(self) -> dict:
         return {
             "uid": self.uid,
+            "session_id": self.session_id,
             "bound_path": self.bound_path,
             "bound_version": self.bound_version,
             "client_name": self.client_name,
@@ -59,11 +69,15 @@ class ScreenRegistry:
     async def connect(self, screen: ScreenConnection) -> None:
         async with self._lock:
             self._connections[screen.uid] = screen
-        logger.info(f"[Screens] Connected: uid={screen.uid} client={screen.client_name}")
+        _session_screens.setdefault(screen.session_id, []).append(screen.to_dict())
+        logger.info(f"[Screens] Connected: uid={screen.uid} session={screen.session_id} client={screen.client_name}")
 
     async def disconnect(self, uid: str) -> None:
         async with self._lock:
-            self._connections.pop(uid, None)
+            screen = self._connections.pop(uid, None)
+        if screen:
+            for lst in _session_screens.values():
+                lst[:] = [s for s in lst if s["uid"] != uid]
         logger.info(f"[Screens] Disconnected: uid={uid}")
 
     async def get(self, uid: str) -> Optional[ScreenConnection]:
@@ -143,3 +157,8 @@ class ScreenRegistry:
 
 
 registry = ScreenRegistry()
+
+
+def get_session_screens_sync(session_id: str) -> list[dict]:
+    """Sync read of session screens — called by screen_context()."""
+    return _session_screens.get(session_id, [])

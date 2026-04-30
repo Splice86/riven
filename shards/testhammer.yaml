@@ -91,10 +91,11 @@ system: |
   {planning_help}
   {shards_help}
 
-  --- Dynamic ---
+ --- Dynamic ---
 
   {planning}
   {file}
+  {screens}
   {shell}
   {shards_context}
 
