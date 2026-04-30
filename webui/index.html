@@ -221,6 +221,13 @@
           <div class="message-content"></div>
           <div class="raw-accum" style="display:none" aria-hidden="true"></div>
         `;
+        // For history loading: populate accumulator and render markdown
+        if (content) {
+          const rawEl = div.querySelector('.raw-accum');
+          const contentEl = div.querySelector('.message-content');
+          if (rawEl) rawEl.textContent = content;
+          if (contentEl) contentEl.innerHTML = parseMarkdown(content);
+        }
       } else {
         div.innerHTML = `
           <div class="message-role">${label}</div>
@@ -389,6 +396,8 @@
             const last = msgs.lastElementChild;
             if (last && last.dataset.streaming === 'true') {
               last.dataset.streaming = 'false';
+              // Final render pass: ensure markdown is fully applied
+              scheduleMarkdownRender(last);
             }
           }
         }

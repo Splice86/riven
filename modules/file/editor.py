@@ -598,7 +598,7 @@ class FileEditor:
         except Exception:
             pass
         
-        return f"Just opened {filename} ({file_type_str}, {total_lines} lines, ~{token_count} tokens){line_info}{large_warning}"
+        return f"Opened {filename} (~{token_count} tokens). File is now instantly visible in system context{line_info}{large_warning}"
     
     async def close_file(self, name: str, line_start: int = None, line_end: int = None) -> str:
         """Close a file from the file context.
