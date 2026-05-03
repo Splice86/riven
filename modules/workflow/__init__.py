@@ -30,7 +30,9 @@ Tools:
 - **mark_step_done(step_id, ?notes)** — Mark a step complete
 - **mark_step_in_progress(step_id)** — Mark a step as in-progress
 - **skip_step(step_id, reason)** — Skip a step with a reason
-- **expand_implement_steps(steps)** — Add custom steps to the implement stage
+- **guide_workflow(task)** — Analyze a task and generate a structured workflow guide
+- **build_workflow(guide)** — Build and start a custom workflow from a guide
+- **expand_implement_steps(steps)** — Add custom steps to the current stage (template workflows)
 - **add_step_note(step_id, note)** — Add a note to any step
 - **stop_workflow()** — Stop and reset the active workflow
 """
@@ -466,6 +468,412 @@ def stop_workflow_cmd() -> str:
     return "Workflow stopped and state cleared."
 
 
+def guide_workflow_cmd(task: str) -> str:
+    """Analyze a task and produce a structured guide/checklist for completing it.
+
+    The guide is tailored to the specific task type (feature, bug fix, refactor,
+    investigation, etc.) and includes appropriate stages and steps.
+
+    Args:
+        task: Description of the task or goal to accomplish
+
+    Returns:
+        A structured guide with stages and steps, ready to pass to build_workflow()
+    """
+    import uuid
+
+    # Infer workflow characteristics from task
+    task_lower = task.lower()
+    is_exploratory = any(k in task_lower for k in [
+        "explore", "understand", "investigate", "analyze", "find out", "figure out"
+    ])
+    is_bug = any(k in task_lower for k in [
+        "bug", "fix", "error", "crash", "broken", "fail", "issue", "wrong"
+    ])
+    is_refactor = any(k in task_lower for k in [
+        "refactor", "clean up", "restructure", "improve", "optimize"
+    ])
+    is_review = any(k in task_lower for k in [
+        "review", "audit", "check", "assess"
+    ])
+
+    if is_exploratory:
+        guide = _exploratory_guide(task)
+    elif is_bug:
+        guide = _bugfix_guide(task)
+    elif is_refactor:
+        guide = _refactor_guide(task)
+    elif is_review:
+        guide = _review_guide(task)
+    else:
+        guide = _feature_guide(task)
+
+    return _format_guide(guide)
+
+
+def _feature_guide(task: str) -> dict:
+    """Build a feature/implementation guide."""
+    import uuid
+    wf_id = f"feature_{uuid.uuid4().hex[:6]}"
+    return {
+        "id": wf_id,
+        "name": "Feature Implementation",
+        "description": f"Build: {task}",
+        "stages": [
+            {
+                "name": "understand",
+                "description": "Understand the existing codebase and constraints",
+                "steps": [
+                    {"id": f"{wf_id}_und_1", "description": "Explore relevant directories and existing patterns"},
+                    {"id": f"{wf_id}_und_2", "description": "Identify dependencies and interfaces"},
+                    {"id": f"{wf_id}_und_3", "description": "Define boundaries of the change"},
+                ],
+            },
+            {
+                "name": "plan",
+                "description": "Plan the implementation approach",
+                "gate_description": "Plan must identify files and steps",
+                "steps": [
+                    {"id": f"{wf_id}_plan_1", "description": "Break into logical implementation steps"},
+                    {"id": f"{wf_id}_plan_2", "description": "List files to modify/create"},
+                ],
+            },
+            {
+                "name": "implement",
+                "description": "Implement each step of the plan",
+                "steps": [
+                    {"id": f"{wf_id}_impl_1", "description": "Implementation step 1"},
+                ],
+            },
+            {
+                "name": "verify",
+                "description": "Verify the implementation works correctly",
+                "gate_description": "Tests pass and no regressions",
+                "steps": [
+                    {"id": f"{wf_id}_ver_1", "description": "Run tests"},
+                    {"id": f"{wf_id}_ver_2", "description": "Manual verification"},
+                ],
+            },
+            {
+                "name": "commit",
+                "description": "Commit and push changes",
+                "steps": [
+                    {"id": f"{wf_id}_com_1", "description": "Stage and commit changes"},
+                    {"id": f"{wf_id}_com_2", "description": "Push to remote"},
+                ],
+            },
+        ],
+    }
+
+
+def _bugfix_guide(task: str) -> dict:
+    """Build a bugfix guide."""
+    import uuid
+    wf_id = f"bugfix_{uuid.uuid4().hex[:6]}"
+    return {
+        "id": wf_id,
+        "name": "Bug Fix",
+        "description": f"Fix: {task}",
+        "stages": [
+            {
+                "name": "reproduce",
+                "description": "Reproduce the bug and understand its scope",
+                "gate_description": "Must be able to reliably reproduce",
+                "steps": [
+                    {"id": f"{wf_id}_rep_1", "description": "Find the failing case or error"},
+                    {"id": f"{wf_id}_rep_2", "description": "Isolate minimal reproduction"},
+                    {"id": f"{wf_id}_rep_3", "description": "Identify root cause"},
+                ],
+            },
+            {
+                "name": "fix",
+                "description": "Apply the fix",
+                "steps": [
+                    {"id": f"{wf_id}_fix_1", "description": "Implement the fix"},
+                ],
+            },
+            {
+                "name": "verify",
+                "description": "Verify the fix",
+                "gate_description": "Bug is resolved and no regressions",
+                "steps": [
+                    {"id": f"{wf_id}_ver_1", "description": "Confirm bug is fixed"},
+                    {"id": f"{wf_id}_ver_2", "description": "Run full test suite"},
+                ],
+            },
+            {
+                "name": "commit",
+                "description": "Commit and push",
+                "steps": [
+                    {"id": f"{wf_id}_com_1", "description": "Commit fix"},
+                    {"id": f"{wf_id}_com_2", "description": "Push"},
+                ],
+            },
+        ],
+    }
+
+
+def _refactor_guide(task: str) -> dict:
+    """Build a refactor guide."""
+    import uuid
+    wf_id = f"refactor_{uuid.uuid4().hex[:6]}"
+    return {
+        "id": wf_id,
+        "name": "Refactor",
+        "description": f"Refactor: {task}",
+        "stages": [
+            {
+                "name": "assess",
+                "description": "Assess the code to be refactored",
+                "steps": [
+                    {"id": f"{wf_id}_ass_1", "description": "List files and understand structure"},
+                    {"id": f"{wf_id}_ass_2", "description": "Identify what needs changing and why"},
+                ],
+            },
+            {
+                "name": "plan",
+                "description": "Plan the refactor",
+                "gate_description": "Must not change external behavior",
+                "steps": [
+                    {"id": f"{wf_id}_plan_1", "description": "Outline refactor steps"},
+                    {"id": f"{wf_id}_plan_2", "description": "Identify tests to verify no behavior change"},
+                ],
+            },
+            {
+                "name": "refactor",
+                "description": "Execute the refactor",
+                "steps": [
+                    {"id": f"{wf_id}_ref_1", "description": "Apply refactor changes"},
+                ],
+            },
+            {
+                "name": "verify",
+                "description": "Verify refactor is safe",
+                "gate_description": "All tests pass",
+                "steps": [
+                    {"id": f"{wf_id}_ver_1", "description": "Run full test suite"},
+                ],
+            },
+            {
+                "name": "commit",
+                "description": "Commit",
+                "steps": [
+                    {"id": f"{wf_id}_com_1", "description": "Commit and push"},
+                ],
+            },
+        ],
+    }
+
+
+def _review_guide(task: str) -> dict:
+    """Build a code review guide."""
+    import uuid
+    wf_id = f"review_{uuid.uuid4().hex[:6]}"
+    return {
+        "id": wf_id,
+        "name": "Code Review",
+        "description": f"Review: {task}",
+        "stages": [
+            {
+                "name": "identify",
+                "description": "Identify what to review",
+                "steps": [
+                    {"id": f"{wf_id}_id_1", "description": "List files/changes to review"},
+                ],
+            },
+            {
+                "name": "analyze",
+                "description": "Analyze for issues",
+                "steps": [
+                    {"id": f"{wf_id}_an_1", "description": "Check for bugs/logic errors"},
+                    {"id": f"{wf_id}_an_2", "description": "Check for style/convention issues"},
+                    {"id": f"{wf_id}_an_3", "description": "Check for performance concerns"},
+                ],
+            },
+            {
+                "name": "fix",
+                "description": "Fix identified issues",
+                "steps": [
+                    {"id": f"{wf_id}_fix_1", "description": "Apply fixes"},
+                ],
+            },
+            {
+                "name": "verify",
+                "description": "Verify fixes",
+                "gate_description": "Tests pass",
+                "steps": [
+                    {"id": f"{wf_id}_ver_1", "description": "Run tests"},
+                ],
+            },
+        ],
+    }
+
+
+def _exploratory_guide(task: str) -> dict:
+    """Build an exploratory guide."""
+    import uuid
+    wf_id = f"explore_{uuid.uuid4().hex[:6]}"
+    return {
+        "id": wf_id,
+        "name": "Exploratory Investigation",
+        "description": f"Explore: {task}",
+        "stages": [
+            {
+                "name": "explore",
+                "description": "Explore and understand",
+                "steps": [
+                    {"id": f"{wf_id}_exp_1", "description": "Investigate the codebase"},
+                    {"id": f"{wf_id}_exp_2", "description": "Document findings"},
+                ],
+            },
+            {
+                "name": "iterate",
+                "description": "Iterate and experiment",
+                "steps": [
+                    {"id": f"{wf_id}_it_1", "description": "Make experimental changes"},
+                    {"id": f"{wf_id}_it_2", "description": "Test hypotheses"},
+                ],
+            },
+            {
+                "name": "conclude",
+                "description": "Draw conclusions",
+                "steps": [
+                    {"id": f"{wf_id}_con_1", "description": "Summarize findings"},
+                    {"id": f"{wf_id}_con_2", "description": "Note follow-up items"},
+                ],
+            },
+        ],
+    }
+
+
+def _format_guide(guide: dict) -> str:
+    """Format a guide dict as a human-readable string."""
+    lines = [
+        f"## Workflow Guide: {guide['name']}",
+        f"{guide['description']}",
+        "",
+        "### Stages",
+        "",
+    ]
+    for i, stage in enumerate(guide.get("stages", []), 1):
+        lines.append(f"{i}. **{stage['name']}** — {stage['description']}")
+        if stage.get("gate_description"):
+            lines.append(f"   Gate: {stage['gate_description']}")
+        for j, step in enumerate(stage.get("steps", []), 1):
+            lines.append(f"   {j}. {step['description']}")
+        lines.append("")
+    lines.append("---")
+    lines.append(f"Guide ID: {guide['id']}")
+    lines.append("Pass this guide to build_workflow() to begin tracking progress.")
+    return "\n".join(lines)
+
+
+def build_workflow_cmd(guide: dict) -> str:
+    """Build and start a custom workflow from a guide produced by guide_workflow().
+
+    The guide dict should contain:
+    - id: unique workflow identifier
+    - name: workflow name
+    - description: what this workflow does
+    - stages: list of stages, each with name, description, optional gate_description,
+      and steps (list of {id, description} dicts)
+
+    Args:
+        guide: Workflow guide dict from guide_workflow()
+
+    Returns:
+        Confirmation message with workflow structure and first stage
+    """
+    import json
+
+    # Validate guide structure
+    if not isinstance(guide, dict):
+        return f"Error: guide must be a dict, got {type(guide).__name__}"
+    if 'stages' not in guide:
+        return "Error: guide must have a 'stages' key"
+    if not isinstance(guide['stages'], list):
+        return "Error: guide['stages'] must be a list"
+
+    workflow_id = guide.get('id', 'custom')
+    stages = []
+
+    for i, stage_data in enumerate(guide['stages']):
+        if not isinstance(stage_data, dict):
+            return f"Error: stage {i+1} must be a dict"
+        if 'name' not in stage_data:
+            return f"Error: stage {i+1} is missing a 'name'"
+
+        steps = []
+        for j, step_data in enumerate(stage_data.get('steps', [])):
+            if not isinstance(step_data, dict):
+                return f"Error: stage {i+1}, step {j+1} must be a dict"
+            step_id = step_data.get('id', f"{stage_data['name']}_step_{j+1}")
+            step_desc = step_data.get('description', f"Step {j+1}")
+            steps.append(Step(id=step_id, description=step_desc))
+
+        stages.append(Stage(
+            name=stage_data['name'],
+            description=stage_data.get('description', ''),
+            gate_description=stage_data.get('gate_description'),
+            steps=steps,
+        ))
+
+    # Check no active workflow
+    state = storage.load_state()
+    if state:
+        return (
+            f"Workflow '{state.workflow_id}' is already active. "
+            f"Use stop_workflow() first, or continue with workflow_status()."
+        )
+
+    # Build state with dynamic stages
+    state = WorkflowState(
+        workflow_id=workflow_id,
+        current_stage_index=0,
+        started_at=datetime.now(timezone.utc).isoformat(),
+        dynamic_stages=stages,
+    )
+
+    # Initialize all step states
+    for stage in stages:
+        for step in stage.steps:
+            state.step_states[step.id] = StepStatus.PENDING
+
+    # Register custom workflow in template registry
+    from .templates import WORKFLOWS
+    from .models import Workflow
+    WORKFLOWS[workflow_id] = Workflow(
+        id=workflow_id,
+        name=guide.get('name', workflow_id.replace('_', ' ').title()),
+        description=guide.get('description', ''),
+        category="custom",
+        stages=stages,
+        tags=["custom"],
+    )
+
+    storage.save_state(state)
+
+    # Format response
+    lines = [
+        f"Workflow built: {guide.get('name', workflow_id)}",
+        f"Description: {guide.get('description', '')}",
+        "",
+        f"Stages ({len(stages)}):",
+    ]
+    for i, stage in enumerate(stages, 1):
+        lines.append(f"  {i}. {stage.name}")
+        if stage.gate_description:
+            lines.append(f"     Gate: {stage.gate_description}")
+        for step in stage.steps:
+            lines.append(f"     - {step.description}")
+
+    lines.append("")
+    lines.append("Use workflow_status() to track progress, mark_step_done() to complete steps, "
+                 "and advance_stage() to move forward.")
+
+    return "\n".join(lines)
+
+
 def get_module() -> Module:
     """Return the workflow module."""
     return Module(
@@ -582,8 +990,42 @@ def get_module() -> Module:
                 fn=skip_step_cmd,
             ),
             CalledFn(
+                name="guide_workflow",
+                description="Analyze a task and generate a structured workflow guide. "
+                    "Returns a human-readable guide with stages and steps tailored to the task type "
+                    "(feature, bug fix, refactor, review, exploratory). "
+                    "Pass the result to build_workflow() to start tracking.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Description of the task or goal to accomplish",
+                        },
+                    },
+                    "required": ["task"],
+                },
+                fn=guide_workflow_cmd,
+            ),
+            CalledFn(
+                name="build_workflow",
+                description="Build and start a custom workflow from a guide. "
+                    "Use guide_workflow() first to generate a guide, then pass it here.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guide": {
+                            "type": "object",
+                            "description": "Guide dict with id, name, description, and stages [{name, description, steps: [{id, description}]}]",
+                        },
+                    },
+                    "required": ["guide"],
+                },
+                fn=build_workflow_cmd,
+            ),
+            CalledFn(
                 name="expand_implement_steps",
-                description="Expand the implement stage with steps from a plan",
+                description="Add custom steps to the current stage of a template workflow (legacy — prefer build_workflow for custom workflows)",
                 parameters={
                     "type": "object",
                     "properties": {

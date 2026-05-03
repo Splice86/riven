@@ -47,17 +47,29 @@ class WorkflowState:
     started_at: str | None = None
     step_states: dict[str, StepStatus] = field(default_factory=dict)
     step_notes: dict[str, str] = field(default_factory=dict)
+    # Full custom stages for dynamically-built workflows
+    dynamic_stages: list[Stage] = field(default_factory=list)
+    # Legacy: per-stage steps (superseded by dynamic_stages, kept for compat)
     dynamic_steps: dict[str, list[Step]] = field(default_factory=dict)
+
+    # -------------------------------------------------------------------------
+    # Stage resolution — dynamic stages take priority over template stages
+    # -------------------------------------------------------------------------
+
+    def _get_stages(self) -> list[Stage]:
+        """Return stages: custom stages if present, otherwise falls back to template."""
+        if self.dynamic_stages:
+            return self.dynamic_stages
+        from .templates import WORKFLOWS
+        workflow = WORKFLOWS.get(self.workflow_id)
+        return workflow.stages if workflow else []
 
     def get_current_stage(self) -> Stage | None:
         """Get the current stage object."""
-        from .templates import WORKFLOWS
-        workflow = WORKFLOWS.get(self.workflow_id)
-        if not workflow:
+        stages = self._get_stages()
+        if self.current_stage_index >= len(stages):
             return None
-        if self.current_stage_index >= len(workflow.stages):
-            return None
-        return workflow.stages[self.current_stage_index]
+        return stages[self.current_stage_index]
 
     def get_stage_progress(self) -> tuple[int, int]:
         """Get (completed_steps, total_steps) for current stage."""
@@ -90,14 +102,15 @@ class WorkflowState:
 
     def advance(self) -> bool:
         """Move to next stage. Returns True if advanced, False if at end."""
-        from .templates import WORKFLOWS
-        workflow = WORKFLOWS.get(self.workflow_id)
-        if not workflow:
-            return False
-        if self.current_stage_index < len(workflow.stages) - 1:
+        stages = self._get_stages()
+        if self.current_stage_index < len(stages) - 1:
             self.current_stage_index += 1
             return True
         return False
+
+    # -------------------------------------------------------------------------
+    # Serialization
+    # -------------------------------------------------------------------------
 
     def to_dict(self) -> dict:
         """Serialize to dict for storage."""
@@ -107,6 +120,16 @@ class WorkflowState:
             'started_at': self.started_at,
             'step_states': {k: v.value for k, v in self.step_states.items()},
             'step_notes': self.step_notes,
+            'dynamic_stages': [
+                {
+                    'name': s.name,
+                    'description': s.description,
+                    'gate_description': s.gate_description,
+                    'steps': [{'id': st.id, 'description': st.description} for st in s.steps],
+                }
+                for s in self.dynamic_stages
+            ],
+            # Legacy compat
             'dynamic_steps': {
                 k: [{'id': s.id, 'description': s.description} for s in steps]
                 for k, steps in self.dynamic_steps.items()
@@ -123,6 +146,15 @@ class WorkflowState:
             k: StepStatus(v) for k, v in data.get('step_states', {}).items()
         }
         state.step_notes = data.get('step_notes', {})
+        state.dynamic_stages = [
+            Stage(
+                name=ds['name'],
+                description=ds['description'],
+                gate_description=ds.get('gate_description'),
+                steps=[Step(id=s['id'], description=s['description']) for s in ds.get('steps', [])],
+            )
+            for ds in data.get('dynamic_stages', [])
+        ]
         state.dynamic_steps = {
             k: [Step(id=s['id'], description=s['description']) for s in steps]
             for k, steps in data.get('dynamic_steps', {}).items()

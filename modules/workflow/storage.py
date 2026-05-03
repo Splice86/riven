@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from modules import _session_id
+from .models import WorkflowState, Workflow
 
 
 # Key used to store workflow state in context DB
@@ -45,7 +46,6 @@ def load_state() -> Optional['WorkflowState']:
     Returns:
         WorkflowState if found, None otherwise
     """
-    from .models import WorkflowState
     db = _get_db()
     session_id = _session_id.get()
     
@@ -84,9 +84,23 @@ def load_state() -> Optional['WorkflowState']:
                 clear_state()
                 return None
 
-        return WorkflowState.from_dict(data)
-    
-    return None
+        state = WorkflowState.from_dict(data)
+        _register_custom_workflow(state)
+        return state
+
+
+def _register_custom_workflow(state: WorkflowState) -> None:
+    """Register a custom workflow template so get_workflow() finds it."""
+    from .templates import WORKFLOWS
+    if state.dynamic_stages and state.workflow_id not in WORKFLOWS:
+        WORKFLOWS[state.workflow_id] = Workflow(
+            id=state.workflow_id,
+            name=state.workflow_id.replace("_", " ").title(),
+            description="Custom workflow built from guide",
+            category="custom",
+            stages=state.dynamic_stages,
+            tags=["custom"],
+        )
 
 
 def clear_state() -> None:
