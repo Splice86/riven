@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Riven File Editor</title>
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --sidebar: #181825;
+    --border: #313244;
+    --text: #cdd6f4;
+    --muted: #6c7086;
+    --accent: #89b4fa;
+    --green: #a6e3a1;
+    --yellow: #f9e2af;
+    --red: #f38ba8;
+    --hover: #2a2a3c;
+    --selected: #3b3b52;
+    --font: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ─── Toolbar ─── */
+  #toolbar {
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  #toolbar .title { color: var(--accent); font-weight: 600; }
+  #toolbar .sep { color: var(--muted); }
+
+  #ws-status {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--border);
+    color: var(--muted);
+  }
+  #ws-status.connected { background: #2a4a2a; color: var(--green); }
+  #ws-status.disconnected { background: #4a2a2a; color: var(--red); }
+  #save-indicator { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: transparent; color: transparent; }
+  #save-indicator.saving { background: #2a3a2a; color: var(--yellow); }
+  #save-indicator.saved  { background: #2a4a2a; color: var(--green); }
+  #save-indicator.unsaved { background: #4a3a2a; color: var(--yellow); }
+
+  #active-file {
+    color: var(--yellow);
+    font-size: 12px;
+    margin-left: auto;
+  }
+
+  #instance-badge, #session-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--border);
+    color: var(--muted);
+  }
+
+  /* ─── Main layout ─── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ─── Sidebar: File tree ─── */
+  #sidebar {
+    width: 240px;
+    min-width: 180px;
+    max-width: 600px;
+    background: var(--sidebar);
+    overflow-y: auto;
+    padding: 0;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #sidebar::-webkit-scrollbar { width: 6px; }
+  #sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ─── Resize handle ─── */
+  #resize-handle {
+    width: 5px;
+    background: var(--border);
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+  }
+  #resize-handle:hover, #resize-handle.dragging { background: var(--accent); }
+
+  .tree-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    gap: 6px;
+    color: var(--text);
+    user-select: none;
+  }
+  .tree-item:hover { background: var(--hover); }
+  .tree-item.active { background: var(--selected); color: var(--accent); }
+
+  .tree-item .icon { flex-shrink: 0; font-size: 14px; }
+  .tree-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tree-item .count { color: var(--muted); font-size: 11px; }
+
+  .tree-dir .children { display: none; }
+  .tree-dir.open .children { display: block; }
+  .tree-dir > .tree-item .icon { color: var(--yellow); }
+
+  .tree-file .icon { color: var(--muted); }
+
+  #sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--sidebar);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+
+  #abs-path-input {
+    flex: 1;
+    background: #1e1e1e;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    color: var(--yellow);
+    font-weight: 600;
+    font-size: 12px;
+    font-family: inherit;
+    padding: 3px 6px;
+    outline: none;
+    min-width: 0;
+  }
+  #abs-path-input:focus {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .nav-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 3px 5px;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .nav-btn:hover { background: var(--hover); color: var(--text); }
+  .nav-btn:disabled { opacity: 0.3; cursor: default; }
+
+  .tree-item .chevron {
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex-shrink: 0;
+  }
+  .tree-dir.open > .tree-item .chevron { transform: rotate(90deg); }
+
+  .tree-file.py .icon { color: #89b4fa; }
+  .tree-file.js .icon { color: #f9e2af; }
+  .tree-file.html .icon { color: #f38ba8; }
+  .tree-file.md .icon { color: #a6e3a1; }
+
+  /* ─── Editor pane ─── */
+  #editor-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  #editor-header {
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    padding: 5px 12px;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    min-height: 30px;
+  }
+  #editor-header .hint { margin-left: auto; font-size: 11px; }
+  #open-path {
+    color: var(--yellow);
+    font-size: 12px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 600px;
+  }
+
+  #editor-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    position: relative;
+  }
+
+  #cm-editor {
+    height: auto !important;
+  }
+  #cm-editor .CodeMirror {
+    height: auto !important;
+    min-height: 100%;
+  }
+  #cm-editor .CodeMirror-sizer {
+    min-height: 100%;
+  }
+
+  /* CodeMirror overrides */
+  .cm-editor { height: 100%; background: var(--bg) !important; }
+  .cm-scroller { font-family: var(--font) !important; font-size: 14px !important; }
+  .cm-content { caret-color: var(--accent); }
+  .cm-cursor { border-left-color: var(--accent) !important; }
+  .cm-gutters { background: var(--sidebar) !important; border-right: 1px solid var(--border) !important; color: var(--muted); }
+  .cm-activeLineGutter { background: #2a2a3c !important; }
+  .cm-activeLine { background: #2a2a3c40 !important; }
+  .cm-selectionBackground { background: #3b3b5260 !important; }
+  .cm-focused .cm-selectionBackground { background: #3b3b5260 !important; }
+  .cm-line { padding: 0 4px; }
+  .cm-matchingBracket { background: #3b3b5280 !important; outline: 1px solid var(--accent); }
+
+  /* ─── Highlight overlay ─── */
+  #highlight-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 10;
+    display: none;
+  }
+  #highlight-overlay .hl-line {
+    position: absolute;
+    left: 0; right: 0;
+    background: #f9e2af30;
+    border-left: 3px solid var(--yellow);
+    animation: hl-flash 1.2s ease-out forwards;
+    pointer-events: none;
+  }
+  @keyframes hl-flash {
+    0%   { background: #f9e2af60; border-left-color: var(--red); }
+    50%  { background: #f9e2af30; border-left-color: var(--yellow); }
+    100% { background: transparent; border-left-color: transparent; }
+  }
+
+  /* ─── Toast ─── */
+  #toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--sidebar);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 13px;
+    color: var(--text);
+    max-width: 480px;
+    z-index: 100;
+    opacity: 0;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    box-shadow: 0 4px 20px #00000060;
+  }
+  #toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+  #toast strong { color: var(--accent); }
+
+  /* ─── Empty state ─── */
+  #empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 14px;
+    gap: 12px;
+  }
+  #empty-state .emoji { font-size: 48px; opacity: 0.5; }
+  #empty-state p { text-align: center; max-width: 300px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<!-- ─── Toolbar ─── -->
+<div id="toolbar">
+  <span class="title">📝 Riven File Editor</span>
+  <span class="sep">|</span>
+  <span id="ws-status">● Connecting</span>
+  <span id="save-indicator"></span>
+  <span id="instance-badge"></span>
+  <span id="session-badge"></span>
+  <span id="active-file">—</span>
+</div>
+
+<!-- ─── Main ─── -->
+<div id="main">
+
+  <!-- File tree sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <button class="nav-btn" id="btn-up" title="Go up one directory">⬆</button>
+      <input id="abs-path-input" type="text" placeholder="/absolute/path" spellcheck="false" />
+    </div>
+    <div id="file-tree"></div>
+  </div>
+
+  <!-- Resize handle -->
+  <div id="resize-handle"></div>
+
+  <!-- Editor pane -->
+  <div id="editor-pane">
+    <div id="editor-header">
+      <span id="open-path">No file open</span>
+      <span class="hint">Files update automatically on disk changes</span>
+    </div>
+
+    <div id="editor-wrap">
+      <div id="highlight-overlay"></div>
+      <div id="cm-editor"></div>
+    </div>
+
+    <div id="empty-state">
+      <div class="emoji">📂</div>
+      <p>Select a file from the tree on the left to start editing.</p>
+      <p>Click any file to open it; the browser updates automatically when the file changes on disk.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- CodeMirror -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+
+<script>
+// ─── Instance ID & Session ID from URL ─────────────────────────────────────
+const urlParams = new URLSearchParams(location.search);
+const sessionId = urlParams.get('session');
+const instanceId = 'ed-' + Math.random().toString(36).slice(2, 10);
+
+// Show instance badge in toolbar
+const instanceBadge = document.getElementById('instance-badge');
+instanceBadge.textContent = '📝 ' + instanceId;
+instanceBadge.title = 'Editor instance ID';
+
+if (sessionId) {
+  const badge = document.getElementById('session-badge');
+  badge.textContent = '💬 ' + sessionId;
+  badge.title = 'Opened from chat session';
+}
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let ws = null;
+let editor = null;
+let currentPath = null;
+let serverContent = null;
+let modified = false;
+let saveTimer = null;
+let suppressChangeEvent = false;
+let absPath = '';  // current absolute directory being browsed
+
+// ─── Mode map ────────────────────────────────────────────────────────────────
+function getMode(filename) {
+  const ext = (filename || '').split('.').pop().toLowerCase();
+  const modes = {
+    py: 'python', js: 'javascript', ts: 'javascript', jsx: 'javascript',
+    tsx: 'javascript', html: 'xml', htm: 'xml', css: 'css', scss: 'css',
+    md: 'markdown', yml: 'yaml', yaml: 'yaml', json: 'javascript',
+    java: 'text/x-java', c: 'text/x-csrc', cpp: 'text/x-c++src',
+    sh: 'shell', bash: 'shell', sql: 'sql', graphql: 'javascript',
+    svelte: 'xml', vue: 'xml',
+  };
+  return modes[ext] || 'text/plain';
+}
+
+// ─── CodeMirror init ─────────────────────────────────────────────────────────
+function initEditor() {
+  editor = CodeMirror(document.getElementById('cm-editor'), {
+    value: '',
+    mode: 'text/plain',
+    theme: 'material-darker',
+    lineNumbers: true,
+    lineWrapping: true,
+    tabSize: 4,
+    indentWithTabs: false,
+    styleActiveLine: true,
+    matchBrackets: true,
+    readOnly: false,
+    autofocus: true,
+  });
+
+  editor.on('change', () => {
+    if (suppressChangeEvent) return;
+    serverContent = null;
+    modified = true;
+    document.getElementById('save-indicator').textContent = '● Unsaved';
+    document.getElementById('save-indicator').className = 'unsaved';
+
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      if (modified && currentPath) {
+        saveFile();
+      }
+    }, 1000);
+  });
+}
+
+// ─── File tree ───────────────────────────────────────────────────────────────
+function renderTree(files) {
+  const el = document.getElementById('file-tree');
+  el.innerHTML = '';
+  files.forEach(item => el.appendChild(renderTreeItem(item)));
+}
+
+function renderTreeItem(node) {
+  const div = document.createElement('div');
+
+  if (node.type === 'dir') {
+    div.className = 'tree-dir';  // collapsed by default
+    div.innerHTML = `
+      <div class="tree-item" data-path="${node.path}" data-type="dir">
+        <span class="chevron">▶</span>
+        <span class="icon">📁</span>
+        <span class="name">${node.name}</span>
+        <span class="count">${node.count || ''}</span>
+      </div>
+      <div class="children"></div>
+    `;
+    const children = div.querySelector('.children');
+    (node.children || []).forEach(child => {
+      children.appendChild(renderTreeItem(child));
+    });
+    const itemEl = div.querySelector('.tree-item');
+
+    // Single-click: expand/collapse only (don't navigate)
+    itemEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      div.classList.toggle('open');
+      console.log('[TREE] toggle open, now:', div.classList.contains('open'));
+    });
+
+    // Double-click: navigate into this subfolder (node.path is absolute)
+    itemEl.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      _sendNavigate(node.path);
+    });
+  } else {
+    const ext = (node.name || '').split('.').pop();
+    div.className = `tree-item tree-file ${ext}`;
+    div.dataset.path = node.path;
+    div.dataset.type = 'file';
+    div.innerHTML = `
+      <span class="icon">${getFileIcon(node.name)}</span>
+      <span class="name">${node.name}</span>
+    `;
+    div.addEventListener('click', () => {
+      openFile(node.path);
+    });
+  }
+
+  return div;
+}
+
+function getFileIcon(name) {
+  const ext = (name || '').split('.').pop().toLowerCase();
+  const icons = {
+    py: '🐍', js: '📜', ts: '📘', jsx: '⚛', tsx: '⚛',
+    html: '🌐', css: '🎨', scss: '🎨',
+    json: '📋', yaml: '⚙', yml: '⚙', toml: '⚙',
+    md: '📝', txt: '📄',
+    sh: '💻', bash: '💻',
+    sql: '🗃', graphql: '🔷',
+    svelte: '✨', vue: '💚',
+  };
+  return icons[ext] || '📄';
+}
+
+function setActive(path) {
+  document.querySelectorAll('[data-type="file"]').forEach(el => {
+    el.classList.toggle('active', el.dataset.path === path);
+  });
+}
+
+// ─── Save file ──────────────────────────────────────────────────────────────
+async function saveFile() {
+  if (!currentPath || !modified) return;
+
+  clearTimeout(saveTimer);
+  const content = editor.getValue();
+
+  document.getElementById('save-indicator').textContent = '⚡ Saving…';
+  document.getElementById('save-indicator').className = 'saving';
+
+  try {
+    const resp = await fetch('/web/editor/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentPath, content }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+
+    serverContent = content;
+    modified = false;
+    document.getElementById('save-indicator').textContent = '✓ Saved';
+    document.getElementById('save-indicator').className = 'saved';
+    setTimeout(() => {
+      document.getElementById('save-indicator').textContent = '';
+      document.getElementById('save-indicator').className = '';
+    }, 2000);
+    showToast(`<strong>${currentPath.split('/').pop()}</strong> saved ✓`);
+  } catch (err) {
+    showToast(`Save failed: <strong>${err.message}</strong>`);
+    document.getElementById('save-indicator').textContent = '✗ Save failed';
+    document.getElementById('save-indicator').className = 'unsaved';
+  }
+}
+
+// ─── Open file ───────────────────────────────────────────────────────────────
+function openFile(path) {
+  currentPath = path;
+  serverContent = null;
+
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('editor-wrap').style.display = 'block';
+  document.getElementById('open-path').textContent = path;
+  document.getElementById('active-file').textContent = '📄 ' + path.split('/').pop();
+  modified = false;
+  clearTimeout(saveTimer);
+  document.getElementById('save-indicator').textContent = '';
+  document.getElementById('save-indicator').className = '';
+  setActive(path);
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(Object.assign(
+      { type: 'open', path },
+      sessionId ? { session_id: sessionId } : {},
+      { instance_id: instanceId }
+    )));
+  }
+}
+
+// ─── Apply server content ─────────────────────────────────────────────────────
+function applyContent(path, content, version) {
+  if (path !== currentPath) return;
+
+  serverContent = content;
+  const currentVal = editor.getValue();
+  if (currentVal === content) return;
+
+  suppressChangeEvent = true;
+  editor.setValue(content);
+  editor.setOption('mode', getMode(path));
+  suppressChangeEvent = false;
+
+  showToast(`File updated: <strong>${path.split('/').pop()}</strong>`);
+}
+
+// ─── Highlight ───────────────────────────────────────────────────────────────
+function highlightLines(start, end, label) {
+  const overlay = document.getElementById('highlight-overlay');
+  overlay.innerHTML = '';
+  overlay.style.display = 'block';
+
+  for (let i = start; i <= end; i++) {
+    const cmLine = editor.lineInfo(i - 1);
+    if (!cmLine) continue;
+
+    const lineEl = document.createElement('div');
+    lineEl.className = 'hl-line';
+    lineEl.style.top = cmLine.top + 'px';
+    lineEl.style.height = (cmLine.height || 20) + 'px';
+    overlay.appendChild(lineEl);
+  }
+
+  const firstLine = editor.lineInfo(start - 1);
+  if (firstLine) {
+    editor.scrollIntoView({ from: { line: start - 1 }, to: { line: start - 1 } }, 100);
+  }
+
+  if (label) showToast(label);
+  setTimeout(() => { overlay.style.display = 'none'; }, 1500);
+}
+
+// ─── Toast ───────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.innerHTML = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ─── Path navigation ────────────────────────────────────────────────────────
+function _sendNavigate(newAbsPath) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(Object.assign(
+      { type: 'navigate', abs_path: newAbsPath },
+      sessionId ? { session_id: sessionId } : {},
+      { instance_id: instanceId }
+    )));
+  }
+}
+
+function navigateUp() {
+  if (!absPath || absPath === '/') return;
+  const parent = absPath.substring(0, absPath.lastIndexOf('/')) || '/';
+  _sendNavigate(parent === '' ? '/' : parent);
+}
+
+function initNavInput() {
+  const input = document.getElementById('abs-path-input');
+
+  // Keep the input in sync whenever the tree header updates.
+  // The tree handler calls syncPathInput() after setting absPath.
+
+  // Enter: navigate to typed path.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = input.value.trim();
+      if (val) _sendNavigate(val);
+    }
+  });
+
+  // Blur: if value differs from absPath, navigate there.
+  input.addEventListener('blur', () => {
+    const val = input.value.trim();
+    if (val && val !== absPath) _sendNavigate(val);
+    else input.value = absPath;  // restore correct path
+  });
+
+  // Select all on focus for easy replacement.
+  input.addEventListener('focus', () => input.select());
+}
+
+function syncPathInput() {
+  const input = document.getElementById('abs-path-input');
+  input.value = absPath;
+  // Up button disabled at filesystem root.
+  document.getElementById('btn-up').disabled = (absPath === '/' || absPath === '');
+}
+
+// ─── WebSocket ───────────────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/web/editor/ws`;
+  console.log('[WS] Connecting to', url);
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    console.log('[WS] Connected!');
+    document.getElementById('ws-status').textContent = '● Connected';
+    document.getElementById('ws-status').className = 'connected';
+    const msg = Object.assign(
+      { type: 'list' },
+      sessionId ? { session_id: sessionId } : {},
+      { instance_id: instanceId }
+    );
+    console.log('[WS] Sending:', JSON.stringify(msg));
+    ws.send(JSON.stringify(msg));
+  };
+
+  ws.onclose = (e) => {
+    console.log('[WS] Closed:', e.code, e.reason);
+    document.getElementById('ws-status').textContent = '● Reconnecting…';
+    document.getElementById('ws-status').className = 'disconnected';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = (e) => { console.error('[WS] Error:', e); ws.close(); };
+
+  ws.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    switch (msg.type) {
+      case 'tree':
+        console.log('[WS] tree message:', msg);
+        renderTree(msg.files || []);
+        absPath = msg.abs_path || absPath || '/';
+        syncPathInput();
+        break;
+
+      case 'content':
+        applyContent(msg.path, msg.content, msg.version);
+        break;
+
+      case 'highlight':
+        highlightLines(msg.start, msg.end, msg.label);
+        break;
+
+      case 'toast':
+        showToast(msg.text);
+        break;
+
+      case 'ping':
+        ws.send(JSON.stringify({ type: 'pong' }));
+        break;
+    }
+  };
+}
+
+// ─── Resize handle ────────────────────────────────────────────────────────────
+function initResizeHandle() {
+  const handle = document.getElementById('resize-handle');
+  const sidebar = document.getElementById('sidebar');
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  handle.addEventListener('mousedown', e => {
+    dragging = true;
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const newWidth = Math.max(180, Math.min(600, startWidth + (e.clientX - startX)));
+    sidebar.style.width = newWidth + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+}
+
+// ─── Navigate up ──────────────────────────────────────────────────────────────
+function initNavUp() {
+  document.getElementById('btn-up').addEventListener('click', navigateUp);
+}
+
+// ─── Boot ───────────────────────────────────────────────────────────────────
+console.log('[EDITOR] Boot starting, absPath =', absPath);
+initEditor();
+initResizeHandle();
+initNavUp();
+initNavInput();
+document.getElementById('editor-wrap').style.display = 'none';
+connect();
+</script>
+</body>
+</html>
