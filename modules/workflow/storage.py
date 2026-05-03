@@ -5,8 +5,7 @@ from typing import Optional
 
 from modules import _session_id
 from . import db
-from .models import WorkflowState, Workflow
-from .templates import WORKFLOWS
+from .models import WorkflowState
 
 
 def save_state(state: 'WorkflowState') -> None:
@@ -48,22 +47,7 @@ def load_state() -> Optional['WorkflowState']:
         return None
 
     state = WorkflowState.from_dict(row)
-    _ensure_workflow_registered(state)
     return state
-
-
-def _ensure_workflow_registered(state: WorkflowState) -> None:
-    """Register a custom workflow template so get_workflow() finds it."""
-    if state.dynamic_stages and state.workflow_id not in WORKFLOWS:
-        WORKFLOWS[state.workflow_id] = Workflow(
-            id=state.workflow_id,
-            name=state.workflow_id.replace("_", " ").title(),
-            description="Custom workflow built from guide",
-            category="custom",
-            stages=state.dynamic_stages,
-            tags=["custom"],
-        )
-
 
 def clear_state() -> None:
     """Remove the workflow state for the current session."""

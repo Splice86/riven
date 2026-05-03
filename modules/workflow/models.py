@@ -57,12 +57,8 @@ class WorkflowState:
     # -------------------------------------------------------------------------
 
     def _get_stages(self) -> list[Stage]:
-        """Return stages: custom stages if present, otherwise falls back to template."""
-        if self.dynamic_stages:
-            return self.dynamic_stages
-        from .templates import WORKFLOWS
-        workflow = WORKFLOWS.get(self.workflow_id)
-        return workflow.stages if workflow else []
+        """Return the custom stages for this workflow."""
+        return self.dynamic_stages
 
     def get_current_stage(self) -> Stage | None:
         """Get the current stage object."""

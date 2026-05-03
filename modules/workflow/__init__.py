@@ -1,176 +1,159 @@
 """Workflow module - stage-gated workflow management.
 
-Provides workflow templates and tracking for structured task completion.
+Workflows are built from scratch per-task. The LLM creates the stages based on
+the task and best practices baked into the help text.
 """
 
-from datetime import datetime, timezone
-from typing import Optional
+import uuid
 
-from modules import Module, CalledFn, ContextFn, _session_id
+from datetime import datetime, timezone
+
+from modules import Module, CalledFn, ContextFn
 from .models import WorkflowState, StepStatus, Step, Stage
-from .templates import WORKFLOWS, get_workflow, list_workflows
 from . import storage
 
 
+# ---------------------------------------------------------------------------
+# Help text — best practices injected into every prompt
+# ---------------------------------------------------------------------------
+
 def _workflow_help() -> str:
-    """Static help text describing the workflow module."""
-    return """## Workflow Module — Use This for Every Task
+    return """## Workflow Module — Track Structured Task Progress
 
-**IMPORTANT: You should use the workflow module for almost every coding task.**
+For any non-trivial coding task, use the workflow module to stay on track.
+Structure your work into stages with specific steps. Never just start coding
+blindly — build the workflow first.
 
-Structured workflows prevent you from losing track of what you're doing mid-task,
-forgetting steps, skipping verification, or forgetting to commit. They turn a messy
-multi-step task into a clean, tracked, accountable process.
+### Best Practices
 
-### Quick Decision Tree
+**Structure your work into stages.** Every task benefits from at least:
+  - Understand → what exists, what the problem/goal is
+  - Plan → specific steps, specific files, before you code
+  - Implement → execute the plan
+  - Verify → tests pass, manually tested
+  - Commit → commit and push
 
-1. Does the user have a specific workflow in mind?
-   → `start_workflow(coding)` or `start_workflow(quick)` or another named workflow
+**For bug fixes:** Reproduce reliably before touching any code. Don't fix
+the symptom — find the root cause.
 
-2. Is it a one-off task (new feature, bug fix, refactor, investigation)?
-   → `guide_workflow(\"<task description\")` → `build_workflow(guide)`
+**For refactors:** Tests define the behavior contract. Every test must pass.
+Refactor one focused change at a time, run tests after each.
 
-3. Is it a code review or PR review?
-   → `start_workflow(review)` or `guide_workflow(\"review\")`
+**For code reviews:** Check logic errors, security, performance, style, and
+whether the change actually solves the problem it claims to.
 
-4. Just exploring/understanding something?
-   → `guide_workflow(\"explore/investigate\")`
-
-### The Core Principle
-
-**Never just start coding blindly.** Run `guide_workflow` on any non-trivial task,
-read the guide, then `build_workflow` and use `workflow_status` + `mark_step_done`
-as you go. It's not overhead — it's the difference between \"I think I'm done\" and \"I
-know every step is complete.\"
-
-### Complete Function Reference
-
-**Discovery:**
-- `list_workflows()` — See all available named workflows with their stage structures
-- `show_workflow(workflow_id)` — Drill into one workflow to see its stages, steps, and gates
+### Workflow Functions
 
 **Starting:**
-- `start_workflow(workflow_id)` — Start a named template workflow directly (coding, quick, review, exploratory)
-- `guide_workflow(task)` — For any task, analyze it and generate a tailored workflow guide. Returns a human-readable guide — print it for the user, then pass the same guide to build_workflow(). Task types:
-  - Feature/feature request → feature guide (understand → plan → implement → verify → commit)
-  - Bug/bug fix/error/crash → bugfix guide (reproduce → fix → verify → commit)
-  - Refactor/clean up/optimize → refactor guide (assess → plan → refactor → verify → commit)
-  - Review/audit/check → review guide (identify → analyze → fix → verify)
-  - Explore/investigate/understand → exploratory guide (explore → iterate → conclude)
-- `build_workflow(guide)` — Take a guide dict (from guide_workflow) and start tracking it.
-  The guide must have: id, name, description, and stages [{name, description, gate_description?, steps: [{id, description}]}].
+- `start_workflow(name, description)` — Start a new workflow for the current task.
+  Provide a short name and describe what you're building or fixing.
+
+- `add_stage(name, description, steps, gate?)` — Add a stage to the workflow.
+  Add stages in order. Steps format: `[{"id": "step_1", "description": "..."}, ...]`.
+  Gate format: `"gate condition"` (optional — shown when entering the stage).
 
 **Tracking:**
-- `workflow_status()` — Full status snapshot: current stage, steps done/total, stage map, next hint
-- `mark_step_done(step_id, notes?)` — Mark a step complete. If it finishes the stage, says "Stage complete! Ready to advance."
-- `mark_step_in_progress(step_id)` — Mark a step as actively being worked on (→). Signals intent without claiming done.
-- `skip_step(step_id, reason)` — Skip a step with a reason. Useful when a step is N/A for the task.
-- `expand_implement_steps(steps)` — Template workflows only: replace the implement stage's steps with a custom list from your plan. Steps format: [{id, description}, ...]
-- `add_step_note(step_id, note)` — Attach a note to any step. Great for decisions, links, or findings.
+- `workflow_status()` — Current stage, steps done/total, stage map, next hint.
+- `mark_step_done(step_id, notes?)` — Mark a step complete. Always include notes.
+- `mark_step_in_progress(step_id)` — Mark a step as being worked on.
+- `skip_step(step_id, reason)` — Skip a step with a reason.
+- `add_step_note(step_id, note)` — Attach a note to any step.
 
 **Navigation:**
-- `advance_stage()` — Move to the next stage. Only succeeds when ALL steps (done or skipped) are complete. Tells you how many remain if blocked.
+- `advance_stage()` — Move to the next stage. Only succeeds when all steps
+  are done or skipped. This is the LLM's call — advance when the stage is done.
 
 **Cleanup:**
-- `stop_workflow()` — Abandon the current workflow. Clears all state.
+- `stop_workflow()` — Abandon the current workflow and clear state.
 
-### Gates
+### Example Flow
 
-Some stages have a \"gate\" — a condition that must be met before advancing.
-Gates are described via `gate_description` and are shown when you enter the stage.
-Common gates:
-- \"Must be able to reliably reproduce\" (bugfix: reproduce stage)
-- \"Tests pass and no regressions\" (verify stage)
-- \"Plan must identify files and steps\" (plan stage)
+    start_workflow("add OAuth login", "Build Google OAuth2 login flow")
+      → Workflow started with 0 stages
 
-Gates are enforced by `advance_stage()` — you cannot skip them.
+    add_stage("understand", "Understand the codebase",
+      [{"id": "und_1", "description": "Explore auth module and middleware"},
+       {"id": "und_2", "description": "Read existing login patterns"},
+       {"id": "und_3", "description": "Check User model fields"}])
 
-### Example: Feature Request
+    add_stage("plan", "Plan the implementation",
+      [{"id": "plan_1", "description": "Add google_id to User model"},
+       {"id": "plan_2", "description": "Create OAuth client in auth/oauth.py"},
+       {"id": "plan_3", "description": "Add /auth/google/login route"},
+       {"id": "plan_4", "description": "Add /auth/google/callback route"},
+       {"id": "plan_5", "description": "Add session management"}],
+      "Plan must list every file to modify")
 
-User: \"add OAuth login to the backend\"
+    # ... more stages as needed ...
 
-You respond:
-```
-guide_workflow("add OAuth login to the backend")
-  → prints a structured guide
+    mark_step_done("und_1", "Found auth.py and middleware/. oauthlib is already installed.")
+    mark_step_done("und_2", "Using flask-login pattern for sessions.")
+    mark_step_done("und_3", "User model has email, will add google_id field.")
 
-build_workflow(guide)
-  → workflow is now active and tracking
+    advance_stage()
+      → Advanced to: plan
 
-workflow_status()
-  → Stage: UNDERSTAND (0/3 steps)
+    # BE SPECIFIC in your step descriptions.
+    # 'Implement step 1' is not a useful step.
+    # 'Add google_id VARCHAR field to User model' is.
 
-mark_step_done("und_1", "Found auth.py and middleware/")
-mark_step_done("und_2", "Need to use oauthlib + flask-oauthlib")
-mark_step_done("und_3", "Will add /auth/oauth/ route")
+    advance_stage()
+      → Advanced to: implement
 
-advance_stage()
-  → Advanced to: plan
+    mark_step_done("plan_1")
+    mark_step_done("plan_2")
+    ...
 
-expand_implement_steps([
-  {"id": "plan_1", "description": "Add flask-oauthlib dependency"},
-  {"id": "plan_2", "description": "Create OAuth client in auth.py"},
-  {"id": "plan_3", "description": "Add /auth/oauth/ route"},
-  {"id": "plan_4", "description": "Add session management"},
-])
+    advance_stage()
+      → Advanced to: verify
 
-# ...implement each step...
+    # ... run tests, manual check ...
 
-advance_stage()
-  → Advanced to: implement
+    advance_stage()
+      → Advanced to: commit
 
-mark_step_done("impl_1")
-mark_step_done("impl_2")
-mark_step_done("impl_3")
-mark_step_done("impl_4")
+    mark_step_done("com_1", "git commit -m 'add Google OAuth2 login'")
+    mark_step_done("com_2", "git push")
 
-advance_stage()
-  → Advanced to: verify
-
-# ...run tests, verify manually...
-
-advance_stage()
-  → Advanced to: commit
-
-mark_step_done("com_1")
-mark_step_done("com_2")
-
-advance_stage()
-  → Workflow complete!
-```
+    advance_stage()
+      → Workflow complete!
 """
 
 
 def _workflow_context() -> str:
     """Generate workflow context for system prompt injection."""
     state = storage.load_state()
-    
+
     if not state:
         return ""
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return ""
-    
+
+    if state.dynamic_stages:
+        workflow_name = state.workflow_id.replace("_", " ").title()
+    else:
+        from .templates import get_workflow
+        workflow = get_workflow(state.workflow_id)
+        if not workflow:
+            return ""
+        workflow_name = workflow.name
+
     current_stage = state.get_current_stage()
     if not current_stage:
         return ""
-    
+
     progress = state.get_stage_progress()
-    total_stages = len(workflow.stages)
-    
+    total_stages = len(state._get_stages())
+
     lines = [
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"Workflow: {workflow.name}",
+        f"Workflow: {workflow_name}",
         f"Stage: {current_stage.name.upper()} ({state.current_stage_index + 1}/{total_stages})",
         f"Progress: {progress[0]}/{progress[1]} steps",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
     ]
-    
-    # Stage overview
+
     lines.append("Stages:")
-    for i, stage in enumerate(workflow.stages):
+    for i, stage in enumerate(state._get_stages()):
         if i < state.current_stage_index:
             icon = "✓"
         elif i == state.current_stage_index:
@@ -178,14 +161,13 @@ def _workflow_context() -> str:
         else:
             icon = "○"
         lines.append(f"  {icon} {stage.name}")
-    
+
     lines.append("")
     lines.append(f"Current: {current_stage.description}")
-    
+
     if current_stage.gate_description:
         lines.append(f"Gate: {current_stage.gate_description}")
-    
-    # Steps for current stage
+
     all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
     if all_steps:
         lines.append("")
@@ -195,733 +177,32 @@ def _workflow_context() -> str:
             note = state.step_notes.get(step.id, "")
             note_str = f" [{note}]" if note else ""
             lines.append(f"  {step_state.value} {step.description}{note_str}")
-    
-    # Next hint
+
     lines.append("")
     if state.can_advance():
-        next_stage = workflow.stages[state.current_stage_index + 1] if state.current_stage_index < total_stages - 1 else None
-        if next_stage:
-            lines.append(f"Ready to advance to: {next_stage.name}")
+        next_stage_name = state._get_stages()[state.current_stage_index + 1].name \
+            if state.current_stage_index < total_stages - 1 else None
+        if next_stage_name:
+            lines.append(f"Ready to advance to: {next_stage_name}")
         else:
             lines.append("Workflow complete!")
     else:
         lines.append(f"Complete remaining steps to advance")
-    
+
     return "\n".join(lines)
 
 
-def list_workflows_cmd() -> str:
-    """List all available workflows.
-    
-    Returns a formatted list of workflow names and descriptions.
-    """
-    workflows = list_workflows()
-    if not workflows:
-        return "No workflows available."
-    
-    lines = ["Available Workflows:", ""]
-    for wf in workflows:
-        lines.append(f"  {wf.id}: {wf.name}")
-        lines.append(f"    {wf.description}")
-        lines.append(f"    Stages: {', '.join(s.name for s in wf.stages)}")
-        lines.append("")
-    
-    return "\n".join(lines)
+# ---------------------------------------------------------------------------
+# Command functions
+# ---------------------------------------------------------------------------
 
-
-def show_workflow_cmd(workflow_id: str) -> str:
-    """Show details of a specific workflow.
-    
-    Args:
-        workflow_id: ID of the workflow to display
-    """
-    workflow = get_workflow(workflow_id)
-    if not workflow:
-        return f"Unknown workflow: {workflow_id}"
-    
-    lines = [
-        f"## {workflow.name}",
-        f"{workflow.description}",
-        "",
-        f"Category: {workflow.category}",
-        f"Tags: {', '.join(workflow.tags)}",
-        "",
-        "Stages:",
-    ]
-    
-    for i, stage in enumerate(workflow.stages):
-        lines.append(f"  {i + 1}. {stage.name}")
-        lines.append(f"     {stage.description}")
-        if stage.gate_description:
-            lines.append(f"     Gate: {stage.gate_description}")
-        if stage.steps:
-            lines.append(f"     Steps:")
-            for step in stage.steps:
-                lines.append(f"       - {step.description}")
-    
-    return "\n".join(lines)
-
-
-def start_workflow_cmd(workflow_id: str) -> str:
-    """Start a workflow by ID.
-    
-    Args:
-        workflow_id: ID of the workflow to start (e.g., 'coding', 'quick')
-    """
-    workflow = get_workflow(workflow_id)
-    if not workflow:
-        return f"Unknown workflow: {workflow_id}. Use list_workflows() to see available options."
-    
-    state = storage.load_state()
-    if state and state.workflow_id == workflow_id:
-        return f"Workflow '{workflow_id}' is already active. Use workflow_status() to see progress."
-    
-    state = WorkflowState(
-        workflow_id=workflow_id,
-        current_stage_index=0,
-        started_at=datetime.now(timezone.utc).isoformat(),
-    )
-    
-    # Initialize all step states to PENDING
-    for stage in workflow.stages:
-        for step in stage.steps:
-            state.step_states[step.id] = StepStatus.PENDING
-    
-    storage.save_state(state)
-    
-    first_stage = workflow.stages[0]
-    lines = [
-        f"Started workflow: {workflow.name}",
-        f"Stage 1: {first_stage.name}",
-        "",
-        first_stage.description,
-    ]
-    
-    if first_stage.gate_description:
-        lines.append("")
-        lines.append(f"Gate: {first_stage.gate_description}")
-    
-    return "\n".join(lines)
-
-
-def workflow_status_cmd() -> str:
-    """Get current workflow status.
-    
-    Returns the current stage, progress, and next steps.
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow. Use list_workflows() to see available options."
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return "Workflow data corrupted. Use stop_workflow() to reset."
-    
-    current_stage = state.get_current_stage()
-    progress = state.get_stage_progress()
-    total_stages = len(workflow.stages)
-    
-    lines = [
-        f"Workflow: {workflow.name}",
-        f"Stage: {current_stage.name.upper()} ({state.current_stage_index + 1}/{total_stages})",
-        f"Steps: {progress[0]}/{progress[1]} complete",
-        "",
-    ]
-    
-    # Stage progress
-    lines.append("Stage Progress:")
-    for i, stage in enumerate(workflow.stages):
-        if i < state.current_stage_index:
-            lines.append(f"  ✓ {stage.name}")
-        elif i == state.current_stage_index:
-            stage_progress = state.get_stage_progress()
-            lines.append(f"  → {stage.name} ({stage_progress[0]}/{stage_progress[1]})")
-        else:
-            lines.append(f"  ○ {stage.name}")
-    
-    return "\n".join(lines)
-
-
-def advance_stage_cmd() -> str:
-    """Advance to the next stage if current stage is complete.
-    
-    Returns success message or error if gate not satisfied.
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow."
-    
-    if not state.can_advance():
-        completed, total = state.get_stage_progress()
-        return f"Cannot advance: {total - completed} step(s) remaining in current stage."
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return "Workflow data corrupted."
-    
-    prev_stage = workflow.stages[state.current_stage_index]
-    
-    if not state.advance():
-        storage.clear_state()
-        return f"Workflow complete! Finished: {prev_stage.name}"
-    
-    storage.save_state(state)
-    
-    new_stage = state.get_current_stage()
-    lines = [
-        f"Advanced to: {new_stage.name}",
-        "",
-        new_stage.description,
-    ]
-    
-    if new_stage.gate_description:
-        lines.append("")
-        lines.append(f"Gate: {new_stage.gate_description}")
-    
-    # Show first step as IN_PROGRESS
-    all_steps = new_stage.steps + state.dynamic_steps.get(new_stage.name, [])
-    if all_steps:
-        lines.append("")
-        lines.append("First step:")
-        lines.append(f"  → {all_steps[0].description}")
-    
-    return "\n".join(lines)
-
-
-def mark_step_done_cmd(step_id: str, notes: str = "") -> str:
-    """Mark a step as complete.
-    
-    Args:
-        step_id: ID of the step to mark done
-        notes: Optional notes about the step
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow."
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return "Workflow data corrupted."
-    
-    # Find the step
-    current_stage = state.get_current_stage()
-    all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
-    
-    found = False
-    for step in all_steps:
-        if step.id == step_id:
-            found = True
-            break
-    
-    if not found:
-        return f"Unknown step: {step_id}. Check workflow_status() for valid step IDs."
-    
-    state.step_states[step_id] = StepStatus.COMPLETE
-    if notes:
-        state.step_notes[step_id] = notes
-    
-    storage.save_state(state)
-    
-    progress = state.get_stage_progress()
-    
-    if state.is_stage_complete():
-        return f"Step '{step_id}' marked done. Stage complete! ({progress[0]}/{progress[1]} steps)\nReady to advance to next stage."
-    
-    return f"Step '{step_id}' marked done. ({progress[0]}/{progress[1]} steps)"
-
-
-def mark_step_in_progress_cmd(step_id: str) -> str:
-    """Mark a step as in progress.
-    
-    Args:
-        step_id: ID of the step to mark in progress
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow."
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return "Workflow data corrupted."
-    
-    current_stage = state.get_current_stage()
-    all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
-    
-    found = False
-    for step in all_steps:
-        if step.id == step_id:
-            found = True
-            break
-    
-    if not found:
-        return f"Unknown step: {step_id}"
-    
-    state.step_states[step_id] = StepStatus.IN_PROGRESS
-    storage.save_state(state)
-    
-    return f"Step '{step_id}' marked in progress."
-
-
-def skip_step_cmd(step_id: str, reason: str) -> str:
-    """Skip a step with a reason.
-    
-    Args:
-        step_id: ID of the step to skip
-        reason: Why the step is being skipped
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow."
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return "Workflow data corrupted."
-    
-    current_stage = state.get_current_stage()
-    all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
-    
-    found = False
-    for step in all_steps:
-        if step.id == step_id:
-            found = True
-            break
-    
-    if not found:
-        return f"Unknown step: {step_id}"
-    
-    state.step_states[step_id] = StepStatus.SKIPPED
-    state.step_notes[step_id] = f"SKIPPED: {reason}"
-    
-    storage.save_state(state)
-    
-    return f"Step '{step_id}' skipped. Reason: {reason}"
-
-
-def expand_implement_steps_cmd(steps: list[dict]) -> str:
-    """Expand the implement stage with custom steps based on a plan.
-    
-    Args:
-        steps: List of step dicts with 'id' and 'description' keys
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow."
-    
-    workflow = get_workflow(state.workflow_id)
-    if not workflow:
-        return "Workflow data corrupted."
-    
-    current_stage = state.get_current_stage()
-    if current_stage.name != "implement":
-        return "Can only expand steps in the implement stage."
-    
-    if not steps:
-        return "No steps provided."
-    
-    # Create Step objects from dict
-    new_steps = []
-    for i, s in enumerate(steps):
-        step_id = s.get('id', f"impl_custom_{i+1}")
-        desc = s.get('description', f"Step {i+1}")
-        new_steps.append(Step(id=step_id, description=desc))
-    
-    # Replace or append to dynamic steps
-    state.dynamic_steps["implement"] = new_steps
-    
-    # Initialize their states
-    for step in new_steps:
-        state.step_states[step.id] = StepStatus.PENDING
-    
-    storage.save_state(state)
-    
-    lines = [f"Added {len(new_steps)} steps to implement stage:", ""]
-    for i, step in enumerate(new_steps, 1):
-        lines.append(f"  {i}. {step.description}")
-    
-    return "\n".join(lines)
-
-
-def add_step_note_cmd(step_id: str, note: str) -> str:
-    """Add a note to a step.
-    
-    Args:
-        step_id: ID of the step
-        note: Note to add
-    """
-    state = storage.load_state()
-    
-    if not state:
-        return "No active workflow."
-    
-    state.step_notes[step_id] = note
-    storage.save_state(state)
-    
-    return f"Note added to step '{step_id}'."
-
-
-def stop_workflow_cmd() -> str:
-    """Stop the current workflow."""
-    storage.clear_state()
-    return "Workflow stopped and state cleared."
-
-
-def guide_workflow_cmd(task: str) -> str:
-    """Analyze a task and produce a structured guide/checklist for completing it.
-
-    The guide is tailored to the specific task type (feature, bug fix, refactor,
-    investigation, etc.) and includes appropriate stages and steps.
+def start_workflow_cmd(name: str, description: str) -> str:
+    """Start a new workflow.
 
     Args:
-        task: Description of the task or goal to accomplish
-
-    Returns:
-        A structured guide with stages and steps, ready to pass to build_workflow()
+        name: Short name for the workflow (e.g., "OAuth login", "Fix null crash")
+        description: Brief description of what you're building or fixing
     """
-    import uuid
-
-    # Infer workflow characteristics from task
-    task_lower = task.lower()
-    is_exploratory = any(k in task_lower for k in [
-        "explore", "understand", "investigate", "analyze", "find out", "figure out"
-    ])
-    is_bug = any(k in task_lower for k in [
-        "bug", "fix", "error", "crash", "broken", "fail", "issue", "wrong"
-    ])
-    is_refactor = any(k in task_lower for k in [
-        "refactor", "clean up", "restructure", "improve", "optimize"
-    ])
-    is_review = any(k in task_lower for k in [
-        "review", "audit", "check", "assess"
-    ])
-
-    if is_exploratory:
-        guide = _exploratory_guide(task)
-    elif is_bug:
-        guide = _bugfix_guide(task)
-    elif is_refactor:
-        guide = _refactor_guide(task)
-    elif is_review:
-        guide = _review_guide(task)
-    else:
-        guide = _feature_guide(task)
-
-    return guide
-
-
-def _feature_guide(task: str) -> dict:
-    """Build a feature/implementation guide."""
-    import uuid
-    wf_id = f"feature_{uuid.uuid4().hex[:6]}"
-    return {
-        "id": wf_id,
-        "name": "Feature Implementation",
-        "description": f"Build: {task}",
-        "stages": [
-            {
-                "name": "understand",
-                "description": "Understand the existing codebase and constraints",
-                "steps": [
-                    {"id": f"{wf_id}_und_1", "description": "Explore relevant directories and existing patterns"},
-                    {"id": f"{wf_id}_und_2", "description": "Identify dependencies and interfaces"},
-                    {"id": f"{wf_id}_und_3", "description": "Define boundaries of the change"},
-                ],
-            },
-            {
-                "name": "plan",
-                "description": "Plan the implementation approach",
-                "gate_description": "Plan must identify files and steps",
-                "steps": [
-                    {"id": f"{wf_id}_plan_1", "description": "Break into logical implementation steps"},
-                    {"id": f"{wf_id}_plan_2", "description": "List files to modify/create"},
-                ],
-            },
-            {
-                "name": "implement",
-                "description": "Implement each step of the plan",
-                "steps": [
-                    {"id": f"{wf_id}_impl_1", "description": "Implementation step 1"},
-                ],
-            },
-            {
-                "name": "verify",
-                "description": "Verify the implementation works correctly",
-                "gate_description": "Tests pass and no regressions",
-                "steps": [
-                    {"id": f"{wf_id}_ver_1", "description": "Run tests"},
-                    {"id": f"{wf_id}_ver_2", "description": "Manual verification"},
-                ],
-            },
-            {
-                "name": "commit",
-                "description": "Commit and push changes",
-                "steps": [
-                    {"id": f"{wf_id}_com_1", "description": "Stage and commit changes"},
-                    {"id": f"{wf_id}_com_2", "description": "Push to remote"},
-                ],
-            },
-        ],
-    }
-
-
-def _bugfix_guide(task: str) -> dict:
-    """Build a bugfix guide."""
-    import uuid
-    wf_id = f"bugfix_{uuid.uuid4().hex[:6]}"
-    return {
-        "id": wf_id,
-        "name": "Bug Fix",
-        "description": f"Fix: {task}",
-        "stages": [
-            {
-                "name": "reproduce",
-                "description": "Reproduce the bug and understand its scope",
-                "gate_description": "Must be able to reliably reproduce",
-                "steps": [
-                    {"id": f"{wf_id}_rep_1", "description": "Find the failing case or error"},
-                    {"id": f"{wf_id}_rep_2", "description": "Isolate minimal reproduction"},
-                    {"id": f"{wf_id}_rep_3", "description": "Identify root cause"},
-                ],
-            },
-            {
-                "name": "fix",
-                "description": "Apply the fix",
-                "steps": [
-                    {"id": f"{wf_id}_fix_1", "description": "Implement the fix"},
-                ],
-            },
-            {
-                "name": "verify",
-                "description": "Verify the fix",
-                "gate_description": "Bug is resolved and no regressions",
-                "steps": [
-                    {"id": f"{wf_id}_ver_1", "description": "Confirm bug is fixed"},
-                    {"id": f"{wf_id}_ver_2", "description": "Run full test suite"},
-                ],
-            },
-            {
-                "name": "commit",
-                "description": "Commit and push",
-                "steps": [
-                    {"id": f"{wf_id}_com_1", "description": "Commit fix"},
-                    {"id": f"{wf_id}_com_2", "description": "Push"},
-                ],
-            },
-        ],
-    }
-
-
-def _refactor_guide(task: str) -> dict:
-    """Build a refactor guide."""
-    import uuid
-    wf_id = f"refactor_{uuid.uuid4().hex[:6]}"
-    return {
-        "id": wf_id,
-        "name": "Refactor",
-        "description": f"Refactor: {task}",
-        "stages": [
-            {
-                "name": "assess",
-                "description": "Assess the code to be refactored",
-                "steps": [
-                    {"id": f"{wf_id}_ass_1", "description": "List files and understand structure"},
-                    {"id": f"{wf_id}_ass_2", "description": "Identify what needs changing and why"},
-                ],
-            },
-            {
-                "name": "plan",
-                "description": "Plan the refactor",
-                "gate_description": "Must not change external behavior",
-                "steps": [
-                    {"id": f"{wf_id}_plan_1", "description": "Outline refactor steps"},
-                    {"id": f"{wf_id}_plan_2", "description": "Identify tests to verify no behavior change"},
-                ],
-            },
-            {
-                "name": "refactor",
-                "description": "Execute the refactor",
-                "steps": [
-                    {"id": f"{wf_id}_ref_1", "description": "Apply refactor changes"},
-                ],
-            },
-            {
-                "name": "verify",
-                "description": "Verify refactor is safe",
-                "gate_description": "All tests pass",
-                "steps": [
-                    {"id": f"{wf_id}_ver_1", "description": "Run full test suite"},
-                ],
-            },
-            {
-                "name": "commit",
-                "description": "Commit",
-                "steps": [
-                    {"id": f"{wf_id}_com_1", "description": "Commit and push"},
-                ],
-            },
-        ],
-    }
-
-
-def _review_guide(task: str) -> dict:
-    """Build a code review guide."""
-    import uuid
-    wf_id = f"review_{uuid.uuid4().hex[:6]}"
-    return {
-        "id": wf_id,
-        "name": "Code Review",
-        "description": f"Review: {task}",
-        "stages": [
-            {
-                "name": "identify",
-                "description": "Identify what to review",
-                "steps": [
-                    {"id": f"{wf_id}_id_1", "description": "List files/changes to review"},
-                ],
-            },
-            {
-                "name": "analyze",
-                "description": "Analyze for issues",
-                "steps": [
-                    {"id": f"{wf_id}_an_1", "description": "Check for bugs/logic errors"},
-                    {"id": f"{wf_id}_an_2", "description": "Check for style/convention issues"},
-                    {"id": f"{wf_id}_an_3", "description": "Check for performance concerns"},
-                ],
-            },
-            {
-                "name": "fix",
-                "description": "Fix identified issues",
-                "steps": [
-                    {"id": f"{wf_id}_fix_1", "description": "Apply fixes"},
-                ],
-            },
-            {
-                "name": "verify",
-                "description": "Verify fixes",
-                "gate_description": "Tests pass",
-                "steps": [
-                    {"id": f"{wf_id}_ver_1", "description": "Run tests"},
-                ],
-            },
-        ],
-    }
-
-
-def _exploratory_guide(task: str) -> dict:
-    """Build an exploratory guide."""
-    import uuid
-    wf_id = f"explore_{uuid.uuid4().hex[:6]}"
-    return {
-        "id": wf_id,
-        "name": "Exploratory Investigation",
-        "description": f"Explore: {task}",
-        "stages": [
-            {
-                "name": "explore",
-                "description": "Explore and understand",
-                "steps": [
-                    {"id": f"{wf_id}_exp_1", "description": "Investigate the codebase"},
-                    {"id": f"{wf_id}_exp_2", "description": "Document findings"},
-                ],
-            },
-            {
-                "name": "iterate",
-                "description": "Iterate and experiment",
-                "steps": [
-                    {"id": f"{wf_id}_it_1", "description": "Make experimental changes"},
-                    {"id": f"{wf_id}_it_2", "description": "Test hypotheses"},
-                ],
-            },
-            {
-                "name": "conclude",
-                "description": "Draw conclusions",
-                "steps": [
-                    {"id": f"{wf_id}_con_1", "description": "Summarize findings"},
-                    {"id": f"{wf_id}_con_2", "description": "Note follow-up items"},
-                ],
-            },
-        ],
-    }
-
-
-def _format_guide(guide: dict) -> str:
-    """Format a guide dict as a human-readable string."""
-    lines = [
-        f"## Workflow Guide: {guide['name']}",
-        f"{guide['description']}",
-        "",
-        "### Stages",
-        "",
-    ]
-    for i, stage in enumerate(guide.get("stages", []), 1):
-        lines.append(f"{i}. **{stage['name']}** — {stage['description']}")
-        if stage.get("gate_description"):
-            lines.append(f"   Gate: {stage['gate_description']}")
-        for j, step in enumerate(stage.get("steps", []), 1):
-            lines.append(f"   {j}. {step['description']}")
-        lines.append("")
-    lines.append("---")
-    lines.append(f"Guide ID: {guide['id']}")
-    lines.append("Pass this guide to build_workflow() to begin tracking progress.")
-    return "\n".join(lines)
-
-
-def build_workflow_cmd(guide: dict) -> str:
-    """Build and start a custom workflow from a guide produced by guide_workflow().
-
-    The guide dict should contain:
-    - id: unique workflow identifier
-    - name: workflow name
-    - description: what this workflow does
-    - stages: list of stages, each with name, description, optional gate_description,
-      and steps (list of {id, description} dicts)
-
-    Args:
-        guide: Workflow guide dict from guide_workflow()
-
-    Returns:
-        Confirmation message with workflow structure and first stage
-    """
-    import json
-
-    # Validate guide structure
-    if not isinstance(guide, dict):
-        return f"Error: guide must be a dict, got {type(guide).__name__}"
-    if 'stages' not in guide:
-        return "Error: guide must have a 'stages' key"
-    if not isinstance(guide['stages'], list):
-        return "Error: guide['stages'] must be a list"
-
-    workflow_id = guide.get('id', 'custom')
-    stages = []
-
-    for i, stage_data in enumerate(guide['stages']):
-        if not isinstance(stage_data, dict):
-            return f"Error: stage {i+1} must be a dict"
-        if 'name' not in stage_data:
-            return f"Error: stage {i+1} is missing a 'name'"
-
-        steps = []
-        for j, step_data in enumerate(stage_data.get('steps', [])):
-            if not isinstance(step_data, dict):
-                return f"Error: stage {i+1}, step {j+1} must be a dict"
-            step_id = step_data.get('id', f"{stage_data['name']}_step_{j+1}")
-            step_desc = step_data.get('description', f"Step {j+1}")
-            steps.append(Step(id=step_id, description=step_desc))
-
-        stages.append(Stage(
-            name=stage_data['name'],
-            description=stage_data.get('description', ''),
-            gate_description=stage_data.get('gate_description'),
-            steps=steps,
-        ))
-
-    # Check no active workflow
     state = storage.load_state()
     if state:
         return (
@@ -929,53 +210,246 @@ def build_workflow_cmd(guide: dict) -> str:
             f"Use stop_workflow() first, or continue with workflow_status()."
         )
 
-    # Build state with dynamic stages
+    wf_id = f"{name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:6]}"
+
     state = WorkflowState(
-        workflow_id=workflow_id,
+        workflow_id=wf_id,
         current_stage_index=0,
         started_at=datetime.now(timezone.utc).isoformat(),
-        dynamic_stages=stages,
-    )
-
-    # Initialize all step states
-    for stage in stages:
-        for step in stage.steps:
-            state.step_states[step.id] = StepStatus.PENDING
-
-    # Register custom workflow in template registry
-    from .templates import WORKFLOWS
-    from .models import Workflow
-    WORKFLOWS[workflow_id] = Workflow(
-        id=workflow_id,
-        name=guide.get('name', workflow_id.replace('_', ' ').title()),
-        description=guide.get('description', ''),
-        category="custom",
-        stages=stages,
-        tags=["custom"],
+        dynamic_stages=[],
     )
 
     storage.save_state(state)
 
-    # Format response
     lines = [
-        f"Workflow built: {guide.get('name', workflow_id)}",
-        f"Description: {guide.get('description', '')}",
+        f"Workflow started: {name}",
+        f"Description: {description}",
         "",
-        f"Stages ({len(stages)}):",
+        "No stages yet. Use add_stage() to add your first stage.",
     ]
-    for i, stage in enumerate(stages, 1):
-        lines.append(f"  {i}. {stage.name}")
-        if stage.gate_description:
-            lines.append(f"     Gate: {stage.gate_description}")
-        for step in stage.steps:
-            lines.append(f"     - {step.description}")
+    return "\n".join(lines)
 
-    lines.append("")
-    lines.append("Use workflow_status() to track progress, mark_step_done() to complete steps, "
-                 "and advance_stage() to move forward.")
+
+def add_stage_cmd(
+    name: str,
+    description: str,
+    steps: list[dict],
+    gate_description: str | None = None,
+) -> str:
+    """Add a stage to the active workflow.
+
+    Args:
+        name: Short name for the stage (e.g., "understand", "plan", "implement")
+        description: What this stage involves
+        steps: List of step dicts: [{"id": "step_1", "description": "..."}, ...]
+        gate_description: Optional gate — a condition that must be met before advancing
+    """
+    state = storage.load_state()
+    if not state:
+        return "No active workflow. Use start_workflow() first."
+
+    stage_steps = []
+    for i, s in enumerate(steps):
+        step_id = s.get("id", f"{name}_{i+1}")
+        step_desc = s.get("description", f"Step {i+1}")
+        stage_steps.append(Step(id=step_id, description=step_desc))
+        state.step_states[step_id] = StepStatus.PENDING
+
+    stage = Stage(
+        name=name,
+        description=description,
+        steps=stage_steps,
+        gate_description=gate_description,
+    )
+
+    state.dynamic_stages.append(stage)
+    storage.save_state(state)
+
+    lines = [
+        f"Stage added: {name}",
+        f"Description: {description}",
+    ]
+    if gate_description:
+        lines.append(f"Gate: {gate_description}")
+    lines.append(f"Steps ({len(stage_steps)}):")
+    for step in stage_steps:
+        lines.append(f"  - {step.description}")
+
+    total = len(state._get_stages())
+    lines.append(f"\nWorkflow now has {total} stage(s).")
+    return "\n".join(lines)
+
+
+def workflow_status_cmd() -> str:
+    """Get current workflow status."""
+    state = storage.load_state()
+
+    if not state:
+        return "No active workflow. Use start_workflow(name, description) to begin."
+
+    if not state.dynamic_stages:
+        from .templates import get_workflow
+        workflow = get_workflow(state.workflow_id)
+        if not workflow:
+            return "Workflow data corrupted. Use stop_workflow() to reset."
+        name = workflow.name
+        stages = workflow.stages
+    else:
+        name = state.workflow_id.replace("_", " ").title()
+        stages = state.dynamic_stages
+
+    current_stage = state.get_current_stage()
+    progress = state.get_stage_progress()
+    total_stages = len(stages)
+
+    lines = [
+        f"Workflow: {name}",
+        f"Stage: {current_stage.name.upper()} ({state.current_stage_index + 1}/{total_stages})",
+        f"Steps: {progress[0]}/{progress[1]} complete",
+        "",
+        "Stage Progress:",
+    ]
+
+    for i, stage in enumerate(stages):
+        if i < state.current_stage_index:
+            lines.append(f"  ✓ {stage.name}")
+        elif i == state.current_stage_index:
+            stage_progress = state.get_stage_progress()
+            lines.append(f"  → {stage.name} ({stage_progress[0]}/{stage_progress[1]})")
+        else:
+            lines.append(f"  ○ {stage.name}")
 
     return "\n".join(lines)
 
+
+def advance_stage_cmd() -> str:
+    """Advance to the next stage if current stage is complete."""
+    state = storage.load_state()
+
+    if not state:
+        return "No active workflow. Use start_workflow() first."
+
+    if not state.can_advance():
+        completed, total = state.get_stage_progress()
+        return f"Cannot advance: {total - completed} step(s) remaining in current stage."
+
+    prev_stage = state.get_current_stage()
+    stages = state._get_stages()
+
+    if not state.advance():
+        storage.clear_state()
+        return f"Workflow complete! Finished: {prev_stage.name}"
+
+    storage.save_state(state)
+
+    new_stage = state.get_current_stage()
+    lines = [
+        f"Advanced to: {new_stage.name}",
+        "",
+        new_stage.description,
+    ]
+    if new_stage.gate_description:
+        lines.append("")
+        lines.append(f"Gate: {new_stage.gate_description}")
+
+    return "\n".join(lines)
+
+
+def mark_step_done_cmd(step_id: str, notes: str = "") -> str:
+    """Mark a step as complete."""
+    state = storage.load_state()
+
+    if not state:
+        return "No active workflow."
+
+    current_stage = state.get_current_stage()
+    all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
+
+    found = any(s.id == step_id for s in all_steps)
+    if not found:
+        return f"Unknown step: {step_id}. Check workflow_status() for valid step IDs."
+
+    state.step_states[step_id] = StepStatus.COMPLETE
+    if notes:
+        state.step_notes[step_id] = notes
+
+    storage.save_state(state)
+
+    progress = state.get_stage_progress()
+
+    if state.is_stage_complete():
+        return (
+            f"Step '{step_id}' marked done. Stage complete! ({progress[0]}/{progress[1]} steps)\n"
+            "Ready to advance to next stage."
+        )
+
+    return f"Step '{step_id}' marked done. ({progress[0]}/{progress[1]} steps)"
+
+
+def mark_step_in_progress_cmd(step_id: str) -> str:
+    """Mark a step as in progress."""
+    state = storage.load_state()
+
+    if not state:
+        return "No active workflow."
+
+    current_stage = state.get_current_stage()
+    all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
+
+    found = any(s.id == step_id for s in all_steps)
+    if not found:
+        return f"Unknown step: {step_id}"
+
+    state.step_states[step_id] = StepStatus.IN_PROGRESS
+    storage.save_state(state)
+
+    return f"Step '{step_id}' marked in progress."
+
+
+def skip_step_cmd(step_id: str, reason: str) -> str:
+    """Skip a step with a reason."""
+    state = storage.load_state()
+
+    if not state:
+        return "No active workflow."
+
+    current_stage = state.get_current_stage()
+    all_steps = current_stage.steps + state.dynamic_steps.get(current_stage.name, [])
+
+    found = any(s.id == step_id for s in all_steps)
+    if not found:
+        return f"Unknown step: {step_id}"
+
+    state.step_states[step_id] = StepStatus.SKIPPED
+    state.step_notes[step_id] = f"SKIPPED: {reason}"
+
+    storage.save_state(state)
+
+    return f"Step '{step_id}' skipped. Reason: {reason}"
+
+
+def add_step_note_cmd(step_id: str, note: str) -> str:
+    """Add a note to a step."""
+    state = storage.load_state()
+
+    if not state:
+        return "No active workflow."
+
+    state.step_notes[step_id] = note
+    storage.save_state(state)
+
+    return f"Note added to step '{step_id}'."
+
+
+def stop_workflow_cmd() -> str:
+    """Stop the current workflow and clear all state."""
+    storage.clear_state()
+    return "Workflow stopped and state cleared."
+
+
+# ---------------------------------------------------------------------------
+# Module registration
+# ---------------------------------------------------------------------------
 
 def get_module() -> Module:
     """Return the workflow module."""
@@ -983,47 +457,66 @@ def get_module() -> Module:
         name="workflow",
         called_fns=[
             CalledFn(
-                name="list_workflows",
-                description="List all available workflows with their descriptions",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                },
-                fn=list_workflows_cmd,
-            ),
-            CalledFn(
-                name="show_workflow",
-                description="Show detailed structure of a specific workflow",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "workflow_id": {
-                            "type": "string",
-                            "description": "ID of the workflow to show (e.g., 'coding', 'quick', 'review')",
-                        },
-                    },
-                    "required": ["workflow_id"],
-                },
-                fn=show_workflow_cmd,
-            ),
-            CalledFn(
                 name="start_workflow",
-                description="Start a workflow by ID. This begins tracking progress through stages.",
+                description="Start a new workflow for the current task. Provide a short name "
+                    "and description. Use this at the start of any non-trivial task before "
+                    "adding stages.",
                 parameters={
                     "type": "object",
                     "properties": {
-                        "workflow_id": {
+                        "name": {
                             "type": "string",
-                            "description": "ID of the workflow to start (e.g., 'coding', 'quick', 'review')",
+                            "description": "Short name for the workflow (e.g., 'OAuth login', 'Fix null crash')",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Brief description of what you're building or fixing",
                         },
                     },
-                    "required": ["workflow_id"],
+                    "required": ["name", "description"],
                 },
                 fn=start_workflow_cmd,
             ),
             CalledFn(
+                name="add_stage",
+                description="Add a stage to the active workflow. Add stages in execution order "
+                    "(understand → plan → implement → verify → commit, or similar). "
+                    "Each stage should have specific, named steps.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Short stage name (e.g., 'understand', 'plan', 'implement')",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "What this stage involves",
+                        },
+                        "steps": {
+                            "type": "array",
+                            "description": "List of steps: [{\"id\": \"step_id\", \"description\": \"...\"}]",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "description": {"type": "string"},
+                                },
+                            },
+                        },
+                        "gate_description": {
+                            "type": "string",
+                            "description": "Optional gate: a condition that must be met before advancing to the next stage",
+                        },
+                    },
+                    "required": ["name", "description", "steps"],
+                },
+                fn=add_stage_cmd,
+            ),
+            CalledFn(
                 name="workflow_status",
-                description="Get current workflow status including stage and step progress",
+                description="Get current workflow status: current stage, steps done/total, "
+                    "full stage map, and next action hint.",
                 parameters={
                     "type": "object",
                     "properties": {},
@@ -1032,7 +525,8 @@ def get_module() -> Module:
             ),
             CalledFn(
                 name="advance_stage",
-                description="Move to the next stage. Only works if all steps in current stage are complete.",
+                description="Move to the next stage. Only succeeds when all steps in the current "
+                    "stage are done or skipped. This is the LLM's decision — advance when ready.",
                 parameters={
                     "type": "object",
                     "properties": {},
@@ -1041,7 +535,7 @@ def get_module() -> Module:
             ),
             CalledFn(
                 name="mark_step_done",
-                description="Mark a step as complete",
+                description="Mark a step as complete. Always include notes describing what was done.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -1051,7 +545,7 @@ def get_module() -> Module:
                         },
                         "notes": {
                             "type": "string",
-                            "description": "Optional notes about what was done",
+                            "description": "Description of what was done",
                         },
                     },
                     "required": ["step_id"],
@@ -1060,13 +554,13 @@ def get_module() -> Module:
             ),
             CalledFn(
                 name="mark_step_in_progress",
-                description="Mark a step as currently in progress",
+                description="Mark a step as currently being worked on.",
                 parameters={
                     "type": "object",
                     "properties": {
                         "step_id": {
                             "type": "string",
-                            "description": "ID of the step to mark in progress",
+                            "description": "ID of the step",
                         },
                     },
                     "required": ["step_id"],
@@ -1075,7 +569,7 @@ def get_module() -> Module:
             ),
             CalledFn(
                 name="skip_step",
-                description="Skip a step with a reason",
+                description="Skip a step with a reason. Use when a step is not applicable.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -1093,64 +587,8 @@ def get_module() -> Module:
                 fn=skip_step_cmd,
             ),
             CalledFn(
-                name="guide_workflow",
-                description="Analyze a task and generate a structured workflow guide. "
-                    "Returns a human-readable guide with stages and steps tailored to the task type "
-                    "(feature, bug fix, refactor, review, exploratory). "
-                    "Pass the result to build_workflow() to start tracking.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "task": {
-                            "type": "string",
-                            "description": "Description of the task or goal to accomplish",
-                        },
-                    },
-                    "required": ["task"],
-                },
-                fn=guide_workflow_cmd,
-            ),
-            CalledFn(
-                name="build_workflow",
-                description="Build and start a custom workflow from a guide. "
-                    "Use guide_workflow() first to generate a guide, then pass it here.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "guide": {
-                            "type": "object",
-                            "description": "Guide dict with id, name, description, and stages [{name, description, steps: [{id, description}]}]",
-                        },
-                    },
-                    "required": ["guide"],
-                },
-                fn=build_workflow_cmd,
-            ),
-            CalledFn(
-                name="expand_implement_steps",
-                description="Add custom steps to the current stage of a template workflow (legacy — prefer build_workflow for custom workflows)",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "steps": {
-                            "type": "array",
-                            "description": "List of step objects with 'id' and 'description'",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "description": {"type": "string"},
-                                },
-                            },
-                        },
-                    },
-                    "required": ["steps"],
-                },
-                fn=expand_implement_steps_cmd,
-            ),
-            CalledFn(
                 name="add_step_note",
-                description="Add a note to any step",
+                description="Attach a note to any step — decisions, links, findings.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -1160,7 +598,7 @@ def get_module() -> Module:
                         },
                         "note": {
                             "type": "string",
-                            "description": "Note to add",
+                            "description": "Note to attach",
                         },
                     },
                     "required": ["step_id", "note"],
@@ -1169,7 +607,7 @@ def get_module() -> Module:
             ),
             CalledFn(
                 name="stop_workflow",
-                description="Stop the current workflow and clear state",
+                description="Stop the current workflow and clear all state.",
                 parameters={
                     "type": "object",
                     "properties": {},
