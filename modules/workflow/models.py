@@ -114,7 +114,7 @@ class WorkflowState:
             'workflow_id': self.workflow_id,
             'current_stage_index': self.current_stage_index,
             'started_at': self.started_at,
-            'step_states': {k: v.value for k, v in self.step_states.items()},
+            'step_states': {k: v.name for k, v in self.step_states.items()},
             'step_notes': self.step_notes,
             'dynamic_stages': [
                 {
