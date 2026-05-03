@@ -139,7 +139,7 @@ class WorkflowState:
         state.current_stage_index = data.get('current_stage_index', 0)
         state.started_at = data.get('started_at')
         state.step_states = {
-            k: StepStatus(v) for k, v in data.get('step_states', {}).items()
+            k: StepStatus[v] for k, v in data.get('step_states', {}).items()
         }
         state.step_notes = data.get('step_notes', {})
         state.dynamic_stages = [
