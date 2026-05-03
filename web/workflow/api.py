@@ -10,7 +10,6 @@ from typing import Optional
 
 from modules.workflow.db import load as load_row
 from modules.workflow.models import StepStatus
-from modules.workflow.templates import get_workflow
 
 logger = logging.getLogger("web.workflow.api")
 
@@ -87,24 +86,9 @@ def workflow_status(session_id: str) -> WorkflowStatusResponse:
     step_notes: dict = row.get("step_notes") or {}
     dynamic_stages: list = row.get("dynamic_stages") or []
 
-    # Resolve stages: dynamic_stages take priority, otherwise use template
-    if dynamic_stages:
-        stages_raw = dynamic_stages
-        workflow_name = workflow_id.replace("_", " ").title()
-    else:
-        wf = get_workflow(workflow_id)
-        if not wf:
-            return WorkflowStatusResponse(active=False)
-        workflow_name = wf.name
-        stages_raw = [
-            {
-                "name": s.name,
-                "description": s.description,
-                "gate_description": s.gate_description,
-                "steps": [{"id": st.id, "description": st.description} for st in s.steps],
-            }
-            for s in wf.stages
-        ]
+    # Stages always come from dynamic_stages (workflows are built from scratch)
+    stages_raw = dynamic_stages
+    workflow_name = workflow_id.replace("_", " ").title()
 
     total_stages = len(stages_raw)
 

@@ -127,14 +127,7 @@ def _workflow_context() -> str:
     if not state:
         return ""
 
-    if state.dynamic_stages:
-        workflow_name = state.workflow_id.replace("_", " ").title()
-    else:
-        from .templates import get_workflow
-        workflow = get_workflow(state.workflow_id)
-        if not workflow:
-            return ""
-        workflow_name = workflow.name
+    workflow_name = state.workflow_id.replace("_", " ").title()
 
     current_stage = state.get_current_stage()
     if not current_stage:
@@ -287,16 +280,8 @@ def workflow_status_cmd() -> str:
     if not state:
         return "No active workflow. Use start_workflow(name, description) to begin."
 
-    if not state.dynamic_stages:
-        from .templates import get_workflow
-        workflow = get_workflow(state.workflow_id)
-        if not workflow:
-            return "Workflow data corrupted. Use stop_workflow() to reset."
-        name = workflow.name
-        stages = workflow.stages
-    else:
-        name = state.workflow_id.replace("_", " ").title()
-        stages = state.dynamic_stages
+    name = state.workflow_id.replace("_", " ").title()
+    stages = state.dynamic_stages
 
     current_stage = state.get_current_stage()
     progress = state.get_stage_progress()
