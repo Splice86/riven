@@ -406,3 +406,110 @@ class TestClearLocksAndHandlers:
             evt_module.clear("some_event")
             # Lock should still be held
             assert evt_module.get_lock_state("/keepme.py") is not None
+
+
+class TestBrowserLockIntegration:
+    """Test cross-system interaction between browser editor and Riven file tools.
+
+    The browser editor holds locks with holder IDs starting with 'ed-' (e.g. 'ed-abc12345').
+    Riven's file tools must refuse to edit a browser-locked file, but should still be able
+    to edit files locked by Riven itself.
+    """
+
+    @pytest.mark.asyncio
+    async def test_is_browser_lock_true_for_ed_prefix(self):
+        """Locks with 'ed-' holders are identified as browser locks."""
+        async with evt_module.acquire_lock("/browser/file.py", "ed-abc12345",
+                                          timeout=5.0, context="browser editing"):
+            state = evt_module.get_lock_state("/browser/file.py")
+            assert state is not None
+            assert evt_module.is_browser_lock(state) is True
+
+    @pytest.mark.asyncio
+    async def test_is_browser_lock_false_for_riven_session(self):
+        """Locks with non-'ed-' holders are NOT browser locks (Riven's own sessions)."""
+        async with evt_module.acquire_lock("/riven/file.py", "sess-abc-def-123",
+                                          timeout=5.0, context="riven editing"):
+            state = evt_module.get_lock_state("/riven/file.py")
+            assert state is not None
+            assert evt_module.is_browser_lock(state) is False
+
+    @pytest.mark.asyncio
+    async def test_is_browser_lock_false_for_generic_holder(self):
+        """Generic holder IDs don't trigger the browser-lock check."""
+        async with evt_module.acquire_lock("/generic/file.py", "alice", timeout=5.0, context="test"):
+            state = evt_module.get_lock_state("/generic/file.py")
+            assert state is not None
+            assert evt_module.is_browser_lock(state) is False
+
+    @pytest.mark.asyncio
+    async def test_browser_lock_prevents_riven_edit(self):
+        """When the browser holds a lock on a file, Riven's guard raises BrowserLockError."""
+        # Simulate browser acquiring the lock
+        async with evt_module.acquire_lock("/blocked.py", "ed-xyz789",
+                                          timeout=5.0, context="browser editing"):
+            # Import the guard function from the file editor module
+            from modules.file.editor import (
+                _require_no_browser_lock,
+                BrowserLockError,
+            )
+
+            # Riven tries to edit — should be blocked
+            with pytest.raises(BrowserLockError) as exc_info:
+                _require_no_browser_lock("/blocked.py")
+
+            assert exc_info.value.holder == "ed-xyz789"
+            assert "browser editor" in str(exc_info.value).lower()
+            assert "wait" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_browser_lock_not_prevented_after_release(self):
+        """Once the browser releases the lock, Riven's guard passes without error."""
+        # Acquire as browser, then release
+        async with evt_module.acquire_lock("/allowed.py", "ed-abc000",
+                                          timeout=5.0, context="browser editing"):
+            pass  # lock auto-released
+
+        # Now no lock exists — guard should pass silently
+        from modules.file.editor import _require_no_browser_lock
+
+        _require_no_browser_lock("/allowed.py")  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_riven_own_lock_allows_edit(self):
+        """Riven holding its own lock should NOT block its own edits (is_browser_lock returns False)."""
+        from modules.file.editor import is_browser_lock
+
+        async with evt_module.acquire_lock("/riven-owned.py", "sess-riven-001",
+                                          timeout=5.0, context="riven batch_edit"):
+            state = evt_module.get_lock_state("/riven-owned.py")
+            assert state is not None
+            # Riven's own lock is NOT a browser lock
+            assert evt_module.is_browser_lock(state) is False
+            # Therefore Riven can freely edit its own file
+            from modules.file.editor import _require_no_browser_lock
+            _require_no_browser_lock("/riven-owned.py")  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_mixed_holders_riven_locked_by_browser(self):
+        """Riven can't edit a file the browser has locked, even while Riven has other locks."""
+        from modules.file.editor import (
+            _require_no_browser_lock,
+            BrowserLockError,
+        )
+
+        # Riven holds its own file fine
+        async with evt_module.acquire_lock("/riven-own.py", "sess-riven-002",
+                                          timeout=5.0, context="riven replace_text"):
+            _require_no_browser_lock("/riven-own.py")  # allowed
+
+            # Browser locks a different file
+            async with evt_module.acquire_lock("/browser-own.md", "ed-def456",
+                                              timeout=5.0, context="browser editing"):
+                # Riven tries the browser-locked file — blocked
+                with pytest.raises(BrowserLockError) as exc_info:
+                    _require_no_browser_lock("/browser-own.md")
+                assert "browser editor" in str(exc_info.value).lower()
+
+                # Riven's own file still accessible
+                _require_no_browser_lock("/riven-own.py")  # still allowed

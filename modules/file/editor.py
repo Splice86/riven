@@ -79,16 +79,16 @@ class BrowserLockError(Exception):
         self.path = path
         self.holder = holder
         super().__init__(
-            f"File is open in the browser editor ({holder}). "
-            f"Close or save the file in the browser before editing it here."
+            f"File '{path}' is locked by the browser editor ({holder}). "
+            f"Wait for the user to finish editing, then try again."
         )
 
 
 def _require_no_browser_lock(path: str) -> None:
     """Raise BrowserLockError if the file is locked by a browser editor.
     
-    Called before every write operation. Riven will NOT wait for the lock —
-    it fails immediately so the user knows to close the browser first.
+    Called before every write operation. Riven should wait and retry rather
+    than working around the lock.
     """
     lock = get_lock_state(path)
     if lock is not None and is_browser_lock(lock):

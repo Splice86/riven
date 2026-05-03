@@ -38,27 +38,70 @@
     padding: 8px 12px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     font-size: 13px;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   #toolbar .title { color: var(--accent); font-weight: 600; }
   #toolbar .sep { color: var(--muted); }
 
+  /* Essential: always visible, compact */
   #ws-status {
     font-size: 11px;
-    padding: 2px 8px;
+    padding: 2px 6px;
     border-radius: 10px;
     background: var(--border);
     color: var(--muted);
+    flex-shrink: 0;
   }
   #ws-status.connected { background: #2a4a2a; color: var(--green); }
   #ws-status.disconnected { background: #4a2a2a; color: var(--red); }
 
-  #watch-btn {
+  #save-indicator {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    background: transparent;
+    color: transparent;
+    flex-shrink: 0;
+    min-width: 60px;
+    text-align: center;
+  }
+  #save-indicator.saving  { background: #2a3a2a; color: var(--yellow); }
+  #save-indicator.saved   { background: #2a4a2a; color: var(--green); }
+  #save-indicator.unsaved { background: #4a3a2a; color: var(--yellow); }
+
+  /* Lock indicator — LED + compact label */
+  #lock-indicator {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    color: transparent;
+    transition: background 0.3s ease, color 0.3s ease;
+    flex-shrink: 0;
+  }
+  #lock-indicator.unlocked { background: #1a2a3a; color: var(--muted); }
+  #lock-indicator.locked-by-me    { background: #2a4a2a; color: var(--green); }
+  #lock-indicator.locked-by-riven { background: #4a2a2a; color: var(--red); }
+  #lock-indicator.locked-by-other { background: #4a3a2a; color: var(--yellow); }
+  #lock-indicator .led {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+    box-shadow: 0 0 3px currentColor;
+  }
+
+  #watch-btn, #undo-btn {
     font-size: 12px;
-    padding: 2px 7px;
+    padding: 2px 6px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: none;
@@ -72,23 +115,30 @@
     border-color: var(--green);
   }
   #watch-btn:hover { color: var(--text); }
-  #save-indicator { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: transparent; color: transparent; }
-  #save-indicator.saving { background: #2a3a2a; color: var(--yellow); }
-  #save-indicator.saved  { background: #2a4a2a; color: var(--green); }
-  #save-indicator.unsaved { background: #4a3a2a; color: var(--yellow); }
-
-  #active-file {
-    color: var(--yellow);
-    font-size: 12px;
-    margin-left: auto;
-  }
+  #undo-btn { display: none; }
+  #undo-btn:hover:not(:disabled) { color: var(--text); border-color: var(--text); }
+  #undo-btn:disabled { opacity: 0.3; cursor: default; }
+  #undo-btn.undoing { opacity: 0.7; cursor: wait; }
 
   #instance-badge, #session-badge {
     font-size: 11px;
-    padding: 2px 8px;
+    padding: 2px 6px;
     border-radius: 10px;
     background: var(--border);
     color: var(--muted);
+    flex-shrink: 0;
+  }
+  #instance-badge {
+    margin-left: auto;
+  }
+
+  /* Narrow: hide less-critical elements */
+  @media (max-width: 700px) {
+    #toolbar { gap: 6px; }
+    #toolbar .title { display: none; }
+    #toolbar .sep { display: none; }
+    #instance-badge { display: none; }
+    #session-badge { display: none; }
   }
 
   /* ─── Main layout ─── */
@@ -206,6 +256,19 @@
   .tree-file.js .icon { color: #f9e2af; }
   .tree-file.html .icon { color: #f38ba8; }
   .tree-file.md .icon { color: #a6e3a1; }
+
+  .tree-item.locked .icon { filter: grayscale(0.2); }
+  .tree-item.locked::after {
+    content: '🔒';
+    font-size: 9px;
+    margin-left: 2px;
+    opacity: 0.6;
+  }
+  .tree-item.locked-by-riven::after {
+    content: '⚠';
+    color: var(--red);
+    font-size: 10px;
+  }
 
   /* ─── Editor pane ─── */
   #editor-pane {
@@ -340,10 +403,10 @@
   <span id="ws-status">● Connecting</span>
   <span id="save-indicator"></span>
   <button id="watch-btn" title="Watch mode: ON = auto-scroll to bottom when Riven edits this file | OFF = stay where you are">👁 Watch</button>
+  <button id="undo-btn" title="Revert file to last saved commit (git checkout HEAD)">↩ Undo</button>
   <span id="lock-indicator" title="File lock status"></span>
   <span id="instance-badge"></span>
   <span id="session-badge"></span>
-  <span id="active-file">—</span>
 </div>
 
 <!-- ─── Main ─── -->
@@ -421,12 +484,17 @@ let currentPath = null;
 let serverContent = null;
 let modified = false;
 let saveTimer = null;
+let saveIndicatorTimer = null;
 let watchMode = true;  // when ON, scroll to Riven edits | when OFF, stay put
 let suppressChangeEvent = false;
 let absPath = '';  // current absolute directory being browsed
 
 // Lock state: path we're currently holding an exclusive lock on
 let lockedPath = null;
+let lockPending = false;  // true while a lock request is in-flight
+
+// Track which paths are locked by Riven (so we can grey them in the tree)
+let rivenLockedPaths = new Set();
 
 // ─── Mode map ────────────────────────────────────────────────────────────────
 function getMode(filename) {
@@ -463,17 +531,29 @@ function initEditor() {
     const wasUnmodified = !modified;
     serverContent = null;
     modified = true;
-    document.getElementById('save-indicator').textContent = '● Unsaved';
-    document.getElementById('save-indicator').className = 'unsaved';
+    const el = document.getElementById('save-indicator');
+    el.textContent = 'Unsaved';
+    el.className = 'unsaved';
 
     // First keystroke after opening — acquire the file lock so Riven can't edit
+    // Await it so we don't auto-save until the lock is confirmed.
     if (wasUnmodified && currentPath) {
-      acquireFileLock(currentPath);
+      console.log('[CHANGE] wasUnmodified=true, calling acquireFileLock on', currentPath);
+      acquireFileLock(currentPath).then(() => {
+        // Lock is confirmed (or failed); schedule the auto-save.
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          if (modified && currentPath && !lockPending) {
+            saveFile();
+          }
+        }, 1000);
+      });
+      return;  // don't start the timer yet — wait for lock
     }
 
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (modified && currentPath) {
+      if (modified && currentPath && !lockPending) {
         saveFile();
       }
     }, 1000);
@@ -568,31 +648,44 @@ async function saveFile() {
 
   clearTimeout(saveTimer);
   const content = editor.getValue();
-
-  document.getElementById('save-indicator').textContent = '⚡ Saving…';
-  document.getElementById('save-indicator').className = 'saving';
-
+  console.log('[SAVE] POSTing save for', currentPath, 'holder=', instanceId, 'lockPending=', lockPending, 'lockedPath=', lockedPath);
   try {
     const resp = await fetch('/web/editor/api/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: currentPath, content }),
+      body: JSON.stringify({ path: currentPath, content, holder: instanceId }),
     });
-    if (!resp.ok) throw new Error(await resp.text());
+    if (resp.status === 409) {
+      // Lock expired or stale — re-acquire and retry once
+      console.log('[SAVE] 409, re-acquiring lock before retry');
+      lockedPath = null;  // clear stale state
+      await acquireFileLock(currentPath);
+      if (lockedPath !== currentPath) throw new Error('Could not acquire lock');
+      const resp2 = await fetch('/web/editor/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentPath, content, holder: instanceId }),
+      });
+      if (!resp2.ok) throw new Error(await resp2.text());
+    } else if (!resp.ok) {
+      throw new Error(await resp.text());
+    }
 
     serverContent = content;
     modified = false;
-    document.getElementById('save-indicator').textContent = '✓ Saved';
-    document.getElementById('save-indicator').className = 'saved';
-    setTimeout(() => {
-      document.getElementById('save-indicator').textContent = '';
-      document.getElementById('save-indicator').className = '';
+    const el = document.getElementById('save-indicator');
+    el.textContent = 'Saved';
+    el.className = 'saved';
+    clearTimeout(saveIndicatorTimer);
+    saveIndicatorTimer = setTimeout(() => {
+      el.textContent = '';
+      el.className = '';
     }, 2000);
-    showToast(`<strong>${currentPath.split('/').pop()}</strong> saved ✓`);
   } catch (err) {
     showToast(`Save failed: <strong>${err.message}</strong>`);
-    document.getElementById('save-indicator').textContent = '✗ Save failed';
-    document.getElementById('save-indicator').className = 'unsaved';
+    const el = document.getElementById('save-indicator');
+    el.textContent = 'Failed';
+    el.className = 'unsaved';
   }
 }
 
@@ -600,8 +693,10 @@ async function saveFile() {
 // Acquire an exclusive lock on a file before editing.
 // Riven will see this lock and refuse to edit until we release it.
 async function acquireFileLock(path) {
-  if (lockedPath === path) return;  // already locked
-  if (lockedPath) await releaseFileLock(lockedPath);  // release previous first
+  if (lockedPath === path) { console.log('[LOCK] acquire skipped — already locked', path); return; }
+  if (lockedPath) { console.log('[LOCK] releasing stale', lockedPath, 'before locking', path); await releaseFileLock(lockedPath); }
+  console.log('[LOCK] POSTing acquire for', path, 'holder=', instanceId);
+  lockPending = true;
   try {
     const resp = await fetch(`/web/editor/api/lock/${encodeURIComponent(path)}`, {
       method: 'POST',
@@ -610,12 +705,16 @@ async function acquireFileLock(path) {
     });
     if (resp.ok) {
       lockedPath = path;
+      lockPending = false;
+      updateLockIndicator(true, instanceId);
       console.log('[LOCK] Acquired on', path);
     } else {
+      lockPending = false;
       const body = await resp.json().catch(() => ({}));
       showToast(`⚠ Could not lock <strong>${path.split('/').pop()}</strong>: ${body.detail || resp.status}`);
     }
   } catch (err) {
+    lockPending = false;
     console.warn('[LOCK] acquire failed:', err);
   }
 }
@@ -623,6 +722,10 @@ async function acquireFileLock(path) {
 // Release our lock on a file.
 async function releaseFileLock(path) {
   if (!path || lockedPath !== path) return;
+  // Clear locally right away so acquireFileLock can re-acquire immediately
+  // without waiting for the server round-trip.
+  lockedPath = null;
+  updateLockIndicator(false);
   try {
     await fetch(`/web/editor/api/lock/${encodeURIComponent(path)}?holder=${encodeURIComponent(instanceId)}`, {
       method: 'DELETE',
@@ -630,8 +733,74 @@ async function releaseFileLock(path) {
     console.log('[LOCK] Released on', path);
   } catch (err) {
     console.warn('[LOCK] release failed:', err);
-  } finally {
-    lockedPath = null;
+  }
+}
+
+// ─── Lock indicator ────────────────────────────────────────────────────────────
+// Shows a LED in the toolbar:
+//   ● green  = you hold the lock (editing)
+//   ● red    = Riven holds the lock
+//   ● amber  = another browser instance holds the lock
+//   (invisible when unlocked)
+// ─── File locking ─────────────────────────────────────────────────────────────
+function updateLockIndicator(locked, holder, context) {
+  const el = document.getElementById('lock-indicator');
+  if (!currentPath) {
+    el.className = '';
+    el.textContent = '';
+    return;
+  }
+
+  if (!locked) {
+    el.className = 'unlocked';
+    el.innerHTML = '<span class="led"></span>Unlocked';
+    el.title = 'No lock on this file — Riven may edit it';
+    return;
+  }
+
+  const isMe = holder === instanceId;
+  const looksLikeRiven = holder && !holder.startsWith('ed-');
+
+  if (isMe) {
+    el.className = 'locked-by-me';
+    el.innerHTML = '<span class="led"></span>You';
+    el.title = 'You have an exclusive lock — Riven cannot edit this file';
+  } else if (looksLikeRiven) {
+    el.className = 'locked-by-riven';
+    el.innerHTML = '<span class="led"></span>Riven';
+    el.title = `Riven is editing this file${context ? ' (' + context + ')' : ''}`;
+  } else {
+    el.className = 'locked-by-other';
+    const shortHolder = holder.length > 8 ? holder.substring(0, 8) + '…' : holder;
+    el.innerHTML = `<span class="led"></span>${shortHolder}`;
+    el.title = `Another client holds the lock${context ? ' (' + context + ')' : ''}`;
+  }
+}
+
+// Fetch current lock state from server (used on file open)
+async function fetchLockStatus(path) {
+  if (!path) return;
+  try {
+    const resp = await fetch(`/web/editor/api/lock/${encodeURIComponent(path)}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      updateLockIndicator(data.locked, data.state?.holder, data.state?.context);
+    }
+  } catch (err) {
+    console.warn('[LOCK] fetchLockStatus failed:', err);
+  }
+}
+
+// Update the file tree to show a lock icon on locked files
+function updateTreeLockIndicators(path, locked, holder) {
+  if (!path) return;
+  const treeItem = document.querySelector(`.tree-item[data-path="${path}"]`);
+  if (!treeItem) return;
+  const looksLikeRiven = holder && !holder.startsWith('ed-');
+  treeItem.classList.toggle('locked', locked);
+  treeItem.classList.toggle('locked-by-riven', locked && looksLikeRiven);
+  if (!locked) {
+    treeItem.classList.remove('locked', 'locked-by-riven');
   }
 }
 
@@ -656,11 +825,15 @@ async function openFile(path) {
   document.getElementById('empty-state').style.display = 'none';
   document.getElementById('editor-wrap').style.display = 'block';
   document.getElementById('open-path').textContent = path;
-  document.getElementById('active-file').textContent = '📄 ' + path.split('/').pop();
   clearTimeout(saveTimer);
   document.getElementById('save-indicator').textContent = '';
   document.getElementById('save-indicator').className = '';
+  updateLockIndicator(false);
   setActive(path);
+
+  // Show undo button and fetch current lock state for this file
+  document.getElementById('undo-btn').style.display = '';
+  fetchLockStatus(path);
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(Object.assign(
@@ -804,10 +977,43 @@ function connect() {
   console.log('[WS] Connecting to', url);
   ws = new WebSocket(url);
 
+  // Heartbeat the lock every 2 minutes so it doesn't expire.
+  let heartbeatTimer = null;
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(async () => {
+      if (lockedPath && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          const resp = await fetch(`/web/editor/api/lock/${encodeURIComponent(lockedPath)}?holder=${encodeURIComponent(instanceId)}&action=refresh`, {
+            method: 'PATCH',
+          });
+          if (resp.ok) {
+            console.log('[LOCK] Heartbeat refreshed on', lockedPath);
+          } else if (resp.status === 404) {
+            // Lock expired — re-acquire if we're still editing
+            console.log('[LOCK] Lock expired, re-acquiring on', lockedPath);
+            acquireFileLock(lockedPath);
+          }
+        } catch (e) {
+          console.warn('[LOCK] Heartbeat failed:', e);
+        }
+      }
+    }, 120_000);  // 2 minutes
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
   ws.onopen = () => {
     console.log('[WS] Connected!');
-    document.getElementById('ws-status').textContent = '● Connected';
+    document.getElementById('ws-status').textContent = '●';
     document.getElementById('ws-status').className = 'connected';
+    startHeartbeat();
     const msg = Object.assign(
       { type: 'list' },
       sessionId ? { session_id: sessionId } : {},
@@ -825,8 +1031,9 @@ function connect() {
 
   ws.onclose = (e) => {
     console.log('[WS] Closed:', e.code, e.reason);
-    document.getElementById('ws-status').textContent = '● Reconnecting…';
+    document.getElementById('ws-status').textContent = '○';
     document.getElementById('ws-status').className = 'disconnected';
+    stopHeartbeat();
     setTimeout(connect, 2000);
   };
 
@@ -858,6 +1065,21 @@ function connect() {
 
       case 'toast':
         showToast(msg.text);
+        break;
+
+      case 'lock':
+        // Real-time lock state update from server (Riven or another browser)
+        updateLockIndicator(msg.locked, msg.holder, msg.context);
+        updateTreeLockIndicators(msg.path, msg.locked, msg.holder);
+        // Keep local state in sync with server's authoritative lock state
+        if (!msg.locked && lockedPath === msg.path) {
+          lockedPath = null;
+          lockPending = false;
+        }
+        // If Riven took the lock, show a warning toast
+        if (msg.locked && msg.holder && !msg.holder.startsWith('ed-')) {
+          showToast(`⚠ Riven locked <strong>${(msg.path || '').split('/').pop()}</strong> — you won't be able to edit`);
+        }
         break;
 
       case 'ping':
@@ -916,6 +1138,45 @@ function initWatchBtn() {
   });
 }
 
+// ─── Undo button ─────────────────────────────────────────────────────────────
+function initUndoBtn() {
+  const btn = document.getElementById('undo-btn');
+  btn.addEventListener('click', async () => {
+    if (!currentPath || btn.classList.contains('undoing')) return;
+    btn.classList.add('undoing');
+    btn.disabled = true;
+    btn.textContent = '↩ Undo…';
+    try {
+      const resp = await fetch(`/web/editor/api/undo?path=${encodeURIComponent(currentPath)}` +
+        (sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''), {
+        method: 'POST',
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        // Apply the reverted content
+        suppressChangeEvent = true;
+        editor.setValue(data.content);
+        suppressChangeEvent = false;
+        serverContent = data.content;
+        modified = false;
+        const si = document.getElementById('save-indicator');
+        si.textContent = '';
+        si.className = '';
+        showToast(`Reverted to last commit: <strong>${data.commit}</strong>`);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        showToast(`Undo failed: <strong>${err.detail || resp.status}</strong>`);
+      }
+    } catch (err) {
+      showToast(`Undo failed: <strong>${err.message}</strong>`);
+    } finally {
+      btn.classList.remove('undoing');
+      btn.disabled = false;
+      btn.textContent = '↩ Undo';
+    }
+  });
+}
+
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 console.log('[EDITOR] Boot starting, absPath =', absPath);
@@ -925,8 +1186,10 @@ console.log('[EDITOR] initEditor done, editor:', editor ? 'OK' : 'NULL');
 initResizeHandle();
 initNavUp();
 initWatchBtn();
+initUndoBtn();
 initNavInput();
 document.getElementById('editor-wrap').style.display = 'none';
+document.getElementById('undo-btn').style.display = 'none';  // hidden until a file is open
 connect();
 console.log('[EDITOR] connect() called');
 </script>

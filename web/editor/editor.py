@@ -408,6 +408,8 @@ async def _on_lock_acquired(path: str, holder: str, context: str) -> None:
         "path": path,
         "awareness": _awareness[path],
     }, filter_path=path)
+    # Broadcast explicit lock state so toolbar LED updates in real-time
+    await broadcast_lock_update(path)
 
 
 async def _on_lock_released(path: str, holder: str, context: str) -> None:
@@ -422,6 +424,8 @@ async def _on_lock_released(path: str, holder: str, context: str) -> None:
         "path": path,
         "awareness": _awareness.get(path, []),
     }, filter_path=path)
+    # Broadcast explicit lock state so toolbar LED updates in real-time
+    await broadcast_lock_update(path)
 
 
 async def _on_awareness_updated(path: str, session_id: str | None = None,
@@ -607,3 +611,28 @@ async def broadcast_to_all(msg: dict) -> None:
 async def broadcast_global_speak(text: str) -> None:
     """Broadcast a toast message to ALL clients (no filtering)."""
     await _broadcast({"type": "toast", "text": text})
+
+
+async def broadcast_lock_update(rel_path: str) -> None:
+    """Broadcast the current lock state for rel_path to ALL clients (no path filter).
+
+    This single global broadcast updates:
+      - toolbar LED  (for clients watching this file)
+      - file tree lock icons  (for all clients, regardless of what's open)
+
+    Defensive: if events system is unavailable or lock state can't be determined,
+    broadcasts locked=false — the frontend handles that gracefully.
+    """
+    import logging
+    _log = logging.getLogger("web.editor.editor")
+    lock_state = None
+    if events is not None:
+        lock_state = events.get_lock_state(rel_path)
+    _log.info(f"[LOCK] Broadcasting: path={rel_path} locked={lock_state is not None} holder={lock_state.holder if lock_state else None}")
+    await _broadcast({
+        "type": "lock",
+        "path": rel_path,
+        "locked": lock_state is not None,
+        "holder": lock_state.holder if lock_state else None,
+        "context": lock_state.context if lock_state else None,
+    })

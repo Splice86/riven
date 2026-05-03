@@ -1,0 +1,4 @@
+Updates
+In web chat ui:
+Clickable links
+more aggresive stop behavior

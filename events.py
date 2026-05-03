@@ -36,6 +36,11 @@ logger = logging.getLogger("events")
 
 # ─── Lock Registry ─────────────────────────────────────────────────────────────
 
+# How long a lock lives before it expires (seconds).
+# Heartbeat it with a refresh call to keep it alive.
+LOCK_TIMEOUT = 300  # 5 minutes
+
+
 @dataclass
 class LockInfo:
     """Describes who holds an exclusive lock on a file.
@@ -50,6 +55,14 @@ class LockInfo:
     instance_id: str | None = None
     context: str = ""     # e.g. "replace_text", "David editing"
     acquired_at: float = field(default_factory=time.time)
+    expires_at: float = field(default_factory=lambda: time.time() + LOCK_TIMEOUT)
+
+    def is_expired(self) -> bool:
+        return time.time() > self.expires_at
+
+    def refresh(self) -> None:
+        """Extend the expiry time."""
+        self.expires_at = time.time() + LOCK_TIMEOUT
 
     async def __aenter__(self) -> "LockInfo":
         return self
@@ -80,8 +93,32 @@ def _get_locks_lock() -> asyncio.Lock:
     return _locks_lock
 
 
+def _expire_locks() -> None:
+    """Remove all expired locks from the table."""
+    for path in list(_locks.keys()):
+        if _locks[path].is_expired():
+            logger.debug(f"[events] lock expired: {path} by {_locks[path].holder}")
+            del _locks[path]
+
+
+def refresh_lock(path: str, holder: str) -> bool:
+    """Refresh the expiry on an existing lock held by `holder`.
+
+    Returns True if the lock was refreshed, False if the lock doesn't exist
+    or is held by someone else.
+    """
+    _expire_locks()
+    lock = _locks.get(path)
+    if lock and lock.holder == holder:
+        lock.refresh()
+        logger.debug(f"[events] lock refreshed: {path} by {holder}")
+        return True
+    return False
+
+
 def get_lock_state(path: str) -> LockInfo | None:
     """Return the current lock for a path, or None if unlocked."""
+    _expire_locks()
     return _locks.get(path)
 
 
@@ -130,8 +167,8 @@ async def acquire_lock(
         while path in _locks:
             existing = _locks[path]
             if existing.holder == holder:
-                # Re-entrant: already held by us — just refresh timestamp
-                existing.acquired_at = time.time()
+                # Re-entrant / refresh: already held by us — extend expiry
+                existing.refresh()
                 yield existing
                 return
             remaining = timeout - (time.time() - start)

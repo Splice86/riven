@@ -125,20 +125,36 @@ class TestOnLockAcquired:
         ws = _make_mock_ws()
         await _register_mock_client(ws, path=file_path)
 
-        await editor_mod._on_lock_acquired(file_path, "session-holder", context="replace_text")
+        # Mock events.get_lock_state so broadcast_lock_update returns real state
+        from web.editor import editor as _ed
+        mock_lock_info = MagicMock()
+        mock_lock_info.holder = "session-holder"
+        mock_lock_info.context = "replace_text"
+        with patch.object(_ed.events, 'get_lock_state', return_value=mock_lock_info):
+            await editor_mod._on_lock_acquired(file_path, "session-holder", context="replace_text")
 
         # Check awareness state
         assert file_path in editor_mod._awareness
         assert len(editor_mod._awareness[file_path]) == 1
         assert editor_mod._awareness[file_path][0]["session_id"] == "session-holder"
 
-        # Check broadcast
-        ws.send_text.assert_called_once()
-        msg = json.loads(ws.send_text.call_args[0][0])
+        # Check broadcasts: awareness message then lock-update message
+        calls = ws.send_text.call_args_list
+        assert len(calls) == 2, f"Expected 2 broadcasts, got {len(calls)}: {[c[0][0] for c in calls]}"
+
+        # 1st broadcast: awareness
+        msg = json.loads(calls[0][0][0])
         assert msg["type"] == "awareness"
         assert msg["path"] == file_path
         assert len(msg["awareness"]) == 1
         assert msg["awareness"][0]["session_id"] == "session-holder"
+
+        # 2nd broadcast: lock state update
+        msg2 = json.loads(calls[1][0][0])
+        assert msg2["type"] == "lock"
+        assert msg2["path"] == file_path
+        assert msg2["locked"] is True
+        assert msg2["holder"] == "session-holder"
 
     @pytest.mark.asyncio
     async def test_multiple_holders_get_different_colors(self, tmp_path):
@@ -203,12 +219,15 @@ class TestOnLockReleased:
         # Awareness should be cleared
         assert file_path not in editor_mod._awareness
 
-        # Broadcast should show empty awareness
+        # Broadcasts: awareness message then lock-update (for both acquire and release)
+        # Acquire: awareness + lock  → release: awareness + lock  → total: 4 calls
         ws.send_text.assert_called()
         msgs = [json.loads(c[0][0]) for c in ws.send_text.call_args_list]
-        release_msg = msgs[-1]
-        assert release_msg["type"] == "awareness"
-        assert release_msg["awareness"] == []
+        assert len(msgs) == 4, f"Expected 4 broadcasts, got {len(msgs)}"
+        # Last awareness message should be the release one with empty awareness
+        awareness_msgs = [m for m in msgs if m["type"] == "awareness"]
+        release_awareness = awareness_msgs[-1]
+        assert release_awareness["awareness"] == []
 
     @pytest.mark.asyncio
     async def test_releasing_unknown_holder_does_not_crash(self, tmp_path):
