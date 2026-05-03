@@ -560,7 +560,7 @@ class FileEditor:
         
 
         
-        return f"Opened {filename} (~{token_count} tokens). File is now instantly visible in system context{line_info}{large_warning}"
+        return f"Opened {filename} (~{len(ranged_content) // 4} chars). File is now instantly visible in system context{line_info}{large_warning}"
     
     async def close_file(self, name: str, line_start: int = None, line_end: int = None) -> str:
         """Close a file from the file context.
