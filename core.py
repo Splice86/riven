@@ -33,10 +33,8 @@ from context import ContextManager, _json_safe
 from config import get
 from db import ContextDB
 from modules import registry, Module, CalledFn, ContextFn, _session_id
-from logging_config import setup_logging, get_logger
+from logging_config import get_logger
 
-# Set up file logging once (safe on re-runs via guard in setup_logging)
-setup_logging(level=logging.INFO)
 logger = get_logger(__name__)
 
 # High-level debug flag - set to True to enable trace prints
