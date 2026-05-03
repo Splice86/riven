@@ -359,34 +359,46 @@ class Core:
         _debug(f"_execute: calling {func.fn} with timeout={timeout}s args={list(call.arguments.keys())}", session_id)
 
         content, error = "", None
+        is_async = inspect.iscoroutinefunction(func.fn)
         try:
-            remaining = timeout
-            poll_interval = 0.1  # check _cancel_requested every 100ms
-            while remaining > 0:
-                chunk = min(remaining, poll_interval)
+            if not is_async:
+                # Sync function — run in thread pool with full timeout (no polling)
                 if self._cancel_requested:
                     raise asyncio.CancelledError()
                 try:
-                    result = await asyncio.wait_for(func.fn(**call.arguments), timeout=chunk)
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(func.fn, **call.arguments),
+                        timeout=timeout,
+                    )
                     content = str(result) if result is not None else ""
                     _debug(f"_execute: {call.name} completed OK ({time.time()-_exec_start:.3f}s, content len={len(content)})", session_id)
-                    break  # success
                 except asyncio.TimeoutError:
-                    remaining -= chunk
+                    error = f"Function timed out after {timeout}s"
+                    logger.warning("[Tool] '%s' TIMED OUT after %ss", call.name, timeout)
+            else:
+                # Async function — polling loop for cancellation responsiveness
+                remaining = timeout
+                poll_interval = 0.1  # check _cancel_requested every 100ms
+                while remaining > 0:
+                    chunk = min(remaining, poll_interval)
                     if self._cancel_requested:
                         raise asyncio.CancelledError()
-                    if remaining <= 0:
-                        # Natural timeout (not a user cancel) — let outer handler deal with it
-                        raise asyncio.TimeoutError()
-                    # else continue polling
-            # CancelledError propagates up to the tool call loop
+                    try:
+                        result = await asyncio.wait_for(func.fn(**call.arguments), timeout=chunk)
+                        content = str(result) if result is not None else ""
+                        _debug(f"_execute: {call.name} completed OK ({time.time()-_exec_start:.3f}s, content len={len(content)})", session_id)
+                        break  # success
+                    except asyncio.TimeoutError:
+                        remaining -= chunk
+                        if self._cancel_requested:
+                            raise asyncio.CancelledError()
+                        if remaining <= 0:
+                            # Natural timeout (not a user cancel) — let outer handler deal with it
+                            raise asyncio.TimeoutError()
+                        # else continue polling
         except asyncio.CancelledError:
-            # CancelledError is BaseException, not Exception — do NOT swallow it
             logger.info("[Tool] '%s' CANCELLED by user", call.name)
             raise  # propagate to run_stream tool loop
-        except asyncio.TimeoutError:
-            error = f"Function timed out after {timeout}s"
-            logger.warning("[Tool] '%s' TIMED OUT after %ss", call.name, timeout)
         except Exception as e:
             error = str(e)
             logger.error("[Tool] '%s' EXCEPTION after %.3fs: %s", call.name, time.time()-_exec_start, e, exc_info=True)
