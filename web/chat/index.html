@@ -47,7 +47,7 @@
         Editor
       </button>
 
-      <button class="btn" id="toggle-panel-btn" title="Toggle workflow panel" disabled>
+      <button class="btn" id="toggle-panel-btn" title="Toggle workflow panel">
         <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
         Plan
       </button>
@@ -805,6 +805,13 @@
 
   function loadWorkflowPanel() {
     const panel = document.getElementById('workflow-panel');
+    const toggleBtn = document.getElementById('toggle-panel-btn');
+
+    // Always enable the toggle button — even if API fails we still want
+    // users to be able to open the panel and see the empty/error state.
+    // The button being disabled shouldn't be a UX trap.
+    toggleBtn.disabled = false;
+
     if (panel.classList.contains('hidden') && !panelVisible) return;
 
     fetch(`/api/v1/workflow/status?session_id=${encodeURIComponent(sessionId)}`)
@@ -815,10 +822,15 @@
         if (data.active && !panelVisible) {
           panelVisible = true;
           panel.classList.remove('hidden');
-          document.getElementById('toggle-panel-btn').classList.add('active');
+          toggleBtn.classList.add('active');
         }
       })
-      .catch(err => console.warn('Workflow panel load failed:', err));
+      .catch(err => {
+        console.warn('Workflow panel load failed:', err);
+        // Show a friendly error in the panel so the user knows something went wrong
+        const body = document.getElementById('panel-body');
+        body.innerHTML = '<div class="panel-empty">Workflow panel unavailable.<br>Check server logs.</div>';
+      });
   }
 
   function startPanelPolling() {
@@ -835,15 +847,11 @@
 
   function renderWorkflowPanel(data) {
     const body = document.getElementById('panel-body');
-    const toggleBtn = document.getElementById('toggle-panel-btn');
 
     if (!data.active) {
-      toggleBtn.disabled = true;
       body.innerHTML = '<div class="panel-empty">No active workflow.<br>Start one with guide_workflow.</div>';
       return;
     }
-
-    toggleBtn.disabled = false;
 
     let html = `<div class="panel-workflow-name">${escapeHtml(data.workflow_name || data.workflow_id || '')}</div>`;
 
