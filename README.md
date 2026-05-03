@@ -1,4 +1,4 @@
-# Riven Codehammer
+# Riven Codehamme
 
 A modular agentic coding system built around **shards** — configurable personas with specific tool sets and behaviors.
 
