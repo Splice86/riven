@@ -563,6 +563,13 @@ class Core:
 
             # Sanitize messages for LLM API
             api_messages = self._ctx.sanitize_messages_for_llm(api_messages)
+
+            # Normalize: fix old stored messages with empty-string arguments
+            for msg in api_messages:
+                for tc in msg.get("tool_calls") or []:
+                    args = tc.get("function", {}).get("arguments", "")
+                    if args == "":
+                        tc["function"]["arguments"] = "{}"
             
             # --- RAW PRINT: dump raw api_messages with repr (outside all try/except) ---
             # Using raw print() so it cannot be silenced by any exception handler
@@ -765,6 +772,13 @@ class Core:
                                 tc["function"]["arguments"] += func_data['arguments']
 
             _debug(f"run_stream: LLM stream complete ({_chunk_count} chunks, took {time.time()-_llm_start:.3f}s)", session_id)
+
+            # Normalize: ensure no tool_call has empty-string arguments
+            for tc in assistant_msg.get("tool_calls") or []:
+                args = tc.get("function", {}).get("arguments", "")
+                if args == "":
+                    tc["function"]["arguments"] = "{}"
+
             # --- Parse calls ---
             calls = self._parse_calls(assistant_msg)
 
