@@ -761,14 +761,14 @@ html, body {
 .panel-step-icon.pending  { color: var(--text-muted); }
 .panel-step-icon.complete { color: var(--accent-green); }
 .panel-step-icon.in-progress { color: var(--accent-cyan); }
-.panel-step-icon.skipped  { color: var(--text-muted); text-decoration: line-through; }
+.panel-step-icon.skipped  { color: var(--text-muted); text-decoration: line-through; text-decoration-thickness: 2px; }
 
 .panel-step-desc {
   color: var(--text-secondary);
   word-break: break-word;
 }
 
-.panel-step-desc.complete { text-decoration: line-through; opacity: 0.6; }
+.panel-step-desc.complete { text-decoration: line-through; text-decoration-thickness: 2px; opacity: 0.6; }
 .panel-step-desc.pending  { opacity: 0.7; }
 
 /* Stage progress */
