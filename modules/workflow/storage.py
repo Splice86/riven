@@ -1,97 +1,59 @@
-"""Storage utilities for workflow state.
+"""Storage for workflow state — delegates to modules.workflow.db."""
 
-Persists WorkflowState to ContextDB so it survives across sessions/turns.
-"""
-
-import json
 from datetime import datetime, timezone
 from typing import Optional
 
 from modules import _session_id
+from . import db
 from .models import WorkflowState, Workflow
-
-
-# Key used to store workflow state in context DB
-_STATE_KEY = "workflow_state"
-_MAX_STATE_AGE_HOURS = 24  # Auto-cleanup old states after 24 hours
-
-
-def _get_db():
-    """Get the ContextDB instance."""
-    from db import ContextDB
-    return ContextDB()
+from .templates import WORKFLOWS
 
 
 def save_state(state: 'WorkflowState') -> None:
-    """Save workflow state to context DB.
-    
+    """Save workflow state to the workflow DB.
+
     Args:
         state: WorkflowState to persist
     """
-    db = _get_db()
     session_id = _session_id.get()
-    
     if not session_id:
         raise ValueError("No session ID available")
-    
+
     data = state.to_dict()
-    data['saved_at'] = datetime.now(timezone.utc).isoformat()
-    
-    db.add("system", f"[workflow_state]{json.dumps(data)}[/workflow_state]", session=session_id)
+    db.upsert(
+        session_id=session_id,
+        workflow_id=state.workflow_id,
+        current_stage_index=state.current_stage_index,
+        step_states=data.get("step_states"),
+        step_notes=data.get("step_notes"),
+        dynamic_stages=data.get("dynamic_stages"),
+        dynamic_steps=data.get("dynamic_steps"),
+        started_at=data.get("started_at", datetime.now(timezone.utc).isoformat()),
+        saved_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 def load_state() -> Optional['WorkflowState']:
-    """Load workflow state from context DB.
-    
+    """Load the active workflow state for the current session.
+
     Returns:
-        WorkflowState if found, None otherwise
+        WorkflowState if found and fresh, None otherwise.
     """
-    db = _get_db()
     session_id = _session_id.get()
-    
     if not session_id:
         return None
-    
-    history = db.get_history(session=session_id)
-    
-    for msg in reversed(history):
-        content = msg.get('content', '')
-        if f'[{_STATE_KEY}]' not in content:
-            continue
-        
-        # Extract JSON from [workflow_state]...[/workflow_state]
-        start = content.find(f'[{_STATE_KEY}]') + len(_STATE_KEY) + 2
-        end = content.find(f'[/{_STATE_KEY}]')
-        if end <= start:
-            continue
-        
-        json_str = content[start:end]
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            continue
 
-        # Check for cleared sentinel
-        if data.get('cleared'):
-            return None
+    row = db.load(session_id)
+    if not row:
+        return None
 
-        # Check if state is too old
-        saved_at = data.get('saved_at')
-        if saved_at:
-            saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
-            age_hours = (datetime.now(timezone.utc) - saved_time).total_seconds() / 3600
-            if age_hours > _MAX_STATE_AGE_HOURS:
-                clear_state()
-                return None
-
-        state = WorkflowState.from_dict(data)
-        _register_custom_workflow(state)
-        return state
+    state = WorkflowState.from_dict(row)
+    _ensure_workflow_registered(state)
+    return state
 
 
-def _register_custom_workflow(state: WorkflowState) -> None:
+def _ensure_workflow_registered(state: WorkflowState) -> None:
     """Register a custom workflow template so get_workflow() finds it."""
-    from .templates import WORKFLOWS
     if state.dynamic_stages and state.workflow_id not in WORKFLOWS:
         WORKFLOWS[state.workflow_id] = Workflow(
             id=state.workflow_id,
@@ -104,21 +66,10 @@ def _register_custom_workflow(state: WorkflowState) -> None:
 
 
 def clear_state() -> None:
-    """Mark workflow state as cleared in context DB.
-    
-    Writes a sentinel message that load_state() recognizes as "cleared",
-    causing it to return None instead of any prior stale state.
-    """
-    db = _get_db()
+    """Remove the workflow state for the current session."""
     session_id = _session_id.get()
-    
-    if not session_id:
-        return
-    
-    # Write a cleared marker — load_state() checks for this before any state
-    db.add("system", "[workflow_state]{}[/workflow_state]".format(
-        json.dumps({"cleared": True, "saved_at": datetime.now(timezone.utc).isoformat()})
-    ), session=session_id)
+    if session_id:
+        db.delete(session_id)
 
 
 def get_active_workflow_id() -> Optional[str]:
