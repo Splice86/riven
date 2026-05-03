@@ -56,43 +56,55 @@ def load_state() -> Optional['WorkflowState']:
     
     for msg in reversed(history):
         content = msg.get('content', '')
-        if f'[{_STATE_KEY}]' in content:
-            # Extract JSON from [workflow_state]...[/workflow_state]
-            start = content.find(f'[{_STATE_KEY}]') + len(_STATE_KEY) + 2
-            end = content.find(f'[/{_STATE_KEY}]')
-            if end > start:
-                json_str = content[start:end]
-                try:
-                    data = json.loads(json_str)
-                    
-                    # Check if state is too old
-                    saved_at = data.get('saved_at')
-                    if saved_at:
-                        saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
-                        age_hours = (datetime.now(timezone.utc) - saved_time).total_seconds() / 3600
-                        if age_hours > _MAX_STATE_AGE_HOURS:
-                            # State too old, clear it
-                            clear_state()
-                            return None
-                    
-                    return WorkflowState.from_dict(data)
-                except (json.JSONDecodeError, KeyError):
-                    pass
+        if f'[{_STATE_KEY}]' not in content:
+            continue
+        
+        # Extract JSON from [workflow_state]...[/workflow_state]
+        start = content.find(f'[{_STATE_KEY}]') + len(_STATE_KEY) + 2
+        end = content.find(f'[/{_STATE_KEY}]')
+        if end <= start:
+            continue
+        
+        json_str = content[start:end]
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            continue
+
+        # Check for cleared sentinel
+        if data.get('cleared'):
+            return None
+
+        # Check if state is too old
+        saved_at = data.get('saved_at')
+        if saved_at:
+            saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
+            age_hours = (datetime.now(timezone.utc) - saved_time).total_seconds() / 3600
+            if age_hours > _MAX_STATE_AGE_HOURS:
+                clear_state()
+                return None
+
+        return WorkflowState.from_dict(data)
     
     return None
 
 
 def clear_state() -> None:
-    """Clear workflow state from context DB."""
+    """Mark workflow state as cleared in context DB.
+    
+    Writes a sentinel message that load_state() recognizes as "cleared",
+    causing it to return None instead of any prior stale state.
+    """
     db = _get_db()
     session_id = _session_id.get()
     
     if not session_id:
         return
     
-    # Note: This doesn't actually remove old messages, just signals we should ignore them
-    # In practice, the LLM context management will handle this
-    pass
+    # Write a cleared marker — load_state() checks for this before any state
+    db.add("system", "[workflow_state]{}[/workflow_state]".format(
+        json.dumps({"cleared": True, "saved_at": datetime.now(timezone.utc).isoformat()})
+    ), session=session_id)
 
 
 def get_active_workflow_id() -> Optional[str]:

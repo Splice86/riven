@@ -17,8 +17,6 @@ class Step:
     """A single step within a workflow stage."""
     id: str
     description: str
-    status: StepStatus = StepStatus.PENDING
-    notes: str = ""
 
 
 @dataclass
