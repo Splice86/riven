@@ -9,20 +9,25 @@ tool execution, or the agent loop.
 """
 
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
+
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # High-level debug flag
 DEBUG_HANG = True  # Enable for lock-up debugging
 
 def _debug(step: str, session_id: str = None) -> None:
-    """Print timestamped debug messages to trace execution flow."""
+    """Timestamped debug messages to log file."""
     if not DEBUG_HANG:
         return
     ts = time.time()
     sid = f"[{session_id[:8]}]" if session_id else "[--------]"
-    print(f"[DEBUG {ts:.3f}] {sid} {step}", flush=True)
+    logger.debug("[DEBUG %s] %s %s", ts, sid, step)
 
 
 # =============================================================================
@@ -294,14 +299,20 @@ class ContextManager:
                     msg['name'] = msg['function']
                     del msg['function']
 
-            # Guard: ensure no message ever has empty/missing content
-            # MiniMax returns 400 "zero-length document" if content is "" or absent for any role
+            # Guard: ensure no message ever has empty/missing/whitespace-only content
+            # MiniMax returns 400 "zero-length document" for:
+            #   - content = None     (missing key)
+            #   - content = ''       (empty string)
+            #   - content = '   '    (whitespace-only — also rejected by some providers)
             content = msg.get('content')
             if content is None:
                 _debug(f"sanitize[{i}]: [{role}] content=None, fixing to '(no output)' (original: {repr(original_content)[:100]})", None)
                 msg['content'] = '(no output)'
             elif content == '':
                 _debug(f"sanitize[{i}]: [{role}] content='', fixing to '(no output)' (has_tc={had_tool_calls})", None)
+                msg['content'] = '(no output)'
+            elif isinstance(content, str) and not content.strip():
+                _debug(f"sanitize[{i}]: [{role}] content is whitespace-only ({repr(content)}), fixing to '(no output)'", None)
                 msg['content'] = '(no output)'
             elif not isinstance(content, str):
                 # Handle non-string content (list, dict, etc.) by converting to string

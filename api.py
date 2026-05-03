@@ -19,8 +19,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from core import Core
 from config import get_llm_config, get
+from logging_config import setup_logging, get_logger
 
-logger = logging.getLogger(__name__)
+# Set up file + stdout logging ASAP so all subsequent imports log to ~/.riven/logs/
+setup_logging(level=logging.DEBUG)
+logger = get_logger(__name__)
 
 DEBUG_HANG = False
 
@@ -29,12 +32,15 @@ DEBUG_HANG = False
 _active_cores: dict[str, Core] = {}
 
 def _debug(step: str, session_id: str = None) -> None:
-    """Print timestamped debug messages to trace execution flow."""
+    """Timestamped debug messages to trace execution flow.
+    
+    Goes to the log file via logger.debug so it persists across runs.
+    """
     if not DEBUG_HANG:
         return
     ts = __import__("time").time()
     sid = f"[{session_id[:8]}]" if session_id else "[--------]"
-    print(f"[DEBUG {ts:.3f}] {sid} {step}", flush=True)
+    logger.debug("[DEBUG %s] %s %s", ts, sid, step)
 
 
 # =============================================================================
@@ -141,9 +147,11 @@ async def send_message(req: MessageRequest):
     llm = get_llm_config("primary")
 
     # Store user message to context DB first
+    logger.debug("[api] user message for session=%s shard=%s", req.session_id, req.shard_name)
     try:
         add(role="user", content=req.message, session=req.session_id)
     except Exception as e:
+        logger.error("[api] Failed to store user message to context DB: %s", e)
         raise HTTPException(500, f"Context database error: {e}")
 
     core = Core(shard=shard, llm=llm)
@@ -196,6 +204,7 @@ async def send_message(req: MessageRequest):
                         core.cancel()
                         return
             except Exception as e:
+                logger.exception("[api] Streaming error for session=%s: %s", req.session_id, e)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
                 _active_cores.pop(req.session_id, None)
@@ -217,6 +226,7 @@ async def send_message(req: MessageRequest):
                     break
         return {"output": output}
     except Exception as e:
+        logger.exception("[api] Non-streaming error for session=%s: %s", req.session_id, e)
         raise HTTPException(500, str(e))
     finally:
         _active_cores.pop(req.session_id, None)

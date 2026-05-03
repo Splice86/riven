@@ -10,12 +10,17 @@ No summarization, no tags — just a clean message log with token counts.
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
+
+# 'riven' root logger is configured by riven_core.logging_config (api.py / core.py).
+# Use it directly so logs land in ~/.riven/logs/riven.log.
+logger = logging.getLogger("riven.db")
 
 # =============================================================================
 # DB path & thread-local connections
@@ -157,34 +162,42 @@ class ContextDB:
         """Insert a message. Returns the new row ID."""
         token_count = _count_tokens(content)
         created_at = datetime.now(timezone.utc).isoformat()
-        with self._conn() as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO messages
-                    (session_id, role, content, token_count,
-                     tool_call_id, function, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (session, role, content, token_count,
-                 tool_call_id, function, created_at),
-            )
-            return cur.lastrowid or 0
+        try:
+            with self._conn() as conn:
+                cur = conn.execute(
+                    """
+                    INSERT INTO messages
+                        (session_id, role, content, token_count,
+                         tool_call_id, function, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (session, role, content, token_count,
+                     tool_call_id, function, created_at),
+                )
+                return cur.lastrowid or 0
+        except sqlite3.Error as e:
+            logger.error("[DB] Failed to INSERT for session=%s role=%s: %s", session, role, e, exc_info=True)
+            raise
 
     def get_history(self, session: str, limit: int = 200) -> list[dict]:
         """Fetch all messages for a session ordered by created_at ASC."""
-        with self._conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, session_id, role, content, token_count,
-                       tool_call_id, function, created_at
-                FROM messages
-                WHERE session_id = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-                """,
-                (session, limit),
-            ).fetchall()
-        return [_row(r) for r in rows]
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_id, role, content, token_count,
+                           tool_call_id, function, created_at
+                    FROM messages
+                    WHERE session_id = ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (session, limit),
+                ).fetchall()
+            return [_row(r) for r in rows]
+        except sqlite3.Error as e:
+            logger.error("[DB] Failed to SELECT for session=%s: %s", session, e, exc_info=True)
+            raise
 
     def delete_session(self, session: str) -> int:
         """Delete all messages for a session. Returns row count."""

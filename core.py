@@ -33,19 +33,22 @@ from context import ContextManager, _json_safe
 from config import get
 from db import ContextDB
 from modules import registry, Module, CalledFn, ContextFn, _session_id
+from logging_config import setup_logging, get_logger
 
-logger = logging.getLogger(__name__)
+# Set up file logging once (safe on re-runs via guard in setup_logging)
+setup_logging(level=logging.DEBUG)
+logger = get_logger(__name__)
 
 # High-level debug flag - set to True to enable trace prints
 DEBUG_HANG = True  # Enable for lock-up debugging
 
 def _debug(step: str, session_id: str = None) -> None:
-    """Print timestamped debug messages to trace execution flow."""
+    """Timestamped debug messages — goes to log file via logger.debug."""
     if not DEBUG_HANG:
         return
     ts = time.time()
     sid = f"[{session_id[:8]}]" if session_id else "[--------]"
-    print(f"[DEBUG {ts:.3f}] {sid} {step}", flush=True)
+    logger.debug("[DEBUG %s] %s %s", ts, sid, step)
 
 # =============================================================================
 # Function - plain function descriptor
@@ -277,15 +280,14 @@ class Core:
                     _debug(f"_load_modules: modules.{name} has no get_module, skipping", session_id)
                     failed.append(f"{name} (no get_module)")
             except Exception as e:
-                _debug(f"_load_modules: FAILED to load {name}: {e}", session_id)
-                logger.warning(f"[Module] FAILED to load '{name}': {e}")
+                logger.error("[Module] FAILED to load '%s': %s", name, e, exc_info=True)
                 failed.append(f"{name} ({e})")
         loaded_names = list(registry._modules.keys())
         _debug(f"_load_modules: done, registry has {loaded_names}", session_id)
         if failed:
-            logger.warning(f"[Module] Load complete — {len(loaded)} OK, {len(failed)} FAILED: {failed}")
+            logger.warning("[Module] Load complete — %d OK, %d FAILED: %s", len(loaded), len(failed), failed)
         else:
-            logger.info(f"[Module] All {len(loaded)} modules loaded: {loaded}")
+            logger.info("[Module] All %d modules loaded: %s", len(loaded), loaded)
 
     def _get_functions(self, session_id: str = None) -> list[Function]:
         """Convert registry called_fns to Core Functions."""
@@ -371,14 +373,14 @@ class Core:
             # CancelledError propagates up to the tool call loop
         except asyncio.CancelledError:
             # CancelledError is BaseException, not Exception — do NOT swallow it
-            _debug(f"_execute: {call.name} CANCELLED by user", session_id)
+            logger.info("[Tool] '%s' CANCELLED by user", call.name)
             raise  # propagate to run_stream tool loop
         except asyncio.TimeoutError:
             error = f"Function timed out after {timeout}s"
-            _debug(f"_execute: {call.name} TIMED OUT after {timeout}s", session_id)
+            logger.warning("[Tool] '%s' TIMED OUT after %ss", call.name, timeout)
         except Exception as e:
             error = str(e)
-            _debug(f"_execute: {call.name} EXCEPTION ({time.time()-_exec_start:.3f}s): {e}", session_id)
+            logger.error("[Tool] '%s' EXCEPTION after %.3fs: %s", call.name, time.time()-_exec_start, e, exc_info=True)
 
         return FunctionResult(call_id=call.id, name=call.name, content=content, error=error)
 
@@ -406,7 +408,7 @@ class Core:
             try:
                 db.add(role, storage_content, session=session_id)
             except Exception as e:
-                logger.warning(f"Failed to store assistant message: {e}")
+                logger.error("[DB] Failed to store assistant message: %s", e, exc_info=True)
         
         # DEBUG: log assistant messages with empty or near-empty content
         if tool_calls and not content:
@@ -544,9 +546,9 @@ class Core:
             # --- RAW PRINT: dump raw api_messages with repr (outside all try/except) ---
             # Using raw print() so it cannot be silenced by any exception handler
             import pprint as _pprint
-            print(f"[RAW_PRINT {time.time():.3f}] [{session_id[:8]}] api_messages after sanitize ({len(api_messages)} msgs):", flush=True)
+            logger.debug("[RAW_PRINT %s] [%s] api_messages after sanitize (%d msgs):", time.time(), session_id[:8], len(api_messages))
             for i, msg in enumerate(api_messages):
-                print(f"  [RAW_PRINT] msg[{i}] type={type(msg).__name__} repr_keys={repr(list(msg.keys()))} full_repr={repr(msg)[:500]}", flush=True)
+                logger.debug("  [RAW_PRINT] msg[%d] type=%s repr_keys=%s full_repr=%s", i, type(msg).__name__, repr(list(msg.keys())), repr(msg)[:500])
             
             # --- Save LLM request context snapshot ---
             self._save_llm_context(api_messages, session_id)
@@ -629,6 +631,43 @@ class Core:
                 tc_str = f" tool_calls[{len(tcs)}]" if tcs else ""
                 _debug(f"  [{i}] role={role} content_len={len(content) if content else 0}{tc_str}: {repr(content[:300] if content else '<EMPTY>')}", session_id)
             
+            # FINAL GUARD: validate every message before the LLM call.
+            # MiniMax (and others) return 400 "zero-length document" for:
+            #   - content = ''        (empty string)
+            #   - content = None      (missing key)
+            #   - content = '   '     (whitespace-only)
+            # This also saves the full payload on failure so we can always reproduce it.
+            bad_msgs = []
+            for i, msg in enumerate(api_messages):
+                role = msg.get('role', '?')
+                content = msg.get('content')
+                has_tc = bool(msg.get('tool_calls'))
+                if content is None:
+                    bad_msgs.append(f"msg[{i}][{role}] content=None")
+                elif content == '':
+                    bad_msgs.append(f"msg[{i}][{role}] content=''")
+                elif isinstance(content, str) and not content.strip():
+                    bad_msgs.append(f"msg[{i}][{role}] content='{content[:20]}' (whitespace-only)")
+            if bad_msgs:
+                # Save full payload for forensics
+                import os as _os
+                import pathlib as _pathlib
+                debug_dir = _os.path.expanduser("~/.riven/logs/bad_payloads")
+                _os.makedirs(debug_dir, exist_ok=True)
+                ts_str = datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')
+                payload_path = _os.path.join(debug_dir, f"{ts_str}_{session_id[:16]}.json")
+                try:
+                    with open(payload_path, 'w') as _f:
+                        _json_mod.dump({"session_id": session_id, "bad_msgs": bad_msgs, "messages": api_messages}, _f, indent=2, default=str)
+                    logger.error("[LLM] Bad messages before LLM call — payload saved to %s. Issues: %s", payload_path, bad_msgs)
+                except Exception as save_err:
+                    logger.error("[LLM] Bad messages before LLM call (failed to save payload): %s. Issues: %s", save_err, bad_msgs)
+                # Force-fix every bad message so the call has a chance
+                for i, msg in enumerate(api_messages):
+                    content = msg.get('content')
+                    if content is None or (isinstance(content, str) and not content.strip()):
+                        msg['content'] = '(no output)'
+            
             try:
                 stream = await self._client.chat.completions.create(
                     model=self._llm_model,
@@ -637,12 +676,24 @@ class Core:
                     stream=True,
                 )
             except Exception as e:
+                # Save the EXACT payload on API errors so we can reproduce exactly
+                import os as _os
+                import pathlib as _pathlib
+                debug_dir = _os.path.expanduser("~/.riven/logs/bad_payloads")
+                _os.makedirs(debug_dir, exist_ok=True)
+                ts_str = datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')
+                payload_path = _os.path.join(debug_dir, f"{ts_str}_{session_id[:16]}_llm_error.json")
+                try:
+                    with open(payload_path, 'w') as _f:
+                        _json_mod.dump({"session_id": session_id, "error": str(e), "messages": api_messages}, _f, indent=2, default=str)
+                    logger.error("[LLM] Call failed — full payload saved to %s. Error: %s", payload_path, e)
+                except Exception:
+                    logger.error("[LLM] Call failed for session=%s (payload save also failed): %s", session_id, e)
                 error_msg = f"LLM call failed: {type(e).__name__}: {e}. Session={session_id}"
-                _debug(f"run_stream: LLM call failed: {error_msg}", session_id)
                 try:
                     db.add("tool", error_msg, session=session_id)
-                except Exception:
-                    pass
+                except Exception as store_err:
+                    logger.error("[DB] Failed to store LLM error to context DB: %s", store_err)
                 yield {"error": error_msg}
                 return
 
@@ -655,10 +706,11 @@ class Core:
                 _chunk_count += 1
                 if self._cancelled:
                     error_msg = f"Execution was cancelled by user. Session={session_id}"
+                    logger.info("[Core] Session=%s cancelled by user", session_id)
                     try:
                         db.add("tool", error_msg, session=session_id)
-                    except Exception:
-                        pass
+                    except Exception as store_err:
+                        logger.warning("[DB] Failed to store cancel error: %s", store_err)
                     yield {"error": error_msg}
                     return
 
@@ -726,10 +778,11 @@ class Core:
 
                 if len(results) + 1 > self._max_function_calls:
                     error_msg = f"Max function calls reached ({self._max_function_calls}). Session={session_id}"
+                    logger.warning("[Core] Session=%s hit max function calls (%d)", session_id, self._max_function_calls)
                     try:
                         db.add("tool", error_msg, session=session_id)
                     except Exception as store_err:
-                        logger.warning(f"Failed to store max-calls error: {store_err}")
+                        logger.warning("[DB] Failed to store max-calls error: %s", store_err)
                     yield {"error": error_msg}
                     return
 
@@ -770,7 +823,7 @@ class Core:
                     )
                     _debug(f"run_stream: tool result stored ({time.time()-_mem_store_start:.3f}s)", session_id)
                 except Exception as e:
-                    logger.warning(f"Failed to store tool result: {e}")
+                    logger.error("[DB] Failed to store tool result for '%s': %s", result.name, e, exc_info=True)
 
             # --- Yield assistant message ---
             safe_assistant_msg = _json_safe(assistant_msg)

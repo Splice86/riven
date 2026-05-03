@@ -1273,7 +1273,11 @@ class FileEditor:
                         dirs.append(f"📁 {entry}/")
                     else:
                         files.append(f"📄 {entry}")
-            return '\n'.join(sorted(dirs) + sorted(files))
+            result = '\n'.join(sorted(dirs) + sorted(files))
+            # Never return empty string — MiniMax (and others) reject it as "zero-length document"
+            if not result:
+                return "(empty directory — no visible files or folders)"
+            return result
         except Exception as e:
             return f"Error listing {abs_path}: {e}"
     
