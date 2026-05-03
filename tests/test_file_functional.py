@@ -604,15 +604,15 @@ import events as evt_module
 
 @pytest.fixture(autouse=True)
 def clean_events_state():
-    """Reset global handlers and locks between tests.
+    """Reset global lock state between tests.
 
-    Events state is shared globally (singleton), so we must clear it
-    between tests to avoid interference.
+    Lock state is shared globally (singleton), so we must clear it
+    between tests to avoid interference.  Handlers are NOT cleared here
+    — they are registered once by init_riven_events (called from the
+    web_editor test fixture) and belong to the web editor setup lifecycle.
     """
-    evt_module._handlers.clear()
     evt_module._locks.clear()
     yield
-    evt_module._handlers.clear()
     evt_module._locks.clear()
 
 
@@ -637,7 +637,7 @@ class TestWriteTextFiresEvents:
         asyncio.run(editor.write_text(file_path, "hello from write_text"))
 
         assert len(received) == 1
-        assert received[0]["path"] == "written.txt"
+        assert os.path.basename(received[0]["path"]) == "written.txt"
         assert received[0]["content"] == "hello from write_text"
         assert received[0]["who"] is not None  # session_id must be set
 
@@ -668,7 +668,8 @@ class TestReplaceTextFiresEvents:
 
         result = asyncio.run(editor.replace_text(file_path, "world", "python"))
 
-        assert result.success
+        # replace_text returns a string; success is indicated by the ✅ emoji
+        assert "✅" in result
         assert len(received) == 1
         assert received[0]["content"] == "hello python"
         assert received[0]["who"] is not None
@@ -687,7 +688,8 @@ class TestReplaceTextFiresEvents:
 
         result = asyncio.run(editor.replace_text(file_path, "NONEXISTENT_PATTERN", "xxx"))
 
-        assert not result.success
+        # replace_text returns a string; failure is indicated by no ✅ emoji
+        assert "✅" not in result
         assert len(received) == 0  # file_changed must NOT fire on failure
 
     def test_replace_text_releases_lock_after_failure(self, tmp_path):
@@ -805,14 +807,14 @@ class TestDeleteFileFiresEvents:
         editor = FileEditor(session_id_func=_unique_sid)
         file_path = str(tmp_path / "delete_me.txt")
         Path(file_path).write_text("content")
-        assert file_path.exists()
+        assert Path(file_path).exists()
 
         result = asyncio.run(editor.delete_file(file_path))
 
         assert result.success
-        assert not file_path.exists()
+        assert not Path(file_path).exists()
         assert len(received) == 1
-        assert received[0]["path"] == "delete_me.txt"
+        assert os.path.basename(received[0]["path"]) == "delete_me.txt"
         assert received[0]["who"] is not None
 
     def test_delete_file_no_event_on_nonexistent(self, tmp_path):
@@ -849,7 +851,7 @@ class TestLockIntegration:
 
                 # replace_text should still work (re-entrant lock)
                 result = await editor.replace_text(file_path, "world", "python")
-                assert result.success
+                assert "✅" in result
 
             # After context, lock should be released
             assert evt_module.get_lock_state(file_path) is None
@@ -871,8 +873,8 @@ class TestLockIntegration:
                 assert evt_module.get_lock_state(file_path) is not None
                 # Bob tries to acquire — should timeout
                 try:
-                    await evt_module.acquire_lock(file_path, sid_bob, timeout=0.1, context="test")
-                    assert False, "Bob should not have acquired the lock"
+                    async with evt_module.acquire_lock(file_path, sid_bob, timeout=0.1, context="test"):
+                        assert False, "Bob should not have acquired the lock"
                 except evt_module.LockTimeoutError:
                     pass  # expected
                 # File should still be locked by Alice

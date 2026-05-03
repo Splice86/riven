@@ -51,7 +51,7 @@ def EDITOR_ROOT() -> str:
 # Each client tracks which path(s) they have open so we can broadcast
 # only to clients that care.
 class _Client:
-    __slots__ = ("ws", "open_paths", "uid", "session_id", "instance_id")
+    __slots__ = ("ws", "open_paths", "uid", "session_id", "instance_id", "abs_path")
 
     def __init__(self, ws: WebSocket, uid: int):
         self.ws = ws
@@ -59,6 +59,7 @@ class _Client:
         self.uid = uid
         self.session_id: str | None = None
         self.instance_id: str | None = None
+        self.abs_path: str = EDITOR_ROOT()  # current directory this client is browsing
 
 
 _clients: dict[int, _Client] = {}
@@ -350,12 +351,17 @@ async def _stop_watchers() -> None:
 
 @router.get("/")
 async def editor_page():
-    """Serve the editor HTML client."""
+    """Serve the editor HTML client with cache-busting headers."""
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     html_path = os.path.join(static_dir, "editor.html")
     if os.path.exists(html_path):
         from fastapi.responses import FileResponse
-        return FileResponse(html_path, media_type="text/html")
+        response = FileResponse(html_path, media_type="text/html")
+        # No-cache so browser always gets the latest version
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     return {"error": "editor.html not found"}
 
 
@@ -481,6 +487,7 @@ async def editor_ws(ws: WebSocket):
                 continue
 
             msg_type = msg.get("type", "")
+            logger.info(f"[WebEditor] Client {uid} msg type={msg_type!r}")
 
             # Capture instance_id and session_id from the first message
             if instance_id is None:
@@ -497,6 +504,7 @@ async def editor_ws(ws: WebSocket):
 
             if msg_type in ("list", "refresh"):
                 abs_path = msg.get("abs_path", "") or EDITOR_ROOT()
+                client.abs_path = abs_path
                 tree = get_file_tree(abs_path)
                 await ws.send_text(json.dumps({
                     "type": "tree",
@@ -506,6 +514,7 @@ async def editor_ws(ws: WebSocket):
 
             elif msg_type == "navigate":
                 abs_path = msg.get("abs_path", "") or EDITOR_ROOT()
+                client.abs_path = abs_path
                 tree = get_file_tree(abs_path)
                 await ws.send_text(json.dumps({
                     "type": "tree",
@@ -515,6 +524,22 @@ async def editor_ws(ws: WebSocket):
 
             elif msg_type == "open":
                 path = msg.get("path", "")
+                # Normalize to relative path so file_changed broadcasts (which use
+                # relative paths from Riven) match the client's open_paths set.
+                if os.path.isabs(path):
+                    # Absolute path — convert to project-root-relative
+                    try:
+                        path = os.path.relpath(path, EDITOR_ROOT())
+                    except ValueError:
+                        pass  # keep absolute if relpath fails (cross-volume etc.)
+                else:
+                    # Relative path — resolve it against the browser's current
+                    # abs_path (e.g. "file/db.py" from modules/ -> "modules/file/db.py")
+                    resolved = os.path.join(client.abs_path, path)
+                    try:
+                        path = os.path.relpath(resolved, EDITOR_ROOT())
+                    except ValueError:
+                        path = resolved
                 client.open_paths.add(path)
                 content, err = read_file_content(path)
                 if err:

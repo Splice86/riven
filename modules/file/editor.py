@@ -97,9 +97,15 @@ def _require_no_browser_lock(path: str) -> None:
 
 def _rel_path(abs_path: str) -> str:
     """Return a file path relative to the project root, or the absolute path if
-    project root cannot be determined."""
+    project root cannot be determined.
+
+    Passes the file's parent directory to find_project_root so the cache key
+    matches the file's location — critical for tests that run from temp dirs.
+    """
     try:
-        root = find_project_root()
+        root = find_project_root(os.path.dirname(abs_path))
+        if root is None:
+            return abs_path
         return os.path.relpath(abs_path, root)
     except Exception:
         return abs_path
@@ -709,6 +715,7 @@ class FileEditor:
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
 
+        # Guard: file must be open in context
         guard = self._check_file_open(abs_path)
         if guard is not None:
             return guard
@@ -721,22 +728,73 @@ class FileEditor:
         # Fail immediately if browser has this file open — don't wait
         _require_no_browser_lock(rel_path)
 
-        async with acquire_lock(rel_path, session_id, timeout=30.0, context="replace_text"):
-            result, start, end, new_content = await self._do_replace_text(
-                abs_path, old, new, threshold, validate_syntax
-            )
+        try:
+            with open(abs_path, 'r') as f:
+                content = f.read()
+            content = _sanitize_content(content)
+            lines = content.splitlines(keepends=True)
+        except Exception as e:
+            return f"Error reading {abs_path}: {e}"
 
-        if start > 0 and new_content:  # success
-            _events_publish(
-                "file_changed",
-                path=rel_path,
-                content=new_content,
-                start=start,
-                end=end,
-                who=session_id,
-            )
+        span, score = _find_best_window(lines, old, threshold=threshold)
 
-        return result
+        if not span:
+            best_span, best_score = _find_best_window(lines, old, threshold=0.0)
+            if best_span:
+                start, end, _, _ = best_span
+                matched_lines = lines[start:end]
+                matched_text = ''.join(matched_lines).strip()
+                return (
+                    f"No match above {threshold:.0%} threshold. "
+                    f"Best match ({best_score:.0%}) at lines {start+1}-{end}:\n"
+                    f"{matched_text[:300]}"
+                )
+            return f"Text not found in {os.path.basename(abs_path)}."
+
+        # Unpack the new span format: (start, end, char_start, char_end)
+        start, end, char_start, char_end = span
+
+        # Build new content by replacing only the matched portion
+        if char_end is not None:
+            # Single-line replacement with character offsets
+            line = lines[start]
+            before_part = line[:char_start]
+            after_part = line[char_end:]
+            new_line = before_part + new + after_part
+            before_lines = lines[:start]
+            after_lines = lines[end:]
+            new_content = ''.join(before_lines + [new_line] + after_lines)
+        else:
+            # Multi-line or fuzzy match - use old logic
+            before_lines = lines[:start]
+            after_lines = lines[end:]
+            new_content_lines = new.splitlines(keepends=True)
+            if new_content_lines and not new_content_lines[-1].endswith('\n'):
+                new_content_lines[-1] += '\n'
+            new_content = ''.join(before_lines + new_content_lines + after_lines)
+
+        if validate_syntax and abs_path.endswith('.py'):
+            is_valid, syntax_error = _validate_python(new_content)
+            if not is_valid:
+                return f"Syntax validation failed: {syntax_error}"
+
+        try:
+            _atomic_write(abs_path, new_content)
+        except Exception as e:
+            return f"Error writing {abs_path}: {e}"
+        diff = _generate_diff(abs_path, lines, new_content.splitlines(keepends=True))
+        track_file_change(session_id, abs_path, "replace_text", diff)
+
+        _events_publish(
+            "file_changed",
+            path=rel_path,
+            content=new_content,
+            start=start + 1,
+            end=end,
+            who=session_id,
+        )
+
+        return f"✅ Replaced text at lines {start+1}-{end} ({score:.0%} match)\n{diff}"
     
     async def batch_edit(
         self,
@@ -838,8 +896,9 @@ class FileEditor:
                 return EditResult(False, abs_path, f"Failed to write: {e}")
             track_file_change(session_id, abs_path, f"batch_edit({len(replacements)})", diff)
 
-        _events_publish("file_changed", path=_rel_path(abs_path), content=final_content,
-                        start=changes[0][0] + 1, end=changes[-1][1] + 1, who=session_id)
+        if changes:
+            _events_publish("file_changed", path=_rel_path(abs_path), content=final_content,
+                            start=changes[0][0] + 1, end=changes[-1][1] + 1, who=session_id)
 
         return EditResult(
             True, abs_path,
@@ -940,6 +999,9 @@ class FileEditor:
         guard = self._check_file_open(abs_path)
         if guard is not None:
             return guard
+
+        session_id = self._get_session_id()
+        rel_path = _rel_path(abs_path)
 
         # Fail immediately if browser has this file open — don't wait
         _require_no_browser_lock(rel_path)

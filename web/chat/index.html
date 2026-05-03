@@ -204,31 +204,189 @@
   }
 
   // ── Markdown parser ──────────────────────────────────────
-  // Lightweight: code blocks, inline code, **bold**, _italic_, headings, lists.
+  // Lightweight: code blocks, inline code, **bold**, _italic_, headings, links.
   // Escapes HTML first, then applies markdown transforms.
+  //
+  // Markdown parsing order (must be this specific to handle links in code blocks):
+  //
+  // 1. Extract links (including those inside code blocks) so placeholders survive
+  // 2. Extract fenced code blocks so their raw content (parentheses, etc.) is
+  //    not mangled by HTML escaping — but links inside them are preserved as
+  //    placeholders and restored after the code block is put back.
+  // 3. HTML escape everything that remains.
+  // 4. Restore code blocks (their content is HTML-safe now).
+  // 5. Apply inline markdown transforms (bold, italic, headings, line breaks).
+  // 6. Restore links (step 5 above may touch plain links; code block links are
+  //    already placeholders and restored here too).
+  //
+  // Security: javascript:, data:, and non-http(s)/relative URLs are blocked.
+  const _LINK_PLACEHOLDER = '\x00LINK\x00';
+  const _CODE_PLACEHOLDER = '\x00CODE\x00';
+
   function parseMarkdown(text) {
     if (!text) return '';
-    // Escape HTML first so user content can't break the page
+
+    // 1. Extract all markdown links, recording each link's original text position.
+    //    Link placeholders inside fenced code blocks are preserved as-is.
+    const links = [];
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
+      const safe = _isUrlSafe(url) ? url : '';
+      links.push({ label, url: safe, pos: _m.index });
+      return `[${label}]${_LINK_PLACEHOLDER}${links.length - 1}`;
+    });
+
+    // 2. Extract fenced code blocks ( ```lang\n...\n``` ), recording original-text ranges.
+    //    The captured code content still has link placeholders intact.
+    const codeBlocks = [];
+    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang, code) => {
+      const idx = codeBlocks.length;
+      // Track the original-text start/end of this code block so we can
+      // skip link restoration for links that fall inside it.
+      codeBlocks.push({ lang, code: code.trim(), origStart: _m.index, origEnd: _m.index + _m[0].length });
+      return `${_CODE_PLACEHOLDER}${idx}`;
+    });
+
+    // 3. Escape HTML (parentheses in remaining text are now safe)
     const esc = escapeHtml(text);
-    return esc
-      // Code blocks: ```lang\n...\n```
-      .replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) =>
-        '<pre><code>' + code.trim() + '</code></pre>'
-      )
-      // Inline code: `...`
+
+    // 4. Restore code blocks — HTML-escaped content goes inside <pre><code>.
+    //    Link placeholders inside the code are preserved.
+    let html = esc.replace(
+      new RegExp(`${_CODE_PLACEHOLDER}(\d+)`, 'g'),
+      (_m, idx) => {
+        const cb = codeBlocks[parseInt(idx, 10)];
+        return `<pre><code>${cb.code}</code></pre>`;
+      }
+    );
+
+    // 5. Inline markdown transforms (bold, italic, headings, line breaks)
+    html = html
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // Bold: **...**
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      // Italic: _..._
       .replace(/_(.+?)_/g, '<em>$1</em>')
-      // Headings: ### ... / ## ... / # ...
       .replace(/^### (.+)$/gm, '<h3>$1</h3>')
       .replace(/^## (.+)$/gm, '<h2>$1</h2>')
       .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-      // Line breaks between paragraphs
       .replace(/\n\n/g, '</p><p>')
-      // Single line breaks
       .replace(/\n/g, '<br>');
+
+    // 6. Restore links as <a> tags.
+    //    Skip links that fall inside code block original-text ranges so that
+    //    URLs inside ``` blocks stay as plain text (not wrapped in <a>).
+    html = html.replace(
+      new RegExp(`\\[([^\\]]+)\\]${_LINK_PLACEHOLDER}(\\d+)`, 'g'),
+      (_m, label, idx) => {
+        const link = links[parseInt(idx, 10)];
+        if (!link || !link.url) return label;
+        // Guard: skip if this link's original position is inside a code block
+        if (link.pos != null && codeBlocks.some(cb => link.pos >= cb.origStart && link.pos < cb.origEnd)) {
+          return label; // render as plain text inside the code block
+        }
+        const rel = link.url.startsWith('/') ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return `<a href="${link.url}"${rel}>${label}</a>`;
+      }
+    );
+
+    // 7. Auto-link bare URLs (https://, http://).
+    //    Runs after markdown links are restored so we don't double-process.
+    //
+    //    Matches URLs preceded by start-of-string or safe chars (\s, (, [).
+    //    Each match is validated in JS to:
+    //    - Skip if preceded by </a>  (already wrapped in a link)
+    //    - Skip if preceded by "     (inside href="..." attribute)
+    //    - Skip if preceded by >     (HTML tag closer — breaks <code>...)
+    //
+    //    Trailing punctuation is trimmed:
+    //    - ) stripped only if URL has a matching ( inside it
+    //    - > stripped only if preceded by < (HTML tag closer)
+    //    - other punctuation (.,;:!?) always stripped
+    // 7b. Auto-link bare URLs inside <code> blocks (text extracted so HTML
+    //     tags are stripped, preventing <code><a>...</a></code> nesting).
+    html = _linkifyInCodeBlocks(html);
+
+    // 7. Auto-link bare URLs in the rest of the HTML.
+    html = _autoLinkBareUrls(html);
+
+    return html;
+  }
+
+  // Extracts <code> block contents, auto-links bare URLs inside them,
+  // then puts the blocks back. Uses textContent (strips HTML tags) so the
+  // char-before check works on raw code content. Also strips ` backticks
+  // so a URL returned as `https://url.com` by the model renders as a link.
+  function _linkifyInCodeBlocks(html) {
+    const CODE_RE = /<code>([\s\S]*?)<\/code>/g;
+    const LINK_RE = /https?:\/\/[^\s<>&"'\]]+/g;
+
+    return html.replace(CODE_RE, (match, codeContent) => {
+      // textContent strips existing HTML tags (e.g. <a> from restored markdown
+      // links becomes plain text), and decodes HTML entities.
+      const text = codeContent.replace(/<[^>]+>/g, '');
+
+      return match.replace(codeContent, (codeContent || '').replace(LINK_RE, (url) => {
+        const pos = text.indexOf(url);
+        if (pos === -1) return url;
+        const before = pos === 0 ? '' : text[pos - 1];
+        if (before && !/[\s\[(]/.test(before)) return url;
+        if (before === '"') return url;
+        // Strip trailing punctuation (same rules as _autoLinkBareUrls)
+        let trimmed = url;
+        if (trimmed.endsWith(')') && trimmed.includes('(')) {
+          trimmed = trimmed.slice(0, -1);
+        } else if (trimmed.endsWith('>') && trimmed.includes('<')) {
+          trimmed = trimmed.slice(0, -1);
+        } else {
+          trimmed = trimmed.replace(/[.,;:!?]+$/, '');
+        }
+        return `<a href="${trimmed}" target="_blank" rel="noopener noreferrer">${trimmed}</a>`;
+      }));
+    });
+  }
+
+  // Auto-links bare https:// URLs in HTML text.
+  // Guards:
+  //   - URL must be preceded by start-of-string, space, ( or [
+  //   - Skip if preceded by "  (inside href attribute)
+  //   - Skip if preceded by >  (HTML tag closer — protects <code> content)
+  // Trailing punctuation: ) stripped if URL contains (, > stripped if preceded by <,
+  //                       other punctuation (.,;:!?) always stripped
+  function _autoLinkBareUrls(html) {
+    return html.replace(/https?:\/\/[^\s<>"'\]&]+/g, (match) => {
+      // Find the LAST occurrence of this URL to avoid matching the same URL
+      // earlier in an href attribute (which would be preceded by ").
+      const pos = html.lastIndexOf(match);
+      if (pos === -1) return match;
+
+      const before = pos === 0 ? '' : html[pos - 1];
+
+      // Must be preceded by start-of-string or safe char (space, (, [)
+      if (before && !/[\s\[(]/.test(before)) return match;
+
+      // Skip if preceded by " (href attribute) or > (HTML tag closer)
+      if (before === '"' || before === '>') return match;
+
+      // Strip trailing punctuation
+      let url = match;
+      if (url.endsWith(')') && url.includes('(')) {
+        url = url.slice(0, -1);
+      } else if (url.endsWith('>') && url.includes('<')) {
+        url = url.slice(0, -1);
+      } else {
+        url = url.replace(/[.,;:!?]+$/, '');
+      }
+
+      return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+    });
+  }
+
+  function _isUrlSafe(url) {
+    if (!url) return false;
+    const s = url.trim().toLowerCase();
+    // Allow http://, https://, and /-relative URLs only
+    if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/')) return true;
+    // Block javascript:, data:, vbscript: and any other scheme
+    if (/^[a-z][a-z0-9+\-]*:/i.test(s)) return false;
+    return false;
   }
 
   // ── Message builders ────────────────────────────────────
@@ -278,7 +436,7 @@
       const isError = !!content.error;
       div.innerHTML = `
         <div class="tool-result-header">↩ ${escapeHtml(content.name)} ${isError ? '❌' : '✓'}</div>
-        <div class="tool-result-body">${escapeHtml(content.result || content.error || '(empty)')}</div>
+        <div class="tool-result-body">${parseMarkdown(content.result || content.error || '(empty)')}</div>
       `;
     }
 

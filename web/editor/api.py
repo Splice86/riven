@@ -190,4 +190,4 @@ async def api_update_awareness(path: str, req: AwarenessRequest):
 @router.get("/tree")
 async def api_tree():
     """Return the current file tree (debugging)."""
-    return editor.get_file_tree()
+    return editor.get_file_tree(get_root_dir())

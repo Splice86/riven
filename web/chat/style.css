@@ -222,6 +222,18 @@ html, body {
   color: var(--accent-green);
 }
 
+/* Links in assistant messages */
+.message-content a {
+  color: var(--accent-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.message-content a:hover {
+  color: #79b8ff;
+}
+
 /* Inline code in messages */
 .message-content code {
   font-family: var(--font-mono);

@@ -55,6 +55,23 @@
   }
   #ws-status.connected { background: #2a4a2a; color: var(--green); }
   #ws-status.disconnected { background: #4a2a2a; color: var(--red); }
+
+  #watch-btn {
+    font-size: 12px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  #watch-btn.active {
+    background: #2a4a2a;
+    color: var(--green);
+    border-color: var(--green);
+  }
+  #watch-btn:hover { color: var(--text); }
   #save-indicator { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: transparent; color: transparent; }
   #save-indicator.saving { background: #2a3a2a; color: var(--yellow); }
   #save-indicator.saved  { background: #2a4a2a; color: var(--green); }
@@ -124,8 +141,8 @@
   .tree-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-item .count { color: var(--muted); font-size: 11px; }
 
-  .tree-dir .children { display: none; }
-  .tree-dir.open .children { display: block; }
+  .tree-dir > .children { display: none !important; }
+  .tree-dir.open > .children { display: block !important; }
   .tree-dir > .tree-item .icon { color: var(--yellow); }
 
   .tree-file .icon { color: var(--muted); }
@@ -322,6 +339,7 @@
   <span class="sep">|</span>
   <span id="ws-status">● Connecting</span>
   <span id="save-indicator"></span>
+  <button id="watch-btn" title="Watch mode: ON = auto-scroll to bottom when Riven edits this file | OFF = stay where you are">👁 Watch</button>
   <span id="lock-indicator" title="File lock status"></span>
   <span id="instance-badge"></span>
   <span id="session-badge"></span>
@@ -403,6 +421,7 @@ let currentPath = null;
 let serverContent = null;
 let modified = false;
 let saveTimer = null;
+let watchMode = true;  // when ON, scroll to Riven edits | when OFF, stay put
 let suppressChangeEvent = false;
 let absPath = '';  // current absolute directory being browsed
 
@@ -441,10 +460,16 @@ function initEditor() {
 
   editor.on('change', () => {
     if (suppressChangeEvent) return;
+    const wasUnmodified = !modified;
     serverContent = null;
     modified = true;
     document.getElementById('save-indicator').textContent = '● Unsaved';
     document.getElementById('save-indicator').className = 'unsaved';
+
+    // First keystroke after opening — acquire the file lock so Riven can't edit
+    if (wasUnmodified && currentPath) {
+      acquireFileLock(currentPath);
+    }
 
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
@@ -457,9 +482,15 @@ function initEditor() {
 
 // ─── File tree ───────────────────────────────────────────────────────────────
 function renderTree(files) {
+  console.log('[TREE] renderTree called with', files.length, 'items');
   const el = document.getElementById('file-tree');
   el.innerHTML = '';
+  if (files.length === 0) {
+    el.innerHTML = '<div style="padding:12px;color:#6c7086;font-size:12px">No files found. Try a different directory.</div>';
+    return;
+  }
   files.forEach(item => el.appendChild(renderTreeItem(item)));
+  console.log('[TREE] rendered', files.length, 'items into DOM');
 }
 
 function renderTreeItem(node) {
@@ -611,21 +642,25 @@ async function openFile(path) {
     await releaseFileLock(lockedPath);
   }
 
+  // Normalize to relative path so incoming file_changed events (which use
+  // relative paths from Riven's event bus) match currentPath.
+  if (path && path.startsWith('/') && absPath) {
+    const norm = path.startsWith(absPath + '/') ? path.slice(absPath.length + 1) : path;
+    path = norm || path;
+  }
+
   currentPath = path;
   serverContent = null;
+  modified = false;
 
   document.getElementById('empty-state').style.display = 'none';
   document.getElementById('editor-wrap').style.display = 'block';
   document.getElementById('open-path').textContent = path;
   document.getElementById('active-file').textContent = '📄 ' + path.split('/').pop();
-  modified = false;
   clearTimeout(saveTimer);
   document.getElementById('save-indicator').textContent = '';
   document.getElementById('save-indicator').className = '';
   setActive(path);
-
-  // Acquire the lock so Riven can't edit while we're working
-  await acquireFileLock(path);
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(Object.assign(
@@ -649,7 +684,15 @@ window.addEventListener('beforeunload', () => {
 
 // ─── Apply server content ─────────────────────────────────────────────────────
 function applyContent(path, content, version) {
-  if (path !== currentPath) return;
+  // Normalize path comparison: server sends relative (e.g. "README.md"),
+  // but currentPath may be absolute if the browser loaded before this fix.
+  let norm = path;
+  if (norm.startsWith('/') && absPath) {
+    norm = norm.startsWith(absPath + '/') ? norm.slice(absPath.length + 1) : norm;
+  }
+  if (norm !== currentPath) {
+    return;
+  }
 
   serverContent = content;
   const currentVal = editor.getValue();
@@ -659,6 +702,8 @@ function applyContent(path, content, version) {
   editor.setValue(content);
   editor.setOption('mode', getMode(path));
   suppressChangeEvent = false;
+
+
 
   showToast(`File updated: <strong>${path.split('/').pop()}</strong>`);
 }
@@ -680,9 +725,12 @@ function highlightLines(start, end, label) {
     overlay.appendChild(lineEl);
   }
 
-  const firstLine = editor.lineInfo(start - 1);
-  if (firstLine) {
-    editor.scrollIntoView({ from: { line: start - 1 }, to: { line: start - 1 } }, 100);
+  // Only auto-scroll to the highlight when watch mode is on
+  if (watchMode) {
+    const firstLine = editor.lineInfo(start - 1);
+    if (firstLine) {
+      editor.scrollIntoView({ from: { line: start - 1 }, to: { line: start - 1 } }, 100);
+    }
   }
 
   if (label) showToast(label);
@@ -766,7 +814,13 @@ function connect() {
       { instance_id: instanceId }
     );
     console.log('[WS] Sending:', JSON.stringify(msg));
-    ws.send(JSON.stringify(msg));
+    console.log('[WS] ReadyState:', ws.readyState);
+    try {
+      ws.send(JSON.stringify(msg));
+      console.log('[WS] Send succeeded, readyState after:', ws.readyState);
+    } catch (e) {
+      console.error('[WS] Send failed:', e);
+    }
   };
 
   ws.onclose = (e) => {
@@ -779,14 +833,18 @@ function connect() {
   ws.onerror = (e) => { console.error('[WS] Error:', e); ws.close(); };
 
   ws.onmessage = (event) => {
+    console.log('[WS] onmessage raw:', event.data);
     let msg;
-    try { msg = JSON.parse(event.data); } catch { return; }
+    try { msg = JSON.parse(event.data); } catch (e) { console.error('[WS] JSON parse error:', e); return; }
 
+    console.log('[WS] parsed msg type:', msg.type);
     switch (msg.type) {
       case 'tree':
-        console.log('[WS] tree message:', msg);
+        console.log('[WS] tree message, files count:', (msg.files || []).length, 'abs_path:', msg.abs_path);
+        console.log('[WS] calling renderTree with', (msg.files || []).length, 'items');
         renderTree(msg.files || []);
         absPath = msg.abs_path || absPath || '/';
+        console.log('[WS] after update: absPath =', absPath);
         syncPathInput();
         break;
 
@@ -846,14 +904,31 @@ function initNavUp() {
   document.getElementById('btn-up').addEventListener('click', navigateUp);
 }
 
+// ─── Watch button ───────────────────────────────────────────────────────────
+function initWatchBtn() {
+  const btn = document.getElementById('watch-btn');
+  btn.classList.add('active');  // start with watch ON
+  btn.addEventListener('click', () => {
+    watchMode = !watchMode;
+    btn.classList.toggle('active', watchMode);
+    btn.textContent = watchMode ? '☝ Watch' : '○ Watch';
+    showToast(watchMode ? 'Watch mode: <strong>ON</strong>' : 'Watch mode: <strong>OFF</strong>');
+  });
+}
+
+
 // ─── Boot ───────────────────────────────────────────────────────────────────
 console.log('[EDITOR] Boot starting, absPath =', absPath);
+console.log('[EDITOR] CodeMirror global:', typeof CodeMirror !== 'undefined' ? 'FOUND' : 'MISSING');
 initEditor();
+console.log('[EDITOR] initEditor done, editor:', editor ? 'OK' : 'NULL');
 initResizeHandle();
 initNavUp();
+initWatchBtn();
 initNavInput();
 document.getElementById('editor-wrap').style.display = 'none';
 connect();
+console.log('[EDITOR] connect() called');
 </script>
 </body>
 </html>

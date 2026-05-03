@@ -58,6 +58,9 @@ class LockInfo:
         await release_lock(self.path, self.holder)
 
 
+# Alias for asyncio.TimeoutError so callers can catch a named exception
+LockTimeoutError = asyncio.TimeoutError
+
 from contextlib import asynccontextmanager
 
 
@@ -300,3 +303,9 @@ def clear(event: str | None = None) -> None:
         _locks.clear()
     elif event in _handlers:
         del _handlers[event]
+
+
+# Register Riven's event handlers so they are ready when events is imported.
+# Import from web.editor.editor which calls _init_riven_events() on its own import.
+from web.editor.editor import _init_riven_events
+_init_riven_events()

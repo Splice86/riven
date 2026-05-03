@@ -267,6 +267,28 @@ class TestOnAwarenessUpdated:
         ws.send_text.assert_not_called()
 
 
+@pytest.fixture(autouse=True)
+def init_events_and_editor_state():
+    """Reset web-editor and events state before each test.
+
+    _init_riven_events() lives in web/editor/editor.py and registers the four
+    web-editor handlers (file_changed, lock_acquired, lock_released,
+    awareness_updated) with the events bus.  We call it before every test so
+    that the clean_events_state fixture (which only clears _locks, not
+    _handlers) leaves the handlers intact for the next test.
+    """
+    import events as evt_module
+    from web.editor import editor as editor_mod
+    editor_mod._awareness.clear()
+    editor_mod._clients.clear()
+    # Re-register handlers so each test starts with a clean-but-registered
+    # events state (safe to call multiple times — registers idempotently).
+    editor_mod._init_riven_events()
+    yield
+    editor_mod._awareness.clear()
+    editor_mod._clients.clear()
+
+
 class TestInitRivenEvents:
     """_init_riven_events should register handlers on import."""
 
@@ -307,9 +329,10 @@ class TestLockApiEndpoints:
     """Test the HTTP lock endpoints in web/editor/api.py."""
 
     def setup_method(self):
-        # Reset events state
+        # Reset events lock state — _handlers is NOT cleared here because the
+        # autouse fixture (_init_riven_events) re-registers the four web-editor
+        # handlers after this method runs.
         import events as evt_module
-        evt_module._handlers.clear()
         evt_module._locks.clear()
 
     def test_get_lock_unlocked_returns_not_locked(self):
@@ -404,8 +427,8 @@ class TestAwarenessEndpoint:
     """Test the /awareness/{path} endpoint."""
 
     def setup_method(self):
+        # Only clear locks — autouse fixture re-registers _handlers
         import events as evt_module
-        evt_module._handlers.clear()
         evt_module._locks.clear()
 
     def test_post_awareness_returns_ok(self):
@@ -480,8 +503,8 @@ class TestSaveEndpoint:
     """Test the /save endpoint."""
 
     def setup_method(self):
+        # Only clear locks — autouse fixture re-registers _handlers
         import events as evt_module
-        evt_module._handlers.clear()
         evt_module._locks.clear()
 
     def test_save_writes_file_and_returns_ok(self, tmp_path):
