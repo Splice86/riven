@@ -23,6 +23,9 @@ from .git import (
     _is_git_tracked,
 )
 
+from .db import get_open_files
+from .utils import _count_tokens
+
 try:
     from ..config import get as config_get
 except ImportError:
@@ -466,6 +469,70 @@ class FileEditor:
             f"Call open_file('{filename}') first to add it to context before editing."
         )
 
+    # -------------------------------------------------------------------------
+    # Token Budget Helpers
+    # -------------------------------------------------------------------------
+
+    def _compute_open_file_content_tokens(self, session_id: str) -> int:
+        """Sum actual token count of all currently-open file content in context.
+        
+        Mirrors the content-generation logic from file_context() so the
+        budget estimate matches what actually appears in the system prompt:
+        - Line range truncation (MAX_LINES = 1200)
+        - Tiktoken-based counting (cl100k_base)
+        """
+        MAX_LINES = 1200
+        records = get_open_files(session_id, keyword="open_file:", limit=100)
+        total = 0
+        for rec in records:
+            path = rec.get("path", "")
+            if not path or not os.path.exists(path):
+                continue
+            # Compute the metadata string that file_context() emits
+            name = os.path.basename(path)
+            ls = rec.get("line_start", 0) or 0
+            le = rec.get("line_end")
+            le_str = str(le) if le is not None else "*"
+            meta = f"open: {name} [{ls}-{le_str}]"
+            total += _count_tokens(meta)
+            # Read and count the actual content
+            try:
+                with open(path, 'r') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            all_lines = content.split('\n')
+            ls = rec.get("line_start", 0) or 0
+            le = rec.get("line_end")
+            if le is None:
+                ranged = '\n'.join(all_lines[ls:])
+            else:
+                ranged = '\n'.join(all_lines[ls:le])
+            content_lines = ranged.split('\n')
+            if len(content_lines) > MAX_LINES:
+                ranged = '\n'.join(content_lines[:MAX_LINES])
+            total += _count_tokens(ranged)
+        return total
+
+    def _check_token_budget(self, session_id: str, new_content_tokens: int) -> tuple[bool, str]:
+        """Return (ok, message). If False, the new file is rejected."""
+        from .utils import _get_token_limit
+
+        limit = _get_token_limit()
+        if limit <= 0:
+            return True, ""
+        current = self._compute_open_file_content_tokens(session_id)
+        projected = current + new_content_tokens
+        if projected <= limit:
+            return True, ""
+        over_by = projected - limit
+        return False, (
+            f"[!!! HARD LIMIT !!!] Opening this file would push token count to ~{projected} "
+            f"(limit: {limit}, over by ~{over_by}).\n\n"
+            f"    Close at least one open file first with close_file(), then retry.\n"
+            f"    Check [Token estimate] at the top of the {{file}} context block for current usage."
+        )
+
     async def open_file(self, path: str, line_start: int = None, line_end: int = None, allow_untracked: bool = False) -> str:
         """Open a file and add it to the file context.
         
@@ -519,6 +586,26 @@ class FileEditor:
         if guard_result is not None:
             return guard_result
 
+        # Hard token limit: reject before touching context if budget would be exceeded
+        try:
+            with open(abs_path, 'r') as f:
+                content = f.read()
+        except Exception as e:
+            return f"Error reading {abs_path}: {e}"
+        all_lines = content.split('\n')
+        ls = line_start if line_start is not None else 0
+        le = line_end
+        ranged_content = '\n'.join(all_lines[ls:le]) if le is not None else '\n'.join(all_lines[ls:])
+        content_lines = ranged_content.split('\n')
+        MAX_LINES = 1200
+        if len(content_lines) > MAX_LINES:
+            ranged_content = '\n'.join(content_lines[:MAX_LINES])
+        meta = f"open: {filename} [{ls}-{str(le) if le is not None else '*'}]"
+        new_tokens = _count_tokens(meta) + _count_tokens(ranged_content)
+        ok, msg = self._check_token_budget(session_id, new_tokens)
+        if not ok:
+            return msg
+
         # Unique keyword per file (prevents overwrites in set_open_file)
         memory_type = make_open_file_keyword(filename)
 
@@ -530,38 +617,15 @@ class FileEditor:
         ):
             return f"Error saving to memory"
         
-        try:
-            with open(abs_path, 'r') as f:
-                content = f.read()
-            total_lines = len(content.splitlines())
-        except Exception:
-            content = ""
-            total_lines = "?"
-        
-        # Count tokens for the content that will be in context
-        # (applying same 1200-line truncation as file_context())
-        all_lines = content.split('\n')
-        if line_end is None or line_end == "*":
-            ranged_content = '\n'.join(all_lines[line_start:])
-        else:
-            ranged_content = '\n'.join(all_lines[line_start:line_end])
-        
-        MAX_LINES = 1200
-        content_lines = ranged_content.split('\n')
-        if len(content_lines) > MAX_LINES:
-            ranged_content = '\n'.join(content_lines[:MAX_LINES])
-        
-        
-        file_type_str = _file_type(abs_path)
+        # Reuse the content already loaded during the token budget check above.
+        total_lines = len(all_lines)
         line_info = ""
         if line_start > 0 or line_end is not None:
             line_info = f" (lines {line_start}-{line_end or 'end'})"
         
         large_warning = ""
-        if total_lines != "?" and total_lines > 1000:
+        if total_lines > 1000:
             large_warning = " [!LARGE FILE - consider using line_start/line_end to limit scope]"
-        
-
         
         return f"Opened {filename} (~{len(ranged_content) // 4} chars). File is now instantly visible in system context{line_info}{large_warning}"
     
@@ -1140,6 +1204,13 @@ class FileEditor:
                 parts.append(f"\n[Also found: {', '.join(other_matches)}" + (" ..." if len(matches) > 5 else "]"))
         
         result = '\n'.join(parts)
+        
+        # Hard token limit: reject before touching context if budget would be exceeded
+        meta = f"open: {filename} {defn.qualified_name} ({defn.type})"
+        new_tokens = _count_tokens(meta) + _count_tokens(result)
+        ok, msg = self._check_token_budget(session_id, new_tokens)
+        if not ok:
+            return msg
         
         # Store in memory using unique keyword
         memory_type = make_open_file_keyword(filename)

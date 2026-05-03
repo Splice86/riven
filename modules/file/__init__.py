@@ -63,6 +63,7 @@ from modules.file.db import (
 from modules.file.db import get_open_files
 
 from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword
+from modules.file.utils import _count_tokens, _get_token_limit
 
 
 # =============================================================================
@@ -189,11 +190,16 @@ def _file_help() -> str:
     from modules import _tool_ref  # Local import to avoid top-level cycle
     return """## File Tools (Help)
 
-### CRITICAL: Context Budget
-Every file open consumes context space. LLM context windows are finite.
-- Keep 2-4 files open maximum at any time.
-- Close files the moment you no longer need them — do not wait.
-- Open files are listed in context below ({file}). Check list_open_files() before adding more.
+### CRITICAL: Token Limit (HARD CAP — open_file() WILL REJECT)
+The file.token_limit config setting enforces a HARD upper bound on total tokens
+consumed by open files in context. If open_file() or open_function() would push
+past this limit, the call FAILS with an error and the file is NOT opened.
+- Check the token count shown at the top of the {file} context block.
+- If you are close to the limit, close_file() one or more files BEFORE opening new ones.
+- Use open_function(path, name) for large Python files — it extracts only the target
+  class/function and costs far fewer tokens than opening the whole file.
+- The limit is configured via file.token_limit in your config system (0 = disabled).
+- There is no grace margin: opening a file that would exceed the limit is a hard error.
 
 ### File Lifecycle Rules
 1. **BEFORE opening**: always call list_open_files() first to see what's already in context.
@@ -229,31 +235,6 @@ Every file open consumes context space. LLM context windows are finite.
 8. close_all_files() is useful at the very end of a session, not mid-task
 
 """
-
-
-def _count_tokens(text: str) -> int:
-    """Count tokens in text using tiktoken if available, else rough estimate.
-    
-    Uses cl100k_base encoding (GPT-4/GPT-3.5-turbo) which is a good general-purpose
-    tokenizer. Falls back to char/4 estimate if tiktoken not installed.
-    """
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except (ImportError, Exception):
-        # Rough fallback: ~4 chars per token for typical code/text
-        return len(text) // 4
-
-
-def _get_token_limit() -> int:
-    """Get the file.token_limit config value, defaulting to 0 (disabled)."""
-    try:
-        from config import get
-        limit = get('file.token_limit', 0)
-        return int(limit) if limit else 0
-    except Exception:
-        return 0
 
 
 def file_context() -> str:
@@ -338,10 +319,12 @@ def file_context() -> str:
     # Check token limit and add warning if exceeded
     token_limit = _get_token_limit()
     if token_limit > 0 and total_tokens > token_limit:
+        over_by = total_tokens - token_limit
         lines.insert(3, f"")
-        lines.insert(4, f"[WARNING] Total tokens ({total_tokens}) exceeds file.token_limit ({token_limit}).")
-        lines.insert(5, f"         Consider closing some files with close_file() to free up context.")
-        lines.insert(6, f"")
+        lines.insert(4, f"[!!! HARD LIMIT EXCEEDED !!!] ~{total_tokens} tokens — limit is {token_limit} (over by ~{over_by}).")
+        lines.insert(5, f"    open_file() and open_function() will REJECT new opens until you close files.")
+        lines.insert(6, f"    Use close_file() or close_all_files() to free up budget, then retry.")
+        lines.insert(7, f"")
 
     # Add total token count at the top
     lines.insert(3, f"[Token estimate] ~{total_tokens} tokens total (limit: {token_limit or 'disabled'})")
