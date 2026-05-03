@@ -167,6 +167,7 @@ class Core:
         self._max_function_calls = max_function_calls
         self._tool_timeout = shard.get('tool_timeout', tool_timeout or 20.0)
         self._cancelled = False
+        self._cancel_requested = False
         self._client = AsyncOpenAI(base_url=self._llm_url, api_key=self._llm_api_key)
 
         # Tool result truncation settings from shard
@@ -304,7 +305,13 @@ class Core:
         return funcs
 
     def cancel(self) -> None:
-        """Cancel the current run."""
+        """Cancel the current run.
+        
+        Sets _cancel_requested so any running tool execution (via _execute)
+        will detect it on its next poll cycle and raise CancelledError.
+        Sets _cancelled so the LLM stream loop and tool call loop exit.
+        """
+        self._cancel_requested = True
         self._cancelled = True
 
     def _parse_calls(self, msg: dict) -> list[FunctionCall]:
@@ -322,7 +329,12 @@ class Core:
         return calls
 
     async def _execute(self, call: FunctionCall, func_index: dict, session_id: str = None) -> FunctionResult:
-        """Execute a single function call with timeout."""
+        """Execute a single function call with timeout and cancellation support.
+        
+        Uses a polling wait_for loop (poll every 0.1s) to detect _cancel_requested
+        as soon as possible. When cancel() is called, _execute will raise
+        CancelledError within 0.1s, which propagates up and breaks the loop.
+        """
         _debug(f"_execute: looking up '{call.name}'", session_id)
         func = func_index.get(call.name)
         if not func:
@@ -337,9 +349,30 @@ class Core:
 
         content, error = "", None
         try:
-            result = await asyncio.wait_for(func.fn(**call.arguments), timeout=timeout)
-            content = str(result) if result is not None else ""
-            _debug(f"_execute: {call.name} completed OK ({time.time()-_exec_start:.3f}s, content len={len(content)})", session_id)
+            remaining = timeout
+            poll_interval = 0.1  # check _cancel_requested every 100ms
+            while remaining > 0:
+                chunk = min(remaining, poll_interval)
+                if self._cancel_requested:
+                    raise asyncio.CancelledError()
+                try:
+                    result = await asyncio.wait_for(func.fn(**call.arguments), timeout=chunk)
+                    content = str(result) if result is not None else ""
+                    _debug(f"_execute: {call.name} completed OK ({time.time()-_exec_start:.3f}s, content len={len(content)})", session_id)
+                    break  # success
+                except asyncio.TimeoutError:
+                    remaining -= chunk
+                    if self._cancel_requested:
+                        raise asyncio.CancelledError()
+                    if remaining <= 0:
+                        # Natural timeout (not a user cancel) — let outer handler deal with it
+                        raise asyncio.TimeoutError()
+                    # else continue polling
+            # CancelledError propagates up to the tool call loop
+        except asyncio.CancelledError:
+            # CancelledError is BaseException, not Exception — do NOT swallow it
+            _debug(f"_execute: {call.name} CANCELLED by user", session_id)
+            raise  # propagate to run_stream tool loop
         except asyncio.TimeoutError:
             error = f"Function timed out after {timeout}s"
             _debug(f"_execute: {call.name} TIMED OUT after {timeout}s", session_id)

@@ -157,6 +157,14 @@ async def send_message(req: MessageRequest):
                     generator = core.run_stream(req.session_id)
                     try:
                         async for event in generator:
+                            # Stop sending events the moment cancellation is detected.
+                            # This breaks the loop before yielding the next token/tool event,
+                            # giving the user snappy feedback instead of waiting for the
+                            # LLM stream or tool execution to finish.
+                            if core._cancelled:
+                                await generator.aclose()
+                                return
+
                             if "error" in event:
                                 yield f"data: {json.dumps({'error': event['error']})}\n\n"
                                 await generator.aclose()
