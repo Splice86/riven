@@ -82,6 +82,15 @@ def get_lock_state(path: str) -> LockInfo | None:
     return _locks.get(path)
 
 
+def is_browser_lock(lock: LockInfo) -> bool:
+    """Return True if the lock holder looks like a browser editor instance.
+    
+    Browser instances use instance IDs starting with 'ed-' (e.g. 'ed-abc12345').
+    Riven session IDs are generally longer UUID-like strings.
+    """
+    return lock.holder.startswith('ed-')
+
+
 def get_all_locks() -> dict[str, LockInfo]:
     """Return a copy of the current lock table."""
     return dict(_locks)

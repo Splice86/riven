@@ -59,14 +59,40 @@ from config import RIVEN_DIR, find_project_root
 
 # ─── Events (optional — graceful fallback if not running in Riven process) ────
 try:
-    from events import acquire_lock, release_lock, publish as _events_publish
+    from events import (acquire_lock, release_lock,
+                        get_lock_state, is_browser_lock,
+                        publish as _events_publish)
 except ImportError:
     # Standalone use: no-op fallbacks
     async def _dummy_lock(*a, **k): yield  # type: ignore
     acquire_lock = lambda *a, **k: _dummy_lock(*a, **k)  # type: ignore
     release_lock = lambda *a, **k: None  # type: ignore
+    get_lock_state = lambda *a, **k: None  # type: ignore
+    is_browser_lock = lambda *a, **k: False  # type: ignore
     _events_publish = lambda *a, **k: None  # type: ignore
     _REL_PATH = None  # type hint only
+
+
+class BrowserLockError(Exception):
+    """Raised when Riven tries to edit a file that the browser has locked."""
+    def __init__(self, path: str, holder: str):
+        self.path = path
+        self.holder = holder
+        super().__init__(
+            f"File is open in the browser editor ({holder}). "
+            f"Close or save the file in the browser before editing it here."
+        )
+
+
+def _require_no_browser_lock(path: str) -> None:
+    """Raise BrowserLockError if the file is locked by a browser editor.
+    
+    Called before every write operation. Riven will NOT wait for the lock —
+    it fails immediately so the user knows to close the browser first.
+    """
+    lock = get_lock_state(path)
+    if lock is not None and is_browser_lock(lock):
+        raise BrowserLockError(path, lock.holder)
 
 
 def _rel_path(abs_path: str) -> str:
@@ -692,6 +718,9 @@ class FileEditor:
         session_id = self._get_session_id()
         rel_path = _rel_path(abs_path)
 
+        # Fail immediately if browser has this file open — don't wait
+        _require_no_browser_lock(rel_path)
+
         async with acquire_lock(rel_path, session_id, timeout=30.0, context="replace_text"):
             result, start, end, new_content = await self._do_replace_text(
                 abs_path, old, new, threshold, validate_syntax
@@ -729,7 +758,10 @@ class FileEditor:
         guard = self._check_file_open(abs_path)
         if guard is not None:
             return EditResult(False, abs_path, guard)
-        
+
+        # Fail immediately if browser has this file open — don't wait
+        _require_no_browser_lock(_rel_path(abs_path))
+
         try:
             with open(abs_path, 'r', encoding='utf-8') as f:
                 original = f.read()
@@ -828,7 +860,10 @@ class FileEditor:
         guard = self._check_file_open(abs_path)
         if guard is not None:
             return EditResult(False, abs_path, guard)
-        
+
+        # Fail immediately if browser has this file open — don't wait
+        _require_no_browser_lock(_rel_path(abs_path))
+
         try:
             with open(abs_path, 'r') as f:
                 original = f.read()
@@ -905,7 +940,10 @@ class FileEditor:
         guard = self._check_file_open(abs_path)
         if guard is not None:
             return guard
-        
+
+        # Fail immediately if browser has this file open — don't wait
+        _require_no_browser_lock(rel_path)
+
         if create_parent_dirs:
             parent = os.path.dirname(abs_path)
             if parent and not os.path.exists(parent):
@@ -938,6 +976,9 @@ class FileEditor:
         
         session_id = self._get_session_id()
         rel_path = _rel_path(abs_path)
+
+        # Fail immediately if browser has this file open — don't delete behind their back
+        _require_no_browser_lock(rel_path)
 
         async with acquire_lock(rel_path, session_id, timeout=30.0, context="delete_file") as _lock_info:
             try:

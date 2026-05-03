@@ -322,6 +322,7 @@
   <span class="sep">|</span>
   <span id="ws-status">● Connecting</span>
   <span id="save-indicator"></span>
+  <span id="lock-indicator" title="File lock status"></span>
   <span id="instance-badge"></span>
   <span id="session-badge"></span>
   <span id="active-file">—</span>
@@ -395,7 +396,7 @@ if (sessionId) {
   badge.title = 'Opened from chat session';
 }
 
-// ─── State ───────────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
 let ws = null;
 let editor = null;
 let currentPath = null;
@@ -404,6 +405,9 @@ let modified = false;
 let saveTimer = null;
 let suppressChangeEvent = false;
 let absPath = '';  // current absolute directory being browsed
+
+// Lock state: path we're currently holding an exclusive lock on
+let lockedPath = null;
 
 // ─── Mode map ────────────────────────────────────────────────────────────────
 function getMode(filename) {
@@ -561,8 +565,52 @@ async function saveFile() {
   }
 }
 
-// ─── Open file ───────────────────────────────────────────────────────────────
-function openFile(path) {
+// ─── File locking ─────────────────────────────────────────────────────────────
+// Acquire an exclusive lock on a file before editing.
+// Riven will see this lock and refuse to edit until we release it.
+async function acquireFileLock(path) {
+  if (lockedPath === path) return;  // already locked
+  if (lockedPath) await releaseFileLock(lockedPath);  // release previous first
+  try {
+    const resp = await fetch(`/web/editor/api/lock/${encodeURIComponent(path)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ holder: instanceId, context: 'browser editing', timeout: 300 }),
+    });
+    if (resp.ok) {
+      lockedPath = path;
+      console.log('[LOCK] Acquired on', path);
+    } else {
+      const body = await resp.json().catch(() => ({}));
+      showToast(`⚠ Could not lock <strong>${path.split('/').pop()}</strong>: ${body.detail || resp.status}`);
+    }
+  } catch (err) {
+    console.warn('[LOCK] acquire failed:', err);
+  }
+}
+
+// Release our lock on a file.
+async function releaseFileLock(path) {
+  if (!path || lockedPath !== path) return;
+  try {
+    await fetch(`/web/editor/api/lock/${encodeURIComponent(path)}?holder=${encodeURIComponent(instanceId)}`, {
+      method: 'DELETE',
+    });
+    console.log('[LOCK] Released on', path);
+  } catch (err) {
+    console.warn('[LOCK] release failed:', err);
+  } finally {
+    lockedPath = null;
+  }
+}
+
+// ─── Open file ────────────────────────────────────────────────────────────────
+async function openFile(path) {
+  // Release old lock before opening a different file
+  if (currentPath && currentPath !== path && lockedPath) {
+    await releaseFileLock(lockedPath);
+  }
+
   currentPath = path;
   serverContent = null;
 
@@ -576,6 +624,9 @@ function openFile(path) {
   document.getElementById('save-indicator').className = '';
   setActive(path);
 
+  // Acquire the lock so Riven can't edit while we're working
+  await acquireFileLock(path);
+
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(Object.assign(
       { type: 'open', path },
@@ -584,6 +635,17 @@ function openFile(path) {
     )));
   }
 }
+
+// Release lock on page unload (user closes tab, navigates away, etc.)
+window.addEventListener('beforeunload', () => {
+  if (lockedPath) {
+    // Fire-and-forget: best effort release when leaving
+    navigator.sendBeacon(
+      `/web/editor/api/lock/${encodeURIComponent(lockedPath)}?holder=${encodeURIComponent(instanceId)}`,
+      new Blob(['{}'], { type: 'application/json' })
+    );
+  }
+});
 
 // ─── Apply server content ─────────────────────────────────────────────────────
 function applyContent(path, content, version) {
