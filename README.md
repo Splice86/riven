@@ -14,7 +14,7 @@
 -->
 
 A modular agentic coding system built around **shards** — configurable personas with specific tool sets and behaviors.
-sssssssssssssssssssss
+ssssssssssssssssssss
 ## Overview
 
 Riven Core provides an LLM-powered coding assistant that runs as an API server. It uses a **shard-based architecture** where each shard defines a personality, available tools, and system behavior. This makes it easy to compose different agent behaviors for different tasks.
