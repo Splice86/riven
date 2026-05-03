@@ -244,19 +244,78 @@ html, body {
   border-radius: 3px;
 }
 
-.message-content pre {
-  margin-top: 8px;
+/* ---- Code blocks (all markdown-rendered contexts) ---- */
+.message-content pre,
+.thinking-content pre,
+.tool-result-body pre {
   padding: 12px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow-x: auto;
+  /* Subtle top highlight for depth */
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+  /* Thin scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
-.message-content pre code {
+.message-content pre code,
+.thinking-content pre code,
+.tool-result-body pre code {
   background: none;
   color: var(--text-primary);
   padding: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+/* Language badge + wrapper for code blocks */
+.code-block {
+  position: relative;
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+
+.code-block + .code-block {
+  margin-top: 4px;
+}
+
+/* Language label (top-left pill) */
+.cb-lang {
+  display: inline-block;
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  padding: 1px 6px;
+  pointer-events: none;
+  line-height: 1.5;
+}
+
+.code-block pre {
+  margin-top: 0;
+}
+
+/* Horizontal scroll shadow indicator */
+.message-content pre::-webkit-scrollbar,
+.thinking-content pre::-webkit-scrollbar,
+.tool-result-body pre::-webkit-scrollbar {
+  height: 4px;
+}
+.message-content pre::-webkit-scrollbar-thumb,
+.thinking-content pre::-webkit-scrollbar-thumb,
+.tool-result-body pre::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
 }
 
 /* ---- Tool calls ---- */
@@ -334,6 +393,15 @@ html, body {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: break-word;
+}
+
+.tool-result-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(210, 168, 255, 0.1);
+  color: var(--accent-purple);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 /* ---- Thinking indicator ---- */

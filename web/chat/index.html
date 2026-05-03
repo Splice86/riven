@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Riven Chat</title>
-  <link rel="stylesheet" href="/ui/style.css?v=6">
+  <link rel="stylesheet" href="/ui/style.css?v=7">
 </head>
 <body>
 
@@ -274,7 +274,10 @@
       new RegExp(`${_CODE_PLACEHOLDER}(\d+)`, 'g'),
       (_m, idx) => {
         const cb = codeBlocks[parseInt(idx, 10)];
-        return `<pre><code>${cb.code}</code></pre>`;
+        const langLabel = cb.lang
+          ? `<span class="cb-lang">${escapeHtml(cb.lang)}</span>`
+          : '';
+        return `<div class="code-block">${langLabel}<pre><code>${cb.code}</code></pre></div>`;
       }
     );
 
