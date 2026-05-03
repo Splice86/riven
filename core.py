@@ -243,17 +243,28 @@ class Core:
         return resolved
 
     def _folder_has_get_module(self, folder_path: str) -> bool:
-        """True if a package folder has a get_module callable in its __init__.py."""
-        import importlib.util
+        """True if a package folder has a get_module callable in its __init__.py.
+
+        Uses importlib.import_module so relative imports within the module
+        (e.g. 'from .models import ...') resolve correctly.
+        """
+        import importlib
         init_path = os.path.join(folder_path, '__init__.py')
         if not os.path.isfile(init_path):
             return False
+        # Derive the package-relative module name so imports resolve
+        rel = os.path.relpath(folder_path, os.path.dirname(__file__))
+        # e.g. modules/workflow -> modules.workflow
+        if rel.startswith('modules'):
+            mod_name = rel.replace(os.sep, '.')
+            if not mod_name.startswith('modules.'):
+                mod_name = 'modules.' + mod_name
+        else:
+            # e.g. modules/file/models -> modules.file.models
+            mod_name = rel.replace(os.sep, '.')
         try:
-            spec = importlib.util.spec_from_file_location('_discover_tmp', init_path)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                return hasattr(mod, 'get_module')
+            mod = importlib.import_module(mod_name)
+            return hasattr(mod, 'get_module')
         except Exception:
             pass
         return False
