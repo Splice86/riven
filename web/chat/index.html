@@ -113,8 +113,8 @@
 <script>
 (function() {
   // ── State ──────────────────────────────────────────────
-  let sessionId = localStorage.getItem('riven_session') || generateSessionId();
-  localStorage.setItem('riven_session', sessionId);
+  let sessionId = sessionStorage.getItem('riven_session') || generateSessionId();
+  sessionStorage.setItem('riven_session', sessionId);
   document.getElementById('session-display').textContent = sessionId;
 
   let isStreaming = false;
@@ -686,7 +686,7 @@
     
     // Generate new session ID
     sessionId = generateSessionId();
-    localStorage.setItem('riven_session', sessionId);
+    sessionStorage.setItem('riven_session', sessionId);
     document.getElementById('session-display').textContent = sessionId;
     setStatus(false, 'Ready');
     document.getElementById('message-input').focus();
