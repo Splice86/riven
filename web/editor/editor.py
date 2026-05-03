@@ -28,6 +28,11 @@ from .config import (
     get_root_dir,
 )
 
+try:
+    import events
+except ImportError:
+    events = None  # web editor running standalone
+
 logger = logging.getLogger("web.editor")
 
 router = APIRouter(tags=["web.editor"])
@@ -59,6 +64,10 @@ class _Client:
 _clients: dict[int, _Client] = {}
 _client_uid_counter = 0
 _clients_lock = asyncio.Lock()
+
+# ─── Awareness state (who is editing which file) ──────────────────────────────
+# Maps rel_path -> list of {session_id, instance_id, color}
+_awareness: dict[str, list[dict]] = {}
 
 
 async def _add_client(ws: WebSocket) -> _Client:
@@ -352,6 +361,101 @@ async def editor_page():
 
 # ─── WebSocket route ──────────────────────────────────────────────────────────
 
+# ─── Riven events integration ──────────────────────────────────────────────
+
+_COLOR_PALETTE = [
+    "#e06c75", "#98c379", "#e5c07b", "#61afef",
+    "#c678dd", "#56b6c2", "#be5046", "#1aaa85",
+]
+
+
+async def _on_file_changed(path: str, content: str, start: int | None = None,
+                           end: int | None = None, who: str | None = None) -> None:
+    """Handle file_changed events from Riven's file module.
+
+    Broadcasts updated content to all web editor clients watching the file,
+    and optionally highlights the changed region.
+    """
+    await _broadcast({
+        "type": "content",
+        "path": path,
+        "content": content,
+        "source": "riven",  # tells frontend it's a Riven edit, not user
+    }, filter_path=path)
+    if start and end:
+        label = f"Riven" if not who else who.split("-")[0]
+        await broadcast_highlight(path, start, end, label=label)
+
+
+async def _on_lock_acquired(path: str, holder: str, context: str) -> None:
+    """Handle lock_acquired events — update awareness, warn other editors."""
+    logger.debug(f"[WebEditor] Lock acquired on {path} by {holder} ({context})")
+    # Add holder to awareness
+    if path not in _awareness:
+        _awareness[path] = []
+    # Avoid duplicates
+    if not any(h["session_id"] == holder for h in _awareness[path]):
+        color = _COLOR_PALETTE[len(_awareness[path]) % len(_COLOR_PALETTE)]
+        _awareness[path].append({"session_id": holder, "color": color})
+    await _broadcast({
+        "type": "awareness",
+        "path": path,
+        "awareness": _awareness[path],
+    }, filter_path=path)
+
+
+async def _on_lock_released(path: str, holder: str, context: str) -> None:
+    """Handle lock_released events — remove from awareness."""
+    logger.debug(f"[WebEditor] Lock released on {path} by {holder} ({context})")
+    if path in _awareness:
+        _awareness[path] = [h for h in _awareness[path] if h["session_id"] != holder]
+        if not _awareness[path]:
+            del _awareness[path]
+    await _broadcast({
+        "type": "awareness",
+        "path": path,
+        "awareness": _awareness.get(path, []),
+    }, filter_path=path)
+
+
+async def _on_awareness_updated(path: str, session_id: str | None = None,
+                                 cursor: int | None = None, label: str = "") -> None:
+    """Handle awareness_updated events — broadcast live cursor/selection."""
+    if not session_id:
+        return
+    if path not in _awareness:
+        _awareness[path] = []
+    # Update cursor position for this session
+    for h in _awareness[path]:
+        if h["session_id"] == session_id:
+            h["cursor"] = cursor
+            h["label"] = label
+            break
+    else:
+        color = _COLOR_PALETTE[len(_awareness[path]) % len(_COLOR_PALETTE)]
+        _awareness[path].append({"session_id": session_id, "color": color,
+                                 "cursor": cursor, "label": label})
+    await _broadcast({
+        "type": "awareness",
+        "path": path,
+        "awareness": _awareness[path],
+    }, filter_path=path)
+
+
+def _init_riven_events() -> None:
+    """Register event handlers. Safe to call multiple times."""
+    if events is None:
+        return
+    events.register_handler("file_changed", _on_file_changed)
+    events.register_handler("lock_acquired", _on_lock_acquired)
+    events.register_handler("lock_released", _on_lock_released)
+    events.register_handler("awareness_updated", _on_awareness_updated)
+    logger.debug("[WebEditor] Riven event handlers registered")
+
+
+_init_riven_events()
+
+
 @router.websocket("/ws")
 async def editor_ws(ws: WebSocket):
     await ws.accept()
@@ -468,6 +572,11 @@ async def broadcast_speak(rel_path: str, text: str) -> None:
         "type": "toast",
         "text": text,
     }, filter_path=rel_path)
+
+
+async def broadcast_to_all(msg: dict) -> None:
+    """Broadcast a message to ALL connected clients (no path filter)."""
+    await _broadcast(msg, filter_path=None)
 
 
 async def broadcast_global_speak(text: str) -> None:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from . import editor
@@ -45,6 +45,18 @@ class SaveRequest(BaseModel):
     content: str   # New file content
 
 
+class LockRequest(BaseModel):
+    holder: str           # Who is acquiring the lock
+    context: str = ""     # What operation is being performed
+    timeout: float = 30.0  # Max seconds to wait for the lock
+
+
+class AwarenessRequest(BaseModel):
+    session_id: str | None = None
+    cursor: int | None = None
+    label: str = ""
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/update")
@@ -74,7 +86,7 @@ async def api_speak(req: SpeakRequest):
         if req.path:
             await editor.broadcast_speak(req.path, req.text)
         else:
-            await editor.broadcast_global_speak(req.text)
+            await editor.broadcast_to_all({"type": "toast", "text": req.text})
     except Exception as e:
         logger.warning(f"[WebEditor API] speak failed: {e}")
     return {"ok": True}
@@ -104,6 +116,72 @@ async def api_save(req: SaveRequest):
     # (including the saver, so their serverContent gets synced)
     await editor.broadcast_update(req.path)
 
+    return {"ok": True}
+
+
+# ─── Lock endpoints ───────────────────────────────────────────────────────────
+
+@router.get("/lock/{path:path}")
+async def api_get_lock(path: str):
+    """Return the current lock state for a file."""
+    try:
+        import events as _ev
+        if _ev is None:
+            return {"locked": False}
+        state = _ev.get_lock_state(path)
+        return {"locked": state is not None, "state": state}
+    except Exception as e:
+        logger.warning(f"[WebEditor API] get_lock failed for {path}: {e}")
+        return {"locked": False, "error": str(e)}
+
+
+@router.post("/lock/{path:path}")
+async def api_acquire_lock(path: str, req: LockRequest):
+    """Acquire a write lock on a file."""
+    try:
+        import events as _ev
+        if _ev is None:
+            raise HTTPException(503, "Events system not available")
+        async with _ev.acquire_lock(path, req.holder, timeout=req.timeout,
+                                    context=req.context) as lock_info:
+            return {"ok": True, "lock": lock_info}
+    except Exception as e:
+        logger.warning(f"[WebEditor API] acquire_lock failed for {path}: {e}")
+        raise HTTPException(409, str(e))
+
+
+@router.delete("/lock/{path:path}")
+async def api_release_lock(path: str, holder: str = Query(default="")):
+    """Release the write lock on a file."""
+    try:
+        import events as _ev
+        if _ev is None:
+            return {"ok": True}
+        await _ev.release_lock(path, holder)
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"[WebEditor API] release_lock failed for {path}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/awareness/{path:path}")
+async def api_update_awareness(path: str, req: AwarenessRequest):
+    """Update awareness (cursor position, label) for a file being edited."""
+    try:
+        import events as _ev
+        if _ev is not None:
+            _ev.publish("awareness_updated", path=path, session_id=req.session_id,
+                        cursor=req.cursor, label=req.label)
+        if req.session_id:
+            await editor.broadcast_to_all({
+                "type": "awareness",
+                "path": path,
+                "session_id": req.session_id,
+                "cursor": req.cursor,
+                "label": req.label,
+            })
+    except Exception as e:
+        logger.warning(f"[WebEditor API] awareness update failed for {path}: {e}")
     return {"ok": True}
 
 
