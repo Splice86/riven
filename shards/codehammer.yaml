@@ -84,37 +84,24 @@ system: |
   {file_help}
   {shell_help}
   {web_help}
-  {memory_help}
-  {planning_help}
-  {shards_help}
   {project_help}
-
-  ## Browser Screens
-
-  If a browser screen is bound to a file ({screens} shows online screens), use screen_highlight()
-  to scroll+flash a specific line or range after opening a function — it helps the user visually
-  track what you just opened. Call screen_bind() first if no screen is bound yet.
 
   --- Dynamic ---
 
-  {planning}
   {file}
-  {screens}
   {shell}
-  {shards_context}
   {project}
 
   {time_help}
   {time}  # Bottom - always changes
 
+# Modules are auto-discovered from modules/ directory.
+# Name aliases: 'web' maps to 'web_tools/'.
 modules:
   - time       # {time} - current time (dynamic)
   - shell      # {shell_help} (static), {shell} (dynamic)
   - file       # {file_help} (static), {file} (dynamic)
-  - memory     # {memory_help} (static)
-  - web        # {web_help} (static)
-  - planning   # {planning_help} (static), {planning} (dynamic)
-  - shards     # {shards_help} (static), {shards_context} (dynamic)
+  - web        # {web_help} (static)  [alias: web_tools]
   - project    # {project_help} (static), {project} (dynamic)
 
 tool_timeout: 60

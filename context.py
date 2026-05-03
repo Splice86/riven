@@ -1,20 +1,17 @@
-"""Context management - memory API client, message processing, and context building.
+"""Context management — message processing and context building.
 
 This module is purely responsible for:
-- Talking to the Memory API (store/retrieve conversation context)
-- Processing messages (reordering, truncation, sanitization)
+- Processing messages (reorder, truncate, sanitize for LLM)
 - Building context from registered modules
 
-It knows nothing about LLM calls, tool execution, or the agent loop.
+Storage is handled by db.ContextDB. This module knows nothing about LLM calls,
+tool execution, or the agent loop.
 """
 
 import json
 import re
 import time
 from datetime import datetime, timezone
-
-import requests
-from config import get
 
 # High-level debug flag
 DEBUG_HANG = True  # Enable for lock-up debugging
@@ -65,114 +62,26 @@ def _json_safe(obj):
 
 
 # =============================================================================
-# Memory API Client
-# =============================================================================
-
-class MemoryClient:
-    """Client for remote memory API - stores conversation context by session.
-    
-    Note: Memory API must be running for Core to function. If not available,
-    Core will fail gracefully with clear error.
-    """
-    
-    def __init__(self, base_url: str = None, session_id: str = None):
-        self.base_url = base_url or get('memory_api.url')
-        self.session_id = session_id
-        # Context settings from config
-        self._max_summaries = get('context.max_summaries', 3)
-        self._trigger_limit = get('context.trigger_limit', 40)
-    
-    def add_context(self, role: str, content: str, session: str = None,
-                    tool_call_id: str = None, function: str = None) -> dict:
-        """Add a context message to memory.
-        
-        Args:
-            role: Message role (user, assistant, system, tool)
-            content: Message content
-            session: Session ID
-            tool_call_id: Tool call ID for linking tool results to their request
-            function: Function name (for tool results to store as proper property)
-        """
-        session = session or self.session_id
-        payload = {
-            "role": role,
-            "content": content,
-            "session": session,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if tool_call_id:
-            payload["tool_call_id"] = tool_call_id
-        if function:
-            payload["function"] = function
-        _debug(f"MEMORY: add_context({role}, {len(content)} chars)", session)
-        resp = requests.post(
-            f"{self.base_url}/context",
-            json=payload,
-            params={"trigger_limit": self._trigger_limit},
-            timeout=30,  # 30s timeout to prevent hangs
-        )
-        _debug(f"MEMORY: add_context done", session)
-        resp.raise_for_status()
-        return resp.json()
-    
-    def get_context(self, max_summaries: int = None, session: str = None) -> list[dict]:
-        """Get conversation history from memory.
-        
-        Args:
-            max_summaries: Max top-level summaries to include (default from config)
-            session: Session ID
-        """
-        session = session or self.session_id
-        effective_max_summaries = max_summaries if max_summaries is not None else self._max_summaries
-        _debug(f"MEMORY: get_context(max_summaries={effective_max_summaries})", session)
-        resp = requests.get(
-            f"{self.base_url}/context",
-            params={"max_summaries": effective_max_summaries, "session": session},
-            timeout=30,  # 30s timeout to prevent hangs
-        )
-        _debug(f"MEMORY: get_context done", session)
-        resp.raise_for_status()
-        return resp.json().get("context", [])
-    
-    def delete_session(self, session: str = None) -> dict:
-        """Delete all context for a session."""
-        session = session or self.session_id
-        resp = requests.delete(
-            f"{self.base_url}/context",
-            params={"session": session}
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-
-# =============================================================================
 # Context Manager
 # =============================================================================
 
 class ContextManager:
-    """Handles all context/memory operations for the agent loop.
+    """Handles message processing and context building for the agent loop.
 
     Encapsulates:
-    - Fetching history from Memory API
     - Building system prompt from context functions
     - Message processing (reorder, truncate, sanitize for LLM)
-    - Storing messages to Memory API
+
+    Storage is handled by db.ContextDB — this class only processes messages.
     """
 
     def __init__(
         self,
-        memory_url: str = None,
         tool_result_max_lines: int = 200,
         tool_result_char_per_line: int = 150,
     ):
-        self._memory_url = memory_url or get('memory_api.url')
         self._tool_max_lines = tool_result_max_lines
         self._tool_char_per_line = tool_result_char_per_line
-
-    @property
-    def memory_client(self) -> MemoryClient:
-        """Get or create a MemoryClient for this context manager."""
-        return MemoryClient(base_url=self._memory_url)
     
     # -------------------------------------------------------------------------
     # Context building (from modules)
@@ -306,39 +215,23 @@ class ContextManager:
         history: list[dict],
         system_template: str,
         registry,
-        include_timestamp: bool = None,
     ) -> tuple[list[dict], str]:
         """Build messages for LLM from history, including system prompt.
         
         Args:
-            history: Message history from memory API
+            history: Message history from db.ContextDB
             system_template: System prompt template with {tag} placeholders
             registry: Module registry for building context
-            include_timestamp: Override for timestamp prefix (default from config)
         
         Returns (api_messages, system_prompt) where api_messages has system
         prompt prepended and messages are processed (reordered, truncated).
         """
         _debug("ContextManager.prepare_messages_for_llm: START")
         
-        # Check config for timestamp preference (default to False if not set)
-        if include_timestamp is None:
-            include_timestamp = get('memory_api.include_timestamp', False)
-        
-        # Build api_messages from history (filter internal fields, optionally add timestamp)
+        # Build api_messages from history (filter internal fields)
         api_messages = []
         for msg in history:
-            msg_copy = {k: v for k, v in msg.items() if k not in ('id', 'created_at')}
-            
-            # Prepend timestamp to content if enabled and created_at is present
-            if include_timestamp and msg.get('created_at') and msg_copy.get('content'):
-                try:
-                    ts = datetime.fromisoformat(msg['created_at'].replace('Z', '+00:00'))
-                    timestamp_str = ts.strftime('%Y-%m-%d %H:%M')
-                    msg_copy['content'] = f"[{timestamp_str}] {msg_copy['content']}"
-                except (ValueError, TypeError):
-                    pass  # Skip timestamp if parsing fails
-            
+            msg_copy = {k: v for k, v in msg.items() if k not in ('id', 'created_at', 'token_count', 'session_id')}
             api_messages.append(msg_copy)
         
         _debug(f"ContextManager.prepare_messages_for_llm: {len(api_messages)} history messages:")
@@ -410,6 +303,10 @@ class ContextManager:
             elif content == '':
                 _debug(f"sanitize[{i}]: [{role}] content='', fixing to '(no output)' (has_tc={had_tool_calls})", None)
                 msg['content'] = '(no output)'
+            elif not isinstance(content, str):
+                # Handle non-string content (list, dict, etc.) by converting to string
+                _debug(f"sanitize[{i}]: [{role}] content type={type(content).__name__}, converting to string", None)
+                msg['content'] = str(content)
             else:
                 _debug(f"sanitize[{i}]: [{role}] content OK ({len(content)} chars)", None)
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-from config import _git_toplevel, _run_git
+from config import _git_toplevel
 
 
 # =============================================================================
@@ -143,8 +143,7 @@ def _git_warning(path: str, abs_path: str) -> str:
             f"    To fix this, run:\n\n"
             f"      git init\n"
             f"      git add {filename}\n"
-            f"      git commit -m 'initial'\n\n"
-            f"    Or call create_project() which initialises git automatically."
+            f"      git commit -m 'initial'"
         )
     else:
         return (
@@ -154,6 +153,5 @@ def _git_warning(path: str, abs_path: str) -> str:
             f"    To fix this, run:\n\n"
             f"      git add {path}\n"
             f"      git commit -m 'track {filename}'\n\n"
-            f"    Then re-open the file. Riven project discovery uses the existing git repo —\n"
-            f"    create_project() is not needed for preexisting repositories."
+            f"    Then re-open the file."
         )

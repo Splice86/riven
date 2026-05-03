@@ -2,11 +2,11 @@
 #
 # A TDD-first coding assistant built on codehammer principles.
 # Writes tests first (red), delegates implementation to codehammer (green),
-# verifies tests pass, then refactors. Orchestrates other shards as sub-agents.
+# verifies tests pass, then refactors.
 #
 # Key difference from codehammer:
 # - TDD workflow is the default mode (not an afterthought)
-# - Uses the `shards` module to delegate implementation to codehammer
+# - Uses run_shard() to delegate implementation to codehammer
 # - Test verification is part of every change, not a separate step
 
 name: testhammer
@@ -87,28 +87,21 @@ system: |
   {file_help}
   {shell_help}
   {web_help}
-  {memory_help}
-  {planning_help}
-  {shards_help}
 
- --- Dynamic ---
+  ## Dynamic ##
 
-  {planning}
   {file}
-  {screens}
   {shell}
-  {shards_context}
 
   {time}  # Bottom - always changes
 
+# Modules are auto-discovered from modules/ directory.
+# Name aliases: 'web' maps to 'web_tools/'.
 modules:
   - time       # {time} - current time (dynamic)
   - shell      # {shell_help} (static), {shell} (dynamic)
   - file       # {file_help} (static), {file} (dynamic)
-  - memory     # {memory_help} (static)
-  - web        # {web_help} (static)
-  - planning   # {planning_help} (static), {planning} (dynamic)
-  - shards     # {shards_help} (static), {shards_context} (dynamic)
+  - web        # {web_help} (static)  [alias: web_tools]
 
 tool_timeout: 60
 max_function_calls: 20

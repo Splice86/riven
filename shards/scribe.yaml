@@ -52,28 +52,21 @@ system: |
   {file_help}
   {shell_help}
   {web_help}
-  {memory_help}
-  {planning_help}
-  {shards_help}
 
   --- Dynamic ---
 
-  {planning}
   {file}
-  {screens}
   {shell}
-  {shards_context}
 
   {time}  # Bottom - always changes
 
+# Modules are auto-discovered from modules/ directory.
+# Name aliases: 'web' maps to 'web_tools/'.
 modules:
   - time       # {time} - current time (dynamic)
   - shell      # {shell_help} (static), {shell} (dynamic)
   - file       # {file_help} (static), {file} (dynamic)
-  - memory     # {memory_help} (static)
-  - web        # {web_help} (static)
-  - planning   # {planning_help} (static), {planning} (dynamic)
-  - shards     # {shards_help} (static), {shards_context} (dynamic)
+  - web        # {web_help} (static)  [alias: web_tools]
 
 tool_timeout: 60
 max_function_calls: 30

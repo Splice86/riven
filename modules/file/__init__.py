@@ -20,12 +20,6 @@ from pathlib import Path
 from datetime import datetime
 
 from modules import CalledFn, ContextFn, Module, get_session_id
-from modules.memory_utils import _search_memories, _delete_memory, _set_memory
-
-# Re-export requests for backward compatibility with tests
-# Tests may mock modules.file.requests.post
-import requests as requests_module
-requests = requests_module
 
 # Import from submodules
 from modules.file.editor import (
@@ -33,7 +27,7 @@ from modules.file.editor import (
     FileEditor,
     Replacement,
     _atomic_write,
-    _atomic_write_sync,
+
     _file_type,
     _find_best_window,
     _generate_diff,
@@ -60,32 +54,16 @@ from modules.file.git import (
 )
 
 from modules.file.memory import (
+    _count_tokens,
     format_file_history,
     get_file_history,
-    get_open_files,
     hash_content,
     track_file_change,
 )
 
-# Screen subsystem
-from modules.file.screens import (
-    screen_bind,
-    screen_release,
-    screen_speak,
-    screen_status,
-    screen_highlight,
-)
-from modules.file.screens import (
-    broadcast_edit as _bc,
-    broadcast_release_for_path,
-    send_snapshots_for_path,
-    send_snapshot_to_uid,
-    register_routes as _register_screen_routes,
-)
-from modules.file.screens.constants import MEMORY_KEYWORD_PREFIX as SCREEN_KW_PREFIX
-from modules.file.screens import constants as _screen_const
+from modules.file.db import get_open_files
 
-from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword, build_search_query, PROP_FILENAME, PROP_PATH, PROP_LINE_START, PROP_LINE_END
+from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword
 
 
 # =============================================================================
@@ -94,76 +72,15 @@ from modules.file.constants import MEMORY_KEYWORD_PREFIX, make_open_file_keyword
 
 _file_editor = FileEditor()
 
-
-async def _broadcast_after_edit(path: str, session_id: str = "") -> None:
-    """Broadcast a file edit to bound screens.
-
-    Called after every successful edit. Errors are swallowed so they never
-    interfere with the edit operation.
-    """
-    if not session_id:
-        return
-    try:
-        from modules.file.memory import get_screen_uids_for_path
-        from modules.file.screens import broadcast_edit as _bc
-        uids = get_screen_uids_for_path(session_id, path)
-        if uids:
-            await _bc(path, uids)
-    except Exception as e:
-        import logging
-        logging.getLogger("modules.file").warning(f"Screen broadcast error: {e}")
-
-
-async def _broadcast_after_close(path: str, session_id: str = "") -> None:
-    """Broadcast a file close to screens bound to that path.
-
-    Called after a file is closed so screens can clear their content and go idle.
-    Errors are swallowed so they never interfere with the close operation.
-    """
-    if not session_id:
-        return
-    try:
-        from modules.file.screens import broadcast_release_for_path as _br
-        # Normalize path so it matches what was stored during open/screen_bind
-        abs_path = os.path.abspath(path)
-        await _br(abs_path)
-    except Exception as e:
-        import logging
-        logging.getLogger("modules.file").warning(f"Screen close broadcast error: {e}")
-
-
-async def _broadcast_after_open(path: str, session_id: str = "") -> None:
-    """Broadcast a file open to screens already bound to that path.
-
-    Called after a file is opened so any screen already watching the file
-    receives the current content. Errors are swallowed silently.
-    """
-    if not session_id:
-        return
-    try:
-        from modules.file.screens import send_snapshots_for_path as _ss
-        # Normalize path so it matches what was stored during open/screen_bind
-        abs_path = os.path.abspath(path)
-        await _ss(abs_path)
-    except Exception as e:
-        import logging
-        logging.getLogger("modules.file").warning(f"Screen open broadcast error: {e}")
-
-
 def register_routes(app) -> None:
-    """Register all file module routes (including screens) with the FastAPI app."""
+    """Register all file module routes with the FastAPI app."""
     from fastapi.staticfiles import StaticFiles
     import os
 
-    # Mount static files for screen.html
+    # Mount static files
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
         app.mount("/static/file", StaticFiles(directory=static_dir), name="file_static")
-
-    # Screen WebSocket and HTTP routes
-    from modules.file.screens import register_routes as _sr
-    _sr(app)
-    # Screen broadcasting is enabled lazily on first edit
 
 
 # =============================================================================
@@ -284,50 +201,14 @@ async def list_open_files() -> str:
 
 async def get_file_history(path: str = None) -> str:
     """Get file change history.
-    
+
     Args:
         path: Optional path to filter by (default: None = all files)
-        
-    Note: For backward compatibility, if path looks like a session ID
-    (contains 'session' or starts with 'test-'), it's treated as path filter.
     """
     session_id = get_session_id()
     from modules.file.memory import get_file_history as _get_file_history_impl
     memories = _get_file_history_impl(session_id, path)
     return format_file_history(memories)
-
-
-def screen_context() -> str:
-    """Context function that injects current screen status for the session.
-
-    Reads live screen data from the registry (sync, no session filter) so it
-    can be called from the synchronous context-building path.
-    """
-    from config import get
-    port = get('server.port', 8000)
-
-    try:
-        from modules.file.screens import get_all_screens_sync
-        screens = get_all_screens_sync()
-    except Exception:
-        return f"[Screens] No screens available. Open http://localhost:{port}/module/file/screens to register a screen."
-
-    if not screens:
-        return (
-            f"[Screens] No screens registered for this session.\n"
-            f"Open http://localhost:{port}/module/file/screens "
-            f"in a browser tab. Screen UIDs are shown in the [Screens] context block above."
-        )
-
-    lines = [f"[Screens] {len(screens)} screen(s) online for this session:"]
-    for s in screens:
-        status = f"bound to {s.bound_path}" if s.bound_path else "idle (no file)"
-        lines.append(f"  [{s.uid}] {s.client_name} — {status}")
-
-    lines.append("")
-    lines.append(f"Call screen_bind(\"<path\", \"<uid>\") to bind a screen to a file.")
-    lines.append(f"Call screen_highlight(\"<path>\", start, end) to scroll+flash a line range.")
-    return "\n".join(lines)
 
 
 def _file_help() -> str:
@@ -367,37 +248,7 @@ Every file open consumes context space. LLM context windows are finite.
 5. For large Python files, prefer open_function() over open_file() with wide line ranges
 6. As soon as you finish a task or switch goals, close_file() the now-irrelevant files
 
-### Screen Broadcasts (Live File View)
-Screens are browser windows (e.g., a workshop monitor or split-pane editor) that show a
-live view of the file being edited. Changes appear in the browser within ~1 second of
-each edit. Any number of screens can be open simultaneously, watching the same or different
-files.
-
-**One-time browser setup:**
-1. Open a new browser tab (or a separate browser window/monitor)
-2. Navigate to the `/module/file/screens` endpoint — the URL is in server config
-   — A screen card appears showing its UID (e.g. `screen-abc123`) and status (⚪ idle)
-3. Copy the UID from the browser — you'll pass it to screen_bind()
-4. Call `screen_bind("path/to/file.py", "screen-abc123")` to bind it
-5. The browser immediately shows the full file content; subsequent edits stream in live
-6. After binding, {screens} in context shows which screens are active
-
-**Screen lifecycle:**
-- A screen stays bound to its file across edits until you call screen_release()
-- To watch a different file on the same screen: bind it to the new path (binding transfers)
-- Browser tab closed and reopened: binding auto-restores (the server remembers per screen)
-- Screen UIDs are visible in the [Screens] context block at the top of the prompt
-
-**When to use screens:**
-- Useful when you want to verify edit results visually without re-reading file context
-- For read-only verification, the file context (injected by file_context()) is usually enough
-- Screens add value when editing large files or when visually confirming layout changes
-
-**Drawing attention to code:**
-After open_function(), consider calling screen_highlight(path, line_start, line_start)
-to scroll the browser screen to that function and flash it gold — useful when asking
-the user to look at a specific result. Check {screens} after binding to confirm
-the screen is online and watching the right file."""
+"""
 
 
 def _count_tokens(text: str) -> int:
@@ -432,82 +283,78 @@ def file_context() -> str:
     for injection into the system prompt.
     """
     import os
-    
+
     session_id = get_session_id()
-    query = build_search_query()
-    memories = _search_memories(session_id, query, limit=100)
-    
-    if not memories:
+    records = get_open_files(session_id, keyword="open_file:", limit=100)
+
+    if not records:
         return "[File Context] No open files in context."
-    
+
     # Show total count upfront so model knows how much context there is
-    total_files = len(memories)
+    total_files = len(records)
     lines: list[str] = [
         f"[File Context] {total_files} file(s) open in context:",
         "=" * 60,
         "",
     ]
-    
+
     # Track total tokens across all open files
     total_tokens = 0
-    file_contents: list[tuple[str, str, int]] = []  # (path, content, tokens)
-    
-    for i, mem in enumerate(memories, 1):
-        props = mem.get("properties", {})
-        path = props.get(PROP_PATH, "unknown")
-        line_start = int(props.get(PROP_LINE_START, 0))
-        line_end = props.get(PROP_LINE_END, None)
-        
+
+    for i, rec in enumerate(records, 1):
+        path = rec.get("path", "unknown")
+        line_start = int(rec.get("line_start", 0) or 0)
+        line_end = rec.get("line_end")  # None = to end, int = specific line
+
         # File header with full path and line range
-        if line_end is None or line_end == "*" or line_end == "":
+        if line_end is None:
             range_label = f"lines {line_start}+ (to end)"
         else:
-            line_end = int(line_end)
             range_label = f"lines {line_start}-{line_end}"
-        
+
         lines.append(f"[File {i}/{total_files}] {path}")
         lines.append(f"  Range: {range_label}")
         lines.append("  " + "-" * 55)
-        
+
         # Read the actual file content
         try:
             with open(path, 'r', encoding='utf-8', errors='replace') as f:
                 all_lines = f.readlines()
-            
+
             total_lines_in_file = len(all_lines)
-            
+
             # Handle line range
-            if line_end is None or line_end == "*" or line_end == "":
+            if line_end is None:
                 file_content = ''.join(all_lines[line_start:])
             else:
                 file_content = ''.join(all_lines[line_start:line_end])
-            
+
             # Truncate very long content to avoid context overflow
             MAX_LINES = 1200
             content_lines = file_content.split('\n')
             num_lines_in_context = len(content_lines)
-            
+
             if num_lines_in_context > MAX_LINES:
                 file_content = '\n'.join(content_lines[:MAX_LINES])
                 lines.append(f"  NOTE: Content truncated at {MAX_LINES} lines of {num_lines_in_context} total. Use open_function() to see specific functions.")
             else:
                 lines.append(f"  Showing {num_lines_in_context} lines of {total_lines_in_file} total lines in file.")
-            
+
             # Count tokens for this file's content
             file_tokens = _count_tokens(file_content)
             total_tokens += file_tokens
-            
+
             lines.append(f"  Tokens: ~{file_tokens}")
             lines.append("")
             lines.append(file_content)
-            
+
         except Exception as e:
             lines.append(f"  [ERROR reading file: {e}]")
-        
+
         lines.append("")
         lines.append("=" * 60)
         lines.append("")
-    
+
     # Check token limit and add warning if exceeded
     token_limit = _get_token_limit()
     if token_limit > 0 and total_tokens > token_limit:
@@ -515,10 +362,10 @@ def file_context() -> str:
         lines.insert(4, f"[WARNING] Total tokens ({total_tokens}) exceeds file.token_limit ({token_limit}).")
         lines.insert(5, f"         Consider closing some files with close_file() to free up context.")
         lines.insert(6, f"")
-    
+
     # Add total token count at the top
     lines.insert(3, f"[Token estimate] ~{total_tokens} tokens total (limit: {token_limit or 'disabled'})")
-    
+
     return "\n".join(lines)
 
 
@@ -761,73 +608,7 @@ def get_module() -> Module:
                 },
                 fn=chdir,
             ),
-            CalledFn(
-                name="screen_bind",
-                description="Bind a screen to a file for live edit broadcasts.\n\nOnce bound, the screen receives a full file snapshot, then incremental diffs\non every edit. The screen will remain bound until explicitly released.\n\nArgs:\n- path: Path to the file\n- screen_uid: UID of the screen to bind (from screen_list())\n- section: Optional line range (e.g., '0-30') for partial view",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Path to the file"},
-                        "screen_uid": {"type": "string", "description": "Screen UID shown in the [Screens] context block above"},
-                        "section": {"type": "string", "description": "Line range (e.g., '0-30') or None for full file"}
-                    },
-                    "required": ["path", "screen_uid"]
-                },
-                fn=screen_bind,
-            ),
-            CalledFn(
-                name="screen_release",
-                description="Release a screen from its current binding.\n\nArgs:\n- screen_uid: UID of the screen to release",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "screen_uid": {"type": "string", "description": "Screen UID"}
-                    },
-                    "required": ["screen_uid"]
-                },
-                fn=screen_release,
-            ),
-            CalledFn(
-                name="screen_status",
-                description="Get detailed status for a specific screen.\n\nArgs:\n- screen_uid: UID of the screen to check",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "screen_uid": {"type": "string", "description": "Screen UID"}
-                    },
-                    "required": ["screen_uid"]
-                },
-                fn=screen_status,
-            ),
-            CalledFn(
-                name="screen_highlight",
-                description="Highlight a line range on all screens showing a file.\n\nRiven uses this to draw the user's attention to a specific section.\nThe screen scrolls to the range, flashes the lines, and optionally shows\na toast with the label.\n\nArgs:\n- path: Path to the file to highlight in\n- start: First line to highlight (1-based, inclusive)\n- end: Last line to highlight (1-based, inclusive)\n- label: Optional toast message to show alongside the highlight\n- scroll: Whether to auto-scroll to the range (default True)",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Path to the file"},
-                        "start": {"type": "integer", "description": "First line to highlight (1-based, inclusive)"},
-                        "end": {"type": "integer", "description": "Last line to highlight (1-based, inclusive)"},
-                        "label": {"type": "string", "description": "Optional toast message to show"},
-                        "scroll": {"type": "boolean", "description": "Whether to auto-scroll to the range"},
-                    },
-                    "required": ["path", "start", "end"],
-                },
-                fn=screen_highlight,
-            ),
-            CalledFn(
-                name="screen_speak",
-                description="Send a formatted markdown message to all screens showing a file.\n\nRiven uses this to communicate structured information directly on the\nscreen — supports **bold**, `inline code`, ```code blocks```, and\nother standard markdown.\n\nUse this instead of plain text when explaining code, pointing out\npatterns, or giving multi-line examples.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Path to the file this message relates to"},
-                        "text": {"type": "string", "description": "Markdown-formatted message (bold, code blocks, etc.)"},
-                    },
-                    "required": ["path", "text"],
-                },
-                fn=screen_speak,
-            ),
+
             # NOTE: read_file is intentionally not exposed as a tool.
             # Files should be opened via open_file() and their contents
             # will be automatically injected into the system prompt via file_context().
@@ -843,10 +624,7 @@ def get_module() -> Module:
                 tag="file",
                 fn=file_context,
             ),
-            ContextFn(
-                tag="screens",
-                fn=screen_context,
-            ),
+
         ],
     )
 
@@ -884,7 +662,6 @@ __all__ = [
     "_file_editor",
     # Helpers
     "_atomic_write",
-    "_atomic_write_sync",
     "_file_type",
     "_find_best_window",
     "_generate_diff",
@@ -906,12 +683,4 @@ __all__ = [
     "_git_status",
     "_git_warning",
     "_git_status_summary",
-    # Screen broadcast functions
-    "screen_bind",
-    "screen_release",
-    "screen_status",
-    "screen_highlight",
-    "broadcast_edit",
-    "send_snapshot_to_uid",
-    "_broadcast_after_edit",
 ]

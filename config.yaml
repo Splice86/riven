@@ -17,22 +17,6 @@ file:
   # Set to 0 to disable token checking.
   token_limit: 8000
 
-# Memory API settings
-memory_api:
-  db_name: "riven"
-  url: "http://127.0.0.1:8030"  # Template fallback
-  # Prepend [YYYY-MM-DD HH:MM] timestamp to context content
-  include_timestamp: false
-
-# Context settings
-context:
-  # Max top-level summaries to include (summaries summarize older messages)
-  max_summaries: 3
-  # Trigger summarization when unsummarized count reaches this (set on memory API)
-  trigger_limit: 40
-  # Keep at least this many unsummarized after summary (set on memory API)
-  min_keep: 20
-
 # Named LLM configs (URLs here are templates, secrets in secrets.yaml)
 # Shards reference these by name: llm_config: primary
 llm:
@@ -67,8 +51,7 @@ modules:
   - time
   - file
   - shell
-  - memory
-  - web
+  - web_tools
 
 # Debug settings
 debug_dir: "~/.riven/logs"

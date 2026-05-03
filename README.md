@@ -237,9 +237,16 @@ riven/
 ├── secrets.yaml       # API keys (gitignored)
 ├── context.py         # Context manager + memory client
 ├── process_manager.py # Process management for core instances
-├── webui/
-│   ├── index.html     # Web UI chat interface
-│   └── style.css      # Chat UI styles
+├── web/
+│   ├── chat/          # Riven chat UI
+│   │   ├── index.html     # Web UI chat interface
+│   │   └── style.css      # Chat UI styles
+│   └── editor/        # File editor UI
+│       ├── api.py         # Editor API endpoints
+│       ├── config.py      # Editor configuration
+│       ├── editor.py      # Editor logic
+│       └── static/
+│           └── editor.html # Editor UI
 ├── shards/
 │   ├── codehammer.yaml  # The coding shard config
 │   ├── scribe.yaml      # Documentation shard

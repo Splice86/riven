@@ -310,7 +310,7 @@ class _Config:
             3. Default passed here
 
         Args:
-            key: Dot-separated key path (e.g. "memory_api.url", "llm.model")
+            key: Dot-separated key path (e.g. "llm.model", "debug_snapshots")
             default: Fallback if key not found anywhere
 
         Returns:
@@ -350,9 +350,9 @@ class _Config:
 def _get_via_env(key: str) -> Any:
     """Get a config value via env var matching.
 
-    key "memory_api.url" → check RV_MEMORY_API__URL
+    e.g. key "llm.model" → check RV_LLM__MODEL
     """
-    # memory_api.url -> RV_MEMORY_API__URL
+    # llm.model -> RV_LLM__MODEL
     env_key = "RV_" + key.upper().replace(".", "__")
     if env_key in os.environ:
         return _coerce(os.environ[env_key])

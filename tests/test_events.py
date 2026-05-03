@@ -1,16 +1,24 @@
 """Tests for events.py — pub/sub event bus."""
 
+"""Tests for events.py — pub/sub event bus."""
+
 import asyncio
+from unittest.mock import MagicMock
+
 import pytest
+import pytest_asyncio
+
 import events as evt_module
 
 
 @pytest.fixture(autouse=True)
-def clear_handlers():
-    """Reset global _handlers between tests."""
+def clean_events_state():
+    """Reset global _handlers and _locks between tests."""
     evt_module._handlers.clear()
+    evt_module._locks.clear()
     yield
     evt_module._handlers.clear()
+    evt_module._locks.clear()
 
 
 class TestSubscribe:
@@ -204,3 +212,197 @@ class TestRunAsync:
         import time
         time.sleep(0.1)
         assert received == ["ran"]
+
+
+class TestRegisterHandlerAlias:
+    """Test that register_handler / unregister_handler are aliases for subscribe / unsubscribe."""
+
+    def test_register_handler_is_subscribe(self):
+        def handler(**kwargs):
+            pass
+
+        evt_module.register_handler("alias_event", handler)
+        assert "alias_event" in evt_module._handlers
+        assert len(evt_module._handlers["alias_event"]) == 1
+
+    def test_unregister_handler_is_unsubscribe(self):
+        def handler(**kwargs):
+            pass
+
+        evt_module.register_handler("alias_event", handler)
+        evt_module.unregister_handler("alias_event", handler)
+        assert "alias_event" not in evt_module._handlers
+
+
+# =============================================================================
+# Lock Registry Tests
+# =============================================================================
+
+class TestGetLockState:
+    """Test get_lock_state() queries."""
+
+    def test_get_lock_state_unlocked_returns_none(self):
+        assert evt_module.get_lock_state("/unlocked/file.py") is None
+
+    @pytest.mark.asyncio
+    async def test_get_lock_state_locked_returns_lock_info(self):
+        async with evt_module.acquire_lock("/locked/file.py", "holder-1", timeout=5.0, context="test"):
+            state = evt_module.get_lock_state("/locked/file.py")
+            assert state is not None
+            assert state.holder == "holder-1"
+            assert state.context == "test"
+
+    @pytest.mark.asyncio
+    async def test_get_lock_state_returns_none_after_release(self):
+        async with evt_module.acquire_lock("/tmp/file.py", "holder-x", timeout=5.0, context="test"):
+            assert evt_module.get_lock_state("/tmp/file.py") is not None
+        # lock auto-released here
+        assert evt_module.get_lock_state("/tmp/file.py") is None
+
+
+class TestAcquireLock:
+    """Test acquire_lock() semantics."""
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_returns_lock_info(self):
+        async with evt_module.acquire_lock("/file.py", "alice", timeout=5.0, context="replace_text"):
+            pass  # lock acquired and released cleanly
+        # verify lock is released
+        assert evt_module.get_lock_state("/file.py") is None
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_fires_lock_acquired_event(self):
+        received = []
+
+        def handler(path=None, holder=None, context=None, **kw):
+            received.append({"path": path, "holder": holder, "context": context})
+
+        evt_module.register_handler("lock_acquired", handler)
+
+        async with evt_module.acquire_lock("/event/file.py", "bob", timeout=5.0, context="batch_edit"):
+            pass
+
+        assert len(received) == 1
+        assert received[0]["path"] == "/event/file.py"
+        assert received[0]["holder"] == "bob"
+        assert received[0]["context"] == "batch_edit"
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_blocks_other_holder(self):
+        """A second holder trying to acquire the same lock should timeout."""
+        async with evt_module.acquire_lock("/contested.py", "holder-1", timeout=5.0, context="test"):
+            try:
+                async with evt_module.acquire_lock("/contested.py", "holder-2", timeout=0.1, context="test"):
+                    assert False, "Expected TimeoutError"
+            except asyncio.TimeoutError:
+                pass  # expected
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_same_holder_reentrant(self):
+        """Same holder re-acquiring the same path returns the same LockInfo (not a
+        new wait). This is the idempotent re-acquire pattern that editor.py uses
+        for batch_edit then replace_text on the same session.
+        """
+        # Manually step through __aenter__ / __aexit__ to test re-entrancy without
+        # the outer context manager releasing the lock prematurely.
+        cm1 = evt_module.acquire_lock("/reentrant.py", "session-abc", timeout=5.0, context="replace_text")
+        result1 = await cm1.__aenter__()
+        cm2 = evt_module.acquire_lock("/reentrant.py", "session-abc", timeout=5.0, context="replace_text")
+        result2 = await cm2.__aenter__()
+        assert result1 is result2  # same LockInfo, re-entrant
+        await cm2.__aexit__(None, None, None)
+        await cm1.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_fires_on_waiter_timeout(self):
+        """Waiters should receive a TimeoutError with holder info."""
+        async with evt_module.acquire_lock("/timeout.py", "holder-1", timeout=5.0, context="test"):
+            try:
+                async with evt_module.acquire_lock("/timeout.py", "holder-2", timeout=0.05, context="test"):
+                    pass
+            except asyncio.TimeoutError as e:
+                assert "timeout" in str(e).lower()
+                assert "holder-1" in str(e) or "/timeout.py" in str(e)
+
+
+class TestReleaseLock:
+    """Test release_lock() semantics."""
+
+    @pytest.mark.asyncio
+    async def test_release_lock_returns_true_on_success(self):
+        async with evt_module.acquire_lock("/release.py", "holder-1", timeout=5.0, context="test"):
+            result = await evt_module.release_lock("/release.py", "holder-1")
+            assert result is True
+        # lock was already released, so double-release should be False
+        assert await evt_module.release_lock("/release.py", "holder-1") is False
+
+    @pytest.mark.asyncio
+    async def test_release_lock_fires_lock_released_event(self):
+        received = []
+
+        def handler(path=None, holder=None, context=None, **kw):
+            received.append({"path": path, "holder": holder, "context": context})
+
+        # Register before acquiring so we capture the lock_acquired event too
+        evt_module.register_handler("lock_acquired", lambda **kw: None)
+        evt_module.register_handler("lock_released", handler)
+
+        async with evt_module.acquire_lock("/released.py", "charlie", timeout=5.0, context="delete_file"):
+            received.clear()  # clear lock_acquired so we only check lock_released
+
+        assert len(received) == 1
+        assert received[0]["path"] == "/released.py"
+        assert received[0]["holder"] == "charlie"
+        assert received[0]["context"] == "delete_file"
+
+    @pytest.mark.asyncio
+    async def test_release_lock_wrong_holder_returns_false(self):
+        async with evt_module.acquire_lock("/locked.py", "alice", timeout=5.0, context="test"):
+            result = await evt_module.release_lock("/locked.py", "bob")  # wrong holder
+            assert result is False
+            # Lock should still be held by alice
+            assert evt_module.get_lock_state("/locked.py") is not None
+
+    @pytest.mark.asyncio
+    async def test_release_lock_nonexistent_returns_false(self):
+        result = await evt_module.release_lock("/never/existed.py", "nobody")
+        assert result is False
+
+
+class TestGetAllLocks:
+    """Test get_all_locks()."""
+
+    def test_get_all_locks_empty_at_start(self):
+        assert evt_module.get_all_locks() == {}
+
+    @pytest.mark.asyncio
+    async def test_get_all_locks_returns_all_held_locks(self):
+        async with evt_module.acquire_lock("/file1.py", "holder-1", timeout=5.0, context="test"):
+            async with evt_module.acquire_lock("/file2.py", "holder-2", timeout=5.0, context="test"):
+                all_locks = evt_module.get_all_locks()
+                assert "/file1.py" in all_locks
+                assert "/file2.py" in all_locks
+                assert all_locks["/file1.py"].holder == "holder-1"
+                assert all_locks["/file2.py"].holder == "holder-2"
+
+
+class TestClearLocksAndHandlers:
+    """Test clear() removes locks as well as handlers."""
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_locks(self):
+        async with evt_module.acquire_lock("/clearme.py", "alice", timeout=5.0, context="test"):
+            assert evt_module.get_lock_state("/clearme.py") is not None
+            evt_module.clear()
+            assert evt_module.get_lock_state("/clearme.py") is None
+
+    @pytest.mark.asyncio
+    async def test_clear_specific_event_does_not_remove_locks(self):
+        def handler(**kwargs):
+            pass
+
+        evt_module.register_handler("some_event", handler)
+        async with evt_module.acquire_lock("/keepme.py", "alice", timeout=5.0, context="test"):
+            evt_module.clear("some_event")
+            # Lock should still be held
+            assert evt_module.get_lock_state("/keepme.py") is not None

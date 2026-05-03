@@ -1,13 +1,12 @@
 """The core agent loop - LLM calls with function execution.
-
 Architecture:
-- Memory API: stores conversation history (user, assistant, tool messages)
-- Core: only takes session_id, gets history from Memory, runs loop, stores responses to Memory
-- Harness: orchestrates - stores user message to Memory before calling Core
+- Context DB (db.ContextDB): stores conversation history (user, assistant, tool messages)
+- Core: takes session_id, gets history from DB, runs loop, stores responses to DB
+- Harness: orchestrates - stores user message to DB before calling Core
 
 Flow:
-  prompt -> memory api + activate core with session ID
-  -> context built from memory API
+  prompt -> db + activate core with session ID
+  -> context built from db
   -> thinking
   -> add context
   -> tool call
@@ -30,8 +29,9 @@ from datetime import datetime, timezone
 from typing import Callable, AsyncIterator
 
 from openai import AsyncOpenAI
-from context import MemoryClient, ContextManager, _json_safe
+from context import ContextManager, _json_safe
 from config import get
+from db import ContextDB
 from modules import registry, Module, CalledFn, ContextFn, _session_id
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,6 @@ def _debug(step: str, session_id: str = None) -> None:
     ts = time.time()
     sid = f"[{session_id[:8]}]" if session_id else "[--------]"
     print(f"[DEBUG {ts:.3f}] {sid} {step}", flush=True)
-
 
 # =============================================================================
 # Function - plain function descriptor
@@ -146,8 +145,8 @@ class Core:
     Session ID is passed per-call and automatically available to all
     module functions via context_var.
     
-    IMPORTANT: Memory API must be running. User's prompt should be stored
-    to Memory API BEFORE calling run_stream(). This method only takes session_id.
+    IMPORTANT: Context DB must be available. User's prompt should be stored
+    to the context DB BEFORE calling run_stream(). This method only takes session_id.
     """
 
     def __init__(
@@ -170,27 +169,100 @@ class Core:
         self._cancelled = False
         self._client = AsyncOpenAI(base_url=self._llm_url, api_key=self._llm_api_key)
 
-        # Memory API settings from shard
-        memory_api = shard.get('memory_api', {})
-        self._memory_url = memory_api.get('url')
-
         # Tool result truncation settings from shard
         tool_result_max_lines = shard.get('tool_result_max_lines', 200)
         tool_result_char_per_line = shard.get('tool_result_char_per_line', 150)
 
-        # Context manager handles all memory API + message processing
+        # Context manager handles message processing
         self._ctx = ContextManager(
-            memory_url=self._memory_url,
             tool_result_max_lines=tool_result_max_lines,
             tool_result_char_per_line=tool_result_char_per_line,
         )
 
+    def _discover_modules(self) -> list[str]:
+        """Scan modules/ directory and return a resolved list of module names.
+        
+        Discovers all packages (directories with __init__.py) and sub-packages.
+        Resolves name aliases so config names like 'web' map to folder names
+        like 'web_tools'. Skips modules that don't exist.
+        """
+        import os
+        import importlib.util
+
+        # Name aliasing: config name -> actual folder name
+        ALIASES = {
+            'web': 'web_tools',
+        }
+
+        modules_dir = os.path.join(os.path.dirname(__file__), 'modules')
+        discovered = []
+
+        for entry in os.scandir(modules_dir):
+            if not entry.is_dir():
+                continue
+            if entry.name == '__pycache__':
+                continue
+            if not os.path.isfile(os.path.join(entry.path, '__init__.py')):
+                continue
+
+            # Recurse into sub-packages (e.g., modules/file/ sub-folders with __init__.py)
+            for sub_entry in os.scandir(entry.path):
+                if not sub_entry.is_dir():
+                    continue
+                if not os.path.isfile(os.path.join(sub_entry.path, '__init__.py')):
+                    continue
+                folder_name = f"{entry.name}/{sub_entry.name}"
+                # Only include if it has get_module
+                if self._folder_has_get_module(os.path.join(modules_dir, folder_name)):
+                    discovered.append(folder_name)
+
+            # Top-level packages (e.g., modules/shell/, modules/file/)
+            if self._folder_has_get_module(entry.path):
+                discovered.append(entry.name)
+
+        # Apply aliases from shard config, then resolve
+        resolved = []
+        requested = self._module_names.copy()
+        for name in requested:
+            if name in ALIASES:
+                actual = ALIASES[name]
+                _debug(f"_discover_modules: alias '{name}' -> '{actual}'", None)
+                if actual not in resolved:
+                    resolved.append(actual)
+            elif name in resolved:
+                pass  # Already added
+            else:
+                # Check if the requested name is a valid folder name
+                if name in discovered:
+                    resolved.append(name)
+                else:
+                    _debug(f"_discover_modules: '{name}' not found in modules/ — skipping", None)
+
+        return resolved
+
+    def _folder_has_get_module(self, folder_path: str) -> bool:
+        """True if a package folder has a get_module callable in its __init__.py."""
+        import importlib.util
+        init_path = os.path.join(folder_path, '__init__.py')
+        if not os.path.isfile(init_path):
+            return False
+        try:
+            spec = importlib.util.spec_from_file_location('_discover_tmp', init_path)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return hasattr(mod, 'get_module')
+        except Exception:
+            pass
+        return False
+
     def _load_modules(self, session_id: str = None) -> None:
-        """Load modules listed in shard."""
-        _debug(f"_load_modules: clearing registry, loading {self._module_names}", session_id)
+        """Load modules discovered from modules/ directory, filtered by shard config."""
+        resolved_names = self._discover_modules()
+        _debug(f"_load_modules: resolved modules = {resolved_names}", session_id)
         registry._modules.clear()
         loaded, failed = [], []
-        for name in self._module_names:
+        for name in resolved_names:
             _debug(f"_load_modules: importing modules.{name}", session_id)
             try:
                 mod = __import__(f'modules.{name}', fromlist=['get_module'])
@@ -277,8 +349,8 @@ class Core:
 
         return FunctionResult(call_id=call.id, name=call.name, content=content, error=error)
 
-    def _store_assistant(self, memory: MemoryClient, assistant_msg: dict, session_id: str) -> None:
-        """Store assistant message to memory.
+    def _store_assistant(self, db: ContextDB, assistant_msg: dict, session_id: str) -> None:
+        """Store assistant message to context DB.
         
         Handles tool_calls embedding and logging of failures.
         Storage happens before yielding to ensure correct message ordering.
@@ -299,13 +371,19 @@ class Core:
         
         if storage_content or tool_calls:
             try:
-                memory.add_context(role, storage_content, session=session_id)
+                db.add(role, storage_content, session=session_id)
             except Exception as e:
-                logger.warning(f"Failed to store assistant message to memory: {e}")
+                logger.warning(f"Failed to store assistant message: {e}")
         
         # DEBUG: log assistant messages with empty or near-empty content
         if tool_calls and not content:
             _debug(f"_store_assistant: WARNING - tool-call-only message (no text), id={tool_calls[0].get('id','?')[:8]}", session_id)
+
+    def _get_db(self) -> ContextDB:
+        """Lazily create a ContextDB instance."""
+        if not hasattr(self, "_db"):
+            self._db = ContextDB()
+        return self._db
 
     def _save_llm_context(self, api_messages: list[dict], session_id: str) -> None:
         """Save the full LLM request context to a timestamped file.
@@ -363,7 +441,7 @@ class Core:
         to the harness. The harness decides when to call run_stream() again.
 
         Args:
-            session_id: Session ID for this conversation. Memory API must contain
+            session_id: Session ID for this conversation. Context DB must contain
                         the user's prompt before this is called.
         
         Yields dicts:
@@ -376,13 +454,10 @@ class Core:
             {"done": True}            - loop complete
             {"error": str}            - error
         """
-        import requests
-        
+        db = self._get_db()
+
         self._cancelled = False
         _debug("run_stream: starting turn", session_id)
-
-        # Memory client for this session
-        memory = self._ctx.memory_client
 
         # Set session ID in context var FIRST so all module operations can access it
         token = _session_id.set(session_id)
@@ -405,31 +480,20 @@ class Core:
                 for f in functions
             ]
 
-            # --- Get current context from Memory API ---
+            # --- Get current context from DB ---
             context_error = None
-            _debug("run_stream: fetching history from memory API", session_id)
+            _debug("run_stream: fetching history from context DB", session_id)
             _mem_fetch_start = time.time()
             try:
-                history = memory.get_context(session=session_id)
+                history = db.get_history(session=session_id)
                 _debug(f"run_stream: history received ({len(history)} msgs, took {time.time()-_mem_fetch_start:.3f}s)", session_id)
-            except requests.exceptions.ConnectionError as e:
-                context_error = str(e)
-                history = []
-                _debug(f"run_stream: Memory API connection failed (took {time.time()-_mem_fetch_start:.3f}s): {context_error}", session_id)
-                error_msg = f"Memory API connection failed: {context_error}. Ensure memory-api is running at {self._memory_url or 'http://localhost:8030'}."
-                try:
-                    memory.add_context("tool", error_msg, session=session_id)
-                except Exception:
-                    pass
-                yield {"error": error_msg}
-                return
             except Exception as e:
                 context_error = str(e)
                 history = []
-                _debug(f"run_stream: Memory API error (took {time.time()-_mem_fetch_start:.3f}s): {context_error}", session_id)
-                error_msg = f"Memory API error: {context_error}"
+                _debug(f"run_stream: context DB error (took {time.time()-_mem_fetch_start:.3f}s): {context_error}", session_id)
+                error_msg = f"Context database error: {context_error}"
                 try:
-                    memory.add_context("tool", error_msg, session=session_id)
+                    db.add("tool", error_msg, session=session_id)
                 except Exception:
                     pass
                 yield {"error": error_msg}
@@ -543,7 +607,7 @@ class Core:
                 error_msg = f"LLM call failed: {type(e).__name__}: {e}. Session={session_id}"
                 _debug(f"run_stream: LLM call failed: {error_msg}", session_id)
                 try:
-                    memory.add_context("tool", error_msg, session=session_id)
+                    db.add("tool", error_msg, session=session_id)
                 except Exception:
                     pass
                 yield {"error": error_msg}
@@ -559,7 +623,7 @@ class Core:
                 if self._cancelled:
                     error_msg = f"Execution was cancelled by user. Session={session_id}"
                     try:
-                        memory.add_context("tool", error_msg, session=session_id)
+                        db.add("tool", error_msg, session=session_id)
                     except Exception:
                         pass
                     yield {"error": error_msg}
@@ -603,7 +667,7 @@ class Core:
                 _debug("run_stream: no tool calls, done", session_id)
                 assistant_msg["role"] = "assistant"
                 if assistant_msg.get("content", "").strip():
-                    self._store_assistant(memory, assistant_msg, session_id)
+                    self._store_assistant(db, assistant_msg, session_id)
                     safe_msg = _json_safe(assistant_msg)
                     yield {"assistant": safe_msg}
                 yield {"done": True}
@@ -613,7 +677,7 @@ class Core:
             # --- Store assistant message BEFORE executing tools ---
             _debug(f"run_stream: executing {len(calls)} tool call(s): {[c.name for c in calls]}", session_id)
             assistant_msg["role"] = "assistant"
-            self._store_assistant(memory, assistant_msg, session_id)
+            self._store_assistant(db, assistant_msg, session_id)
 
             # --- Execute tool calls ---
             results: list[FunctionResult] = []
@@ -621,18 +685,18 @@ class Core:
                 if self._cancelled:
                     error_msg = f"Execution was cancelled by user. Session={session_id}"
                     try:
-                        memory.add_context("error", error_msg, session=session_id)
+                        db.add("error", error_msg, session=session_id)
                     except Exception as store_err:
-                        logger.warning(f"Failed to store cancel error to memory: {store_err}")
+                        logger.warning(f"Failed to store cancel error: {store_err}")
                     yield {"error": error_msg}
                     return
 
                 if len(results) + 1 > self._max_function_calls:
                     error_msg = f"Max function calls reached ({self._max_function_calls}). Session={session_id}"
                     try:
-                        memory.add_context("tool", error_msg, session=session_id)
+                        db.add("tool", error_msg, session=session_id)
                     except Exception as store_err:
-                        logger.warning(f"Failed to store max-calls error to memory: {store_err}")
+                        logger.warning(f"Failed to store max-calls error: {store_err}")
                     yield {"error": error_msg}
                     return
 
@@ -656,10 +720,15 @@ class Core:
                 }}
 
                 # Store tool result to memory API
-                _debug(f"run_stream: storing tool result to memory API", session_id)
+                # Guard against empty content - MiniMax rejects messages with no content
+                if not result_content:
+                    result_content = "(no output)"
+                    _debug(f"run_stream: tool result was empty, using '(no output)' instead", session_id)
+                
+                _debug(f"run_stream: storing tool result to context DB", session_id)
                 _mem_store_start = time.time()
                 try:
-                    memory.add_context(
+                    db.add(
                         "tool",
                         result_content,
                         session=session_id,
@@ -668,7 +737,7 @@ class Core:
                     )
                     _debug(f"run_stream: tool result stored ({time.time()-_mem_store_start:.3f}s)", session_id)
                 except Exception as e:
-                    logger.warning(f"Failed to store tool result to memory: {e}")
+                    logger.warning(f"Failed to store tool result: {e}")
 
             # --- Yield assistant message ---
             safe_assistant_msg = _json_safe(assistant_msg)

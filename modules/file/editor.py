@@ -29,65 +29,70 @@ except ImportError:
     # Running as standalone module
     from config import get as config_get
 
+from .code_parser import (
+    CodeDefinition,
+    _extract_code_definitions,
+    _extract_definition_source,
+    _find_definitions_by_name,
+)
+from .constants import (
+    MEMORY_KEYWORD_PREFIX,
+    make_open_file_keyword,
+    match_open_file_keyword,
+)
+from .db import (
+    set_open_file,
+    get_open_files,
+    delete_open_file,
+    delete_open_file_by_path,
+    delete_all_open_files,
+    get_open_file_by_keyword,
+)
+from .memory import (
+    format_file_history,
+    get_file_history,
+    hash_content,
+    track_file_change,
+    _count_tokens,
+)
+from config import RIVEN_DIR, find_project_root
+
+# ─── Events (optional — graceful fallback if not running in Riven process) ────
 try:
-    from .code_parser import (
-        CodeDefinition,
-        _extract_code_definitions,
-        _extract_definition_source,
-        _find_definitions_by_name,
-    )
-    from .constants import (
-        MEMORY_KEYWORD_PREFIX,
-        make_open_file_keyword,
-        match_open_file_keyword,
-        PROP_FILENAME,
-        PROP_PATH,
-        PROP_LINE_START,
-        PROP_LINE_END,
-    )
-    from .memory import format_file_history, get_file_history, get_open_files, hash_content, track_file_change
-    from ..project import is_riven_project
+    from events import acquire_lock, release_lock, publish as _events_publish
 except ImportError:
-    # Running as standalone module
-    from code_parser import (
-        CodeDefinition,
-        extract_code_definitions,
-        extract_definition_source,
-        find_definitions_by_name,
-    )
-    from constants import (
-        MEMORY_KEYWORD_PREFIX,
-        make_open_file_keyword,
-        match_open_file_keyword,
-        PROP_FILENAME,
-        PROP_PATH,
-        PROP_LINE_START,
-        PROP_LINE_END,
-    )
-    from memory import format_file_history, get_file_history, get_open_files, hash_content, track_file_change
-    from project import is_riven_project
+    # Standalone use: no-op fallbacks
+    async def _dummy_lock(*a, **k): yield  # type: ignore
+    acquire_lock = lambda *a, **k: _dummy_lock(*a, **k)  # type: ignore
+    release_lock = lambda *a, **k: None  # type: ignore
+    _events_publish = lambda *a, **k: None  # type: ignore
+    _REL_PATH = None  # type hint only
+
+
+def _rel_path(abs_path: str) -> str:
+    """Return a file path relative to the project root, or the absolute path if
+    project root cannot be determined."""
+    try:
+        root = find_project_root()
+        return os.path.relpath(abs_path, root)
+    except Exception:
+        return abs_path
+
+
+def _is_riven_project(from_path: str | None = None) -> bool:
+    """True if from_path or any parent has a .riven/ directory."""
+    root = find_project_root(from_path)
+    return root is not None and os.path.isdir(os.path.join(root, RIVEN_DIR))
 
 logger = logging.getLogger(__name__)
 
 
-def _count_tokens(text: str) -> int:
-    """Count tokens in text using tiktoken if available, else rough estimate."""
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except (ImportError, Exception):
-        # Rough fallback: ~4 chars per token for typical code/text
-        return len(text) // 4
-
-
 def _warn_no_riven_project(abs_path: str) -> str | None:
     """Return a warning if abs_path is not inside a Riven project, else None."""
-    if not is_riven_project(abs_path):
+    if not _is_riven_project(abs_path):
         return (
             f"Not inside a Riven project — goals, plans, and project metadata are not available.\n"
             f"Working directory: {os.path.dirname(abs_path)}\n"
-            f"Run create_project('{os.path.dirname(abs_path)}') to initialize one.\n"
             f"File operations will still work, but goal tracking will be disabled."
         )
     return None
@@ -143,13 +148,10 @@ class Replacement:
 # Robustness Helpers
 # =============================================================================
 
-def _atomic_write_sync(path: str, content: str) -> None:
-    """Synchronous atomic file write (file I/O only, no broadcast).
+def _atomic_write(path: str, content: str) -> None:
+    """Write content atomically using temp file + rename.
 
-    This is a pure-sync version for use in tests and any context where
-    async/await is not needed. The production _atomic_write is async and
-    handles broadcasting. This function provides the core atomic write
-    logic without the async overhead.
+    Uses a temp file in the same directory to ensure atomicity on POSIX systems.
     """
     dir_path = os.path.dirname(path) or '.'
     fd, temp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp')
@@ -161,30 +163,6 @@ def _atomic_write_sync(path: str, content: str) -> None:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
         raise
-
-
-async def _atomic_write(path: str, content: str, session_id: str = "", after_write=None) -> None:
-    """Write content atomically using temp file + rename.
-
-    Args:
-        path: File path to write to
-        content: Full file content as string
-        session_id: Current session ID, passed to after_write callback
-        after_write: Optional async callable(path, session_id) called after successful write.
-                     Used by the file module to broadcast edits to screens.
-    """
-    _atomic_write_sync(path, content)
-
-    # Broadcast to screens after the write succeeds
-    if after_write is not None:
-        try:
-            await after_write(path, session_id)
-        except Exception:
-            # Never let broadcast errors affect the edit result
-            import logging
-            logging.getLogger("modules.file.editor").warning(
-                f"Screen broadcast after_write failed"
-            )
 
 
 def _sanitize_content(content: str) -> str:
@@ -334,44 +312,16 @@ def _find_exact_span(
 class FileEditor:
     """Handles all file operations with consistent state management."""
     
-    def __init__(self, session_id_func=None, memory_utils_module=None):
+    def __init__(self, session_id_func=None, db_module=None):
         """Initialize FileEditor.
         
         Args:
             session_id_func: Function that returns current session ID
-            memory_utils_module: Module containing memory utilities
+            db_module: Ignored (kept for backward compat) — file module is self-contained
         """
         from modules import get_session_id
         self._get_session_id = session_id_func or get_session_id
-        self._memory_utils = memory_utils_module
-        
-        # Lazy import helpers if not provided
-        if memory_utils_module:
-            self._set_memory = memory_utils_module._set_memory
-            self._search_memories = memory_utils_module._search_memories
-            self._delete_memory = memory_utils_module._delete_memory
-        else:
-            self._set_memory = None
-            self._search_memories = None
-            self._delete_memory = None
-    
-    def _get_set_memory(self):
-        if self._set_memory is None:
-            from modules.memory_utils import _set_memory
-            self._set_memory = _set_memory
-        return self._set_memory
-    
-    def _get_search_memories(self):
-        if self._search_memories is None:
-            from modules.memory_utils import _search_memories
-            self._search_memories = _search_memories
-        return self._search_memories
-    
-    def _get_delete_memory(self):
-        if self._delete_memory is None:
-            from modules.memory_utils import _delete_memory
-            self._delete_memory = _delete_memory
-        return self._delete_memory
+        self._db_module = db_module  # kept for backward compat, not used
 
     # -------------------------------------------------------------------------
     # Open/Close Operations
@@ -392,19 +342,17 @@ class FileEditor:
         """
         filename = os.path.basename(abs_path)
         keyword = make_open_file_keyword(filename)
-        memories = self._get_search_memories()(session_id, keyword, limit=10)
+        records = get_open_files(session_id, keyword, limit=10)
 
-        for mem in memories:
-            props = mem.get("properties", {})
-            existing_path = props.get(PROP_PATH, "")
-            
+        for rec in records:
+            existing_path = rec.get("path", "")
+
             # Only check entries for this exact path
             if os.path.abspath(existing_path) != abs_path:
                 continue
 
-            existing_start = int(props.get(PROP_LINE_START, 0))
-            existing_end_raw = props.get(PROP_LINE_END, "*")
-            existing_end = None if existing_end_raw in ("*", "", None) else int(existing_end_raw)
+            existing_start = int(rec.get("line_start", 0) or 0)
+            existing_end = rec.get("line_end")  # None = to end, int = specific
 
             # Normalize None end to infinity for comparison
             existing_end_inf = float('inf') if existing_end is None else existing_end
@@ -424,26 +372,20 @@ class FileEditor:
             if not (existing_start > new_end_inf or line_start > existing_end_inf):
                 merged_start = min(existing_start, line_start)
                 merged_end = max(existing_end_inf, new_end_inf)
-                merged_end_str = "*" if merged_end == float('inf') else str(int(merged_end))
-                existing_mem_id = mem.get("id")
+                merged_end_int = None if merged_end == float('inf') else int(merged_end)
 
-                # Update the existing entry with merged range
-                if existing_mem_id:
-                    self._get_delete_memory()(existing_mem_id)
+                # Replace the existing entry with merged range
+                delete_open_file(session_id, keyword)
 
                 new_keyword = make_open_file_keyword(filename)
-                existing_git_hash = props.get("git_hash", "*")
-                new_content = f"open: {filename} [{merged_start}-{merged_end_str}]"
-                new_properties = {
-                    PROP_FILENAME: filename,
-                    PROP_PATH: abs_path,
-                    PROP_LINE_START: str(merged_start),
-                    PROP_LINE_END: merged_end_str,
-                    "git_hash": existing_git_hash,
-                }
-                self._get_set_memory()(session_id, new_keyword, new_content, new_properties)
+                set_open_file(
+                    session_id, new_keyword, abs_path,
+                    content=f"open: {filename} [{merged_start}-{'end' if merged_end_int is None else merged_end_int}]",
+                    line_start=merged_start,
+                    line_end=merged_end_int,
+                )
 
-                if merged_end == float('inf'):
+                if merged_end_inf == float('inf'):
                     return (
                         f"{filename} is already open (lines {existing_start}-"
                         f"{'end' if existing_end is None else existing_end}). "
@@ -452,7 +394,7 @@ class FileEditor:
                 return (
                     f"{filename} is already open (lines {existing_start}-"
                     f"{'end' if existing_end is None else existing_end}). "
-                    f"Range expanded to lines {merged_start}-{int(merged_end)}."
+                    f"Range expanded to lines {merged_start}-{int(merged_end_inf)}."
                 )
 
         return None
@@ -470,17 +412,14 @@ class FileEditor:
         """
         if not config_get('file.context_required', True):
             return None  # guard disabled via config
-        
-        import os
-        
+
         session_id = self._get_session_id()
         filename = os.path.basename(abs_path)
         keyword = make_open_file_keyword(filename)
-        memories = self._get_search_memories()(session_id, keyword, limit=10)
-        
-        for mem in memories:
-            props = mem.get("properties", {})
-            existing_path = props.get(PROP_PATH, "")
+        records = get_open_files(session_id, keyword, limit=10)
+
+        for rec in records:
+            existing_path = rec.get("path", "")
             if existing_path and os.path.abspath(existing_path) == os.path.abspath(abs_path):
                 return None  # found a match — file is open
         
@@ -516,8 +455,9 @@ class FileEditor:
                 return (
                     f"⚠️  Cannot safely open {os.path.basename(path)} — not tracked by git.\n\n"
                     f"    Safe file editing (automatic rollback on validation failure) requires git.\n\n"
-                    f"    To fix this, call create_project('{os.path.dirname(path)}') to initialize a Riven project\n"
-                    f"    (which runs git init for you). Then open the file again.\n\n"
+                    f"    To fix this, run:\n"
+                    f"      git init && git add {os.path.basename(path)} && git commit -m 'initial'\n\n"
+                    f"    Then open the file again.\n\n"
                     f"    Alternatively, open the file with allow_untracked=True to proceed anyway.\n"
                     f"    WARNING: rollback protection will be DISABLED for this file."
                 )
@@ -525,7 +465,7 @@ class FileEditor:
             logger.warning(
                 f"Opening {os.path.basename(path)} WITHOUT git tracking "
                 f"— rollback protection is DISABLED. "
-                f"Consider calling create_project('{os.path.dirname(path)}') later."
+                f"Initialize git to enable it: git init && git add {os.path.basename(path)} && git commit -m 'initial'"
             )
         
         filename = os.path.basename(abs_path)
@@ -540,23 +480,16 @@ class FileEditor:
         )
         if guard_result is not None:
             return guard_result
-        
-        # Capture git hash at open time for conflict detection
-        git_hash = _get_git_hash(abs_path)
-        
-        # Unique keyword per file (prevents overwrites in _set_memory)
-        # All data goes in properties
+
+        # Unique keyword per file (prevents overwrites in set_open_file)
         memory_type = make_open_file_keyword(filename)
-        content = f"open: {filename} [{line_start}-{line_end_str}]"
-        properties = {
-            PROP_FILENAME: filename,
-            PROP_PATH: abs_path,
-            PROP_LINE_START: str(line_start),
-            PROP_LINE_END: line_end_str,
-            "git_hash": git_hash or "*",
-        }
-        
-        if not self._get_set_memory()(session_id, memory_type, content, properties):
+
+        if not set_open_file(
+            session_id, memory_type, abs_path,
+            content=f"open: {filename} [{line_start}-{line_end_str}]",
+            line_start=line_start,
+            line_end=line_end,
+        ):
             return f"Error saving to memory"
         
         try:
@@ -591,12 +524,7 @@ class FileEditor:
         if total_lines != "?" and total_lines > 1000:
             large_warning = " [!LARGE FILE - consider using line_start/line_end to limit scope]"
         
-        # Notify any screens already bound to this path
-        try:
-            from modules.file import _broadcast_after_open as _bo
-            await _bo(abs_path, session_id)
-        except Exception:
-            pass
+
         
         return f"Opened {filename} (~{token_count} tokens). File is now instantly visible in system context{line_info}{large_warning}"
     
@@ -616,82 +544,24 @@ class FileEditor:
         abs_path = os.path.abspath(os.path.expanduser(name))
         filename = os.path.basename(abs_path)
         keyword = make_open_file_keyword(filename)
-        memories = self._get_search_memories()(session_id, keyword, limit=100)
-        
-        if not memories:
+
+        # Check if the file is actually open
+        records = get_open_files(session_id, keyword, limit=100)
+        if not any(r.get("path") == abs_path for r in records):
             return f"File {name} not in context (checked as {filename})"
-        
-        # Collect paths before deleting memories
-        closed_paths = set()
-        for mem in memories:
-            props = mem.get("properties", {})
-            if isinstance(props, dict):
-                closed_paths.add(props.get(PROP_PATH, ""))
-            elif isinstance(props, list):
-                for p in props:
-                    if isinstance(p, dict) and p.get("key") == PROP_PATH:
-                        closed_paths.add(p.get("value", ""))
-        closed_paths.discard("")
-        
-        # Broadcast close to all screens watching these paths BEFORE deleting memory
-        # (get_screen_uids_for_path needs the memory entries to be present)
-        if closed_paths:
-            try:
-                from modules.file import _broadcast_after_close as _bc
-                for path in closed_paths:
-                    await _bc(path, session_id)
-            except Exception:
-                pass
-        
-        deleted_count = 0
-        for mem in memories:
-            mem_id = mem.get("id")
-            if mem_id and self._get_delete_memory()(mem_id):
-                deleted_count += 1
-        
-        if deleted_count > 0:
-            return f"Closed {name} ({deleted_count} entry)"
+
+        if delete_open_file(session_id, keyword):
+            return f"Closed {name}"
         return f"File {name} not in context"
     
     async def close_all_files(self) -> str:
         """Close all files from the file context."""
         session_id = self._get_session_id()
         
-        # Search using property pattern (keyword doesn't support wildcards)
-        query = f"p:{PROP_FILENAME}=*"
-        memories = self._get_search_memories()(session_id, query, limit=1000)
-        
-        if not memories:
-            return "No open files to close"
-        
-        # Collect paths and broadcast close BEFORE deleting memory
-        # (get_screen_uids_for_path needs the memory entries to be present)
-        closed_paths = set()
-        for mem in memories:
-            props = mem.get("properties", {})
-            if isinstance(props, dict):
-                closed_paths.add(props.get(PROP_PATH, ""))
-            elif isinstance(props, list):
-                for p in props:
-                    if isinstance(p, dict) and p.get("key") == PROP_PATH:
-                        closed_paths.add(p.get("value", ""))
-        closed_paths.discard("")
-
-        if closed_paths:
-            try:
-                from modules.file import _broadcast_after_close as _bc
-                for path in closed_paths:
-                    await _bc(path, session_id)
-            except Exception:
-                pass
-        
-        count = 0
-        for mem in memories:
-            mem_id = mem.get("id")
-            if mem_id and self._get_delete_memory()(mem_id):
-                count += 1
-        
-        return f"Closed {count} open file(s)"
+        count = delete_all_open_files(session_id)
+        if count > 0:
+            return f"Closed {count} open file(s)"
+        return "No open files to close"
     
     # -------------------------------------------------------------------------
     # Read Operations
@@ -742,6 +612,65 @@ class FileEditor:
     # Edit Operations
     # -------------------------------------------------------------------------
     
+        """Core replace logic. Returns (result_msg, start_line, end_line, new_content)."""
+        try:
+            with open(abs_path, 'r') as f:
+                content = f.read()
+            content = _sanitize_content(content)
+            lines = content.splitlines(keepends=True)
+        except Exception as e:
+            return f"Error reading {abs_path}: {e}", 0, 0, ""
+
+        span, score = _find_best_window(lines, old, threshold=threshold)
+
+        if not span:
+            best_span, best_score = _find_best_window(lines, old, threshold=0.0)
+            if best_span:
+                start, end, _, _ = best_span
+                matched_lines = lines[start:end]
+                matched_text = ''.join(matched_lines).strip()
+                return (
+                    f"No match above {threshold:.0%} threshold. "
+                    f"Best match ({best_score:.0%}) at lines {start+1}-{end}:\n"
+                    f"{matched_text[:300]}",
+                    0, 0, ""
+                )
+            return f"Text not found in {os.path.basename(abs_path)}.", 0, 0, ""
+
+        start, end, char_start, char_end = span
+
+        if char_end is not None:
+            line = lines[start]
+            before_part = line[:char_start]
+            after_part = line[char_end:]
+            new_line = before_part + new + after_part
+            before_lines = lines[:start]
+            after_lines = lines[end:]
+            new_content = ''.join(before_lines + [new_line] + after_lines)
+        else:
+            before_lines = lines[:start]
+            after_lines = lines[end:]
+            new_content_lines = new.splitlines(keepends=True)
+            if new_content_lines and not new_content_lines[-1].endswith('\n'):
+                new_content_lines[-1] += '\n'
+            new_content = ''.join(before_lines + new_content_lines + after_lines)
+
+        if validate_syntax and abs_path.endswith('.py'):
+            is_valid, syntax_error = _validate_python(new_content)
+            if not is_valid:
+                return f"Syntax validation failed: {syntax_error}", 0, 0, ""
+
+        try:
+            _atomic_write(abs_path, new_content)
+        except Exception as e:
+            return f"Error writing {abs_path}: {e}", 0, 0, ""
+
+        diff = _generate_diff(abs_path, lines, new_content.splitlines(keepends=True))
+        session_id = self._get_session_id()
+        track_file_change(session_id, abs_path, "replace_text", diff)
+
+        return f"✅ Replaced text at lines {start+1}-{end} ({score:.0%} match)\n{diff}", start + 1, end, new_content
+
     async def replace_text(
         self,
         path: str,
@@ -753,84 +682,32 @@ class FileEditor:
         """Replace text in a file using fuzzy matching."""
         path = os.path.expanduser(path)
         abs_path = os.path.abspath(path)
-        
-        # Guard: file must be open in context
+
         guard = self._check_file_open(abs_path)
         if guard is not None:
             return guard
-        
-        # Warn if not inside a Riven project
-        project_warning = _warn_no_riven_project(abs_path)
-        if project_warning:
-            logger.warning(project_warning)
-        
-        try:
-            with open(abs_path, 'r') as f:
-                content = f.read()
-            content = _sanitize_content(content)
-            lines = content.splitlines(keepends=True)
-        except Exception as e:
-            return f"Error reading {abs_path}: {e}"
-        
-        span, score = _find_best_window(lines, old, threshold=threshold)
-        
-        if not span:
-            best_span, best_score = _find_best_window(lines, old, threshold=0.0)
-            if best_span:
-                start, end, _, _ = best_span
-                matched_lines = lines[start:end]
-                matched_text = ''.join(matched_lines).strip()
-                return (
-                    f"No match above {threshold:.0%} threshold. "
-                    f"Best match ({best_score:.0%}) at lines {start+1}-{end}:\n"
-                    f"{matched_text[:300]}"
-                )
-            return f"Text not found in {os.path.basename(abs_path)}."
-        
-        # Unpack the new span format: (start, end, char_start, char_end)
-        start, end, char_start, char_end = span
-        
-        # Build new content by replacing only the matched portion
-        if char_end is not None:
-            # Single-line replacement with character offsets
-            # Extract parts before and after the match within the line
-            line = lines[start]
-            before_part = line[:char_start]
-            after_part = line[char_end:]
-            
-            # Combine: before + new + after
-            new_line = before_part + new + after_part
-            
-            # Build new content: before lines + new line + after lines
-            before_lines = lines[:start]
-            after_lines = lines[end:]
-            new_content = ''.join(before_lines + [new_line] + after_lines)
-        else:
-            # Multi-line or fuzzy match - use old logic
-            before_lines = lines[:start]
-            after_lines = lines[end:]
-            
-            new_content_lines = new.splitlines(keepends=True)
-            if new_content_lines and not new_content_lines[-1].endswith('\n'):
-                new_content_lines[-1] += '\n'
-            
-            new_content = ''.join(before_lines + new_content_lines + after_lines)
-        
-        if validate_syntax and abs_path.endswith('.py'):
-            is_valid, syntax_error = _validate_python(new_content)
-            if not is_valid:
-                return f"Syntax validation failed: {syntax_error}"
-        
+
+        _warn_no_riven_project(abs_path)
+
         session_id = self._get_session_id()
-        try:
-            from modules.file import _broadcast_after_edit as _bc
-            await _atomic_write(abs_path, new_content, session_id, _bc)
-        except Exception as e:
-            return f"Error writing {abs_path}: {e}"
-        diff = _generate_diff(abs_path, lines, new_content.splitlines(keepends=True))
-        track_file_change(session_id, abs_path, "replace_text", diff)
-        
-        return f"✅ Replaced text at lines {start+1}-{end} ({score:.0%} match)\n{diff}"
+        rel_path = _rel_path(abs_path)
+
+        async with acquire_lock(rel_path, session_id, timeout=30.0, context="replace_text"):
+            result, start, end, new_content = await self._do_replace_text(
+                abs_path, old, new, threshold, validate_syntax
+            )
+
+        if start > 0 and new_content:  # success
+            _events_publish(
+                "file_changed",
+                path=rel_path,
+                content=new_content,
+                start=start,
+                end=end,
+                who=session_id,
+            )
+
+        return result
     
     async def batch_edit(
         self,
@@ -921,14 +798,17 @@ class FileEditor:
         
         session_id = self._get_session_id()
         diff = _generate_diff(abs_path, original_lines, final_content.splitlines(keepends=True))
-        
-        try:
-            from modules.file import _broadcast_after_edit as _bc
-            await _atomic_write(abs_path, final_content, session_id, _bc)
-        except Exception as e:
-            return EditResult(False, abs_path, f"Failed to write: {e}")
-        track_file_change(session_id, abs_path, f"batch_edit({len(replacements)})", diff)
-        
+
+        async with acquire_lock(_rel_path(abs_path), session_id, timeout=30.0, context=f"batch_edit({len(replacements)})") as _lock_info:
+            try:
+                _atomic_write(abs_path, final_content)
+            except Exception as e:
+                return EditResult(False, abs_path, f"Failed to write: {e}")
+            track_file_change(session_id, abs_path, f"batch_edit({len(replacements)})", diff)
+
+        _events_publish("file_changed", path=_rel_path(abs_path), content=final_content,
+                        start=changes[0][0] + 1, end=changes[-1][1] + 1, who=session_id)
+
         return EditResult(
             True, abs_path,
             f"Applied {len(replacements)} replacement(s)",
@@ -987,15 +867,19 @@ class FileEditor:
             modified = modified.replace('\n\n\n', '\n')
         
         session_id = self._get_session_id()
+        rel_path = _rel_path(abs_path)
         diff = _generate_diff(abs_path, original_lines, modified.splitlines(keepends=True))
-        
-        try:
-            from modules.file import _broadcast_after_edit as _bc
-            await _atomic_write(abs_path, modified, session_id, _bc)
-        except Exception as e:
-            return EditResult(False, abs_path, f"Failed to write: {e}")
-        track_file_change(session_id, abs_path, "delete_snippet", diff)
-        
+
+        async with acquire_lock(rel_path, session_id, timeout=30.0, context="delete_snippet") as _lock_info:
+            try:
+                _atomic_write(abs_path, modified)
+            except Exception as e:
+                return EditResult(False, abs_path, f"Failed to write: {e}")
+            track_file_change(session_id, abs_path, "delete_snippet", diff)
+
+        _events_publish("file_changed", path=rel_path, content=modified,
+                        who=session_id)
+
         return EditResult(
             True, abs_path,
             f"Deleted snippet from file",
@@ -1028,12 +912,16 @@ class FileEditor:
                 os.makedirs(parent)
         
         session_id = self._get_session_id()
-        try:
-            from modules.file import _broadcast_after_edit as _bc
-            await _atomic_write(abs_path, content, session_id, _bc)
-        except Exception as e:
-            return f"Error writing {abs_path}: {e}"
-        
+        rel_path = _rel_path(abs_path)
+
+        async with acquire_lock(rel_path, session_id, timeout=30.0, context="write_text") as _lock_info:
+            try:
+                _atomic_write(abs_path, content)
+            except Exception as e:
+                return f"Error writing {abs_path}: {e}"
+
+        _events_publish("file_changed", path=rel_path, content=content, who=session_id)
+
         line_count = len(content.splitlines())
         return f"✅ Wrote {line_count} lines to {os.path.basename(abs_path)}"
     
@@ -1048,22 +936,22 @@ class FileEditor:
         if os.path.isdir(abs_path):
             return EditResult(False, abs_path, f"Path is a directory")
         
-        try:
-            os.unlink(abs_path)
-        except Exception as e:
-            return EditResult(False, abs_path, f"Failed to delete: {e}")
-        
-        # Clean up memory entries for this file using property search
         session_id = self._get_session_id()
+        rel_path = _rel_path(abs_path)
+
+        async with acquire_lock(rel_path, session_id, timeout=30.0, context="delete_file") as _lock_info:
+            try:
+                os.unlink(abs_path)
+            except Exception as e:
+                return EditResult(False, abs_path, f"Failed to delete: {e}")
+
+        # Clean up open-file entry for this file
         filename = os.path.basename(abs_path)
-        query = f"p:{PROP_FILENAME}={filename}"
-        memories = self._get_search_memories()(session_id, query, limit=100)
-        
-        for mem in memories:
-            mem_id = mem.get("id")
-            if mem_id:
-                self._get_delete_memory()(mem_id)
-        
+        keyword = make_open_file_keyword(filename)
+        delete_open_file(session_id, keyword)
+
+        _events_publish("file_deleted", path=rel_path, who=session_id)
+
         return EditResult(True, abs_path, f"Deleted {filename}", changed=True)
     
     # -------------------------------------------------------------------------
@@ -1145,20 +1033,14 @@ class FileEditor:
         
         result = '\n'.join(parts)
         
-        # Store in memory using unique keyword + properties
+        # Store in memory using unique keyword
         memory_type = make_open_file_keyword(filename)
-        content_mem = f"open: {filename} {defn.qualified_name} ({defn.type})"
-        properties = {
-            PROP_FILENAME: filename,
-            PROP_PATH: abs_path,
-            PROP_LINE_START: str(defn.line_start),
-            PROP_LINE_END: str(defn.line_end),
-            "definition_name": defn.name,
-            "definition_type": defn.type,
-            "qualified_name": defn.qualified_name
-        }
-        
-        self._get_set_memory()(session_id, memory_type, content_mem, properties)
+        set_open_file(
+            session_id, memory_type, abs_path,
+            content=f"open: {filename} {defn.qualified_name} ({defn.type})",
+            line_start=defn.line_start,
+            line_end=defn.line_end,
+        )
         
         return result
     
@@ -1305,11 +1187,10 @@ class FileEditor:
             return "No open files"
         
         lines = ["Open Files:"]
-        for mem in memories:
-            props = mem.get("properties", {})
-            path = props.get("path", "unknown")
-            line_start = props.get("line_start", "0")
-            line_end = props.get("line_end", "*")
+        for rec in memories:
+            path = rec.get("path", "unknown")
+            line_start = str(rec.get("line_start", 0) or 0)
+            line_end = str(rec.get("line_end", "*"))
             filename = path.split("/")[-1] if "/" in path else path
             lines.append(f"  📄 {filename} (lines {line_start}-{line_end})")
         

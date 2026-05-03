@@ -592,3 +592,303 @@ class TestOpenFunction:
 
         result = asyncio.run(editor.open_function(file_path, "foo"))
         assert "not a python" in result.lower() or "error" in result.lower()
+
+
+# =============================================================================
+# Event Integration Tests
+# Each edit operation must fire file_changed events so web editors refresh.
+# =============================================================================
+
+import events as evt_module
+
+
+@pytest.fixture(autouse=True)
+def clean_events_state():
+    """Reset global handlers and locks between tests.
+
+    Events state is shared globally (singleton), so we must clear it
+    between tests to avoid interference.
+    """
+    evt_module._handlers.clear()
+    evt_module._locks.clear()
+    yield
+    evt_module._handlers.clear()
+    evt_module._locks.clear()
+
+
+def _unique_sid():
+    """Unique session ID for event tests."""
+    return f"event-test-{_unique_id()}"
+
+
+class TestWriteTextFiresEvents:
+    """write_text should acquire a lock, write the file, fire file_changed."""
+
+    def test_write_text_fires_file_changed_event(self, tmp_path):
+        received = []
+
+        def handler(path=None, content=None, who=None, **kw):
+            received.append({"path": path, "content": content, "who": who})
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "written.txt")
+
+        asyncio.run(editor.write_text(file_path, "hello from write_text"))
+
+        assert len(received) == 1
+        assert received[0]["path"] == "written.txt"
+        assert received[0]["content"] == "hello from write_text"
+        assert received[0]["who"] is not None  # session_id must be set
+
+    def test_write_text_acquires_and_releases_lock(self, tmp_path):
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "write_lock.txt")
+
+        asyncio.run(editor.write_text(file_path, "content"))
+
+        # Lock should be released after the operation
+        assert evt_module.get_lock_state("write_lock.txt") is None
+
+
+class TestReplaceTextFiresEvents:
+    """replace_text should acquire a lock, modify, fire file_changed."""
+
+    def test_replace_text_fires_file_changed_event(self, tmp_path):
+        received = []
+
+        def handler(path=None, content=None, who=None, **kw):
+            received.append({"path": path, "content": content, "who": who})
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "replace_ev.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+
+        result = asyncio.run(editor.replace_text(file_path, "world", "python"))
+
+        assert result.success
+        assert len(received) == 1
+        assert received[0]["content"] == "hello python"
+        assert received[0]["who"] is not None
+
+    def test_replace_text_no_event_on_failure(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "no_match.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+
+        result = asyncio.run(editor.replace_text(file_path, "NONEXISTENT_PATTERN", "xxx"))
+
+        assert not result.success
+        assert len(received) == 0  # file_changed must NOT fire on failure
+
+    def test_replace_text_releases_lock_after_failure(self, tmp_path):
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "fail_lock.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+
+        asyncio.run(editor.replace_text(file_path, "NONEXISTENT", "xxx"))
+
+        assert evt_module.get_lock_state("fail_lock.txt") is None
+
+
+class TestBatchEditFiresEvents:
+    """batch_edit should fire a single file_changed after all changes."""
+
+    def test_batch_edit_fires_file_changed_once(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "batch_ev.txt")
+        Path(file_path).write_text("a b c")
+        _init_git_repo(str(tmp_path))
+
+        result = asyncio.run(editor.batch_edit(
+            file_path,
+            [
+                Replacement(old_str="a", new_str="A"),
+                Replacement(old_str="b", new_str="B"),
+            ],
+        ))
+
+        assert result.success
+        assert len(received) == 1
+        assert received[0]["content"] == "A B c"
+
+    def test_batch_edit_no_event_on_all_or_nothing_failure(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "batch_fail.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+
+        result = asyncio.run(editor.batch_edit(
+            file_path,
+            [
+                Replacement(old_str="world", new_str="python"),
+                Replacement(old_str="NONEXISTENT", new_str="fail"),
+            ],
+        ))
+
+        assert not result.success
+        assert len(received) == 0  # file_changed must NOT fire on failure
+        assert Path(file_path).read_text() == "hello world"  # file unchanged
+
+
+class TestDeleteSnippetFiresEvents:
+    """delete_snippet should fire file_changed on success only."""
+
+    def test_delete_snippet_fires_on_success(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "delete_ev.txt")
+        Path(file_path).write_text("hello world goodbye")
+        _init_git_repo(str(tmp_path))
+
+        result = asyncio.run(editor.delete_snippet(file_path, " world"))
+
+        assert result.success
+        assert len(received) == 1
+        assert received[0]["content"] == "hello goodbye"
+
+    def test_delete_snippet_no_event_on_failure(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_changed", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "delete_fail.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+
+        result = asyncio.run(editor.delete_snippet(file_path, "NONEXISTENT"))
+
+        assert not result.success
+        assert len(received) == 0
+
+
+class TestDeleteFileFiresEvents:
+    """delete_file should fire file_deleted on success only."""
+
+    def test_delete_file_fires_file_deleted(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_deleted", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "delete_me.txt")
+        Path(file_path).write_text("content")
+        assert file_path.exists()
+
+        result = asyncio.run(editor.delete_file(file_path))
+
+        assert result.success
+        assert not file_path.exists()
+        assert len(received) == 1
+        assert received[0]["path"] == "delete_me.txt"
+        assert received[0]["who"] is not None
+
+    def test_delete_file_no_event_on_nonexistent(self, tmp_path):
+        received = []
+
+        def handler(**kw):
+            received.append(kw)
+
+        evt_module.register_handler("file_deleted", handler)
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "never_existed.txt")
+
+        result = asyncio.run(editor.delete_file(file_path))
+
+        assert not result.success
+        assert len(received) == 0
+
+
+class TestLockIntegration:
+    """Integration tests for the full lock lifecycle with real file operations."""
+
+    def test_lock_held_during_replace_text(self, tmp_path):
+        """Lock must be held for the entire duration of replace_text."""
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "lock_during.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+        sid = _unique_sid()
+
+        async def check_lock():
+            async with evt_module.acquire_lock(file_path, sid, timeout=5.0, context="test"):
+                # File should be locked while inside the context
+                assert evt_module.get_lock_state(file_path) is not None
+
+                # replace_text should still work (re-entrant lock)
+                result = await editor.replace_text(file_path, "world", "python")
+                assert result.success
+
+            # After context, lock should be released
+            assert evt_module.get_lock_state(file_path) is None
+
+        asyncio.run(check_lock())
+
+    def test_concurrent_edit_cannot_acquire_lock(self, tmp_path):
+        """A second editor can't edit while the first holds the lock."""
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "contested.txt")
+        Path(file_path).write_text("original")
+        _init_git_repo(str(tmp_path))
+        sid_alice = f"alice-{_unique_sid()}"
+        sid_bob = f"bob-{_unique_sid()}"
+
+        async def alice_holds_lock():
+            # Alice acquires lock
+            async with evt_module.acquire_lock(file_path, sid_alice, timeout=5.0, context="test"):
+                assert evt_module.get_lock_state(file_path) is not None
+                # Bob tries to acquire — should timeout
+                try:
+                    await evt_module.acquire_lock(file_path, sid_bob, timeout=0.1, context="test")
+                    assert False, "Bob should not have acquired the lock"
+                except evt_module.LockTimeoutError:
+                    pass  # expected
+                # File should still be locked by Alice
+                assert evt_module.get_lock_state(file_path) is not None
+
+        asyncio.run(alice_holds_lock())
+
+    def test_lock_released_after_any_failure(self, tmp_path):
+        """Lock must be released even when an exception occurs mid-edit."""
+        editor = FileEditor(session_id_func=_unique_sid)
+        file_path = str(tmp_path / "exception_unlock.txt")
+        Path(file_path).write_text("hello world")
+        _init_git_repo(str(tmp_path))
+
+        # Attempt a replace that will fail (pattern not found)
+        asyncio.run(editor.replace_text(file_path, "NONEXISTENT", "xxx"))
+
+        # Lock must be released regardless of failure
+        assert evt_module.get_lock_state(file_path) is None
