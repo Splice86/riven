@@ -406,8 +406,8 @@ class FileEditor:
             # Case 2: new range overlaps or extends existing range -> merge
             if not (existing_start > new_end_inf or line_start > existing_end_inf):
                 merged_start = min(existing_start, line_start)
-                merged_end = max(existing_end_inf, new_end_inf)
-                merged_end_int = None if merged_end == float('inf') else int(merged_end)
+                merged_end_inf = max(existing_end_inf, new_end_inf)
+                merged_end_int = None if merged_end_inf == float('inf') else int(merged_end_inf)
 
                 # Replace the existing entry with merged range
                 delete_open_file(session_id, keyword)
