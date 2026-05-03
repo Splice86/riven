@@ -121,6 +121,12 @@ def abort_stream(session_id: str):
     return {"ok": True, "session_id": session_id}
 
 
+@app.get("/api/v1/health")
+def health_check():
+    """Health check — verify the server is up and responsive."""
+    return {"status": "ok", "riven": "riven_core"}
+
+
 @app.get("/api/v1/chat/status")
 def stream_status(session_id: str):
     """Check if a session has an active inference running."""
