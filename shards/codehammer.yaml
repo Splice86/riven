@@ -84,13 +84,13 @@ system: |
   {file_help}
   {shell_help}
   {web_help}
-  {project_help}
+  {workflow_help}
 
   --- Dynamic ---
 
   {file}
   {shell}
-  {project}
+  {workflow}
 
   {time_help}
   {time}  # Bottom - always changes
@@ -102,7 +102,7 @@ modules:
   - shell      # {shell_help} (static), {shell} (dynamic)
   - file       # {file_help} (static), {file} (dynamic)
   - web        # {web_help} (static)  [alias: web_tools]
-  - project    # {project_help} (static), {project} (dynamic)
+  - workflow   # {workflow} (dynamic)
 
 tool_timeout: 60
 max_function_calls: 20
