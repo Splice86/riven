@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from modules import Module, CalledFn, ContextFn, _session_id
-from .models import WorkflowState, StepStatus, Step
+from .models import WorkflowState, StepStatus, Step, Stage
 from .templates import WORKFLOWS, get_workflow, list_workflows
 from . import storage
 
@@ -611,7 +611,7 @@ def guide_workflow_cmd(task: str) -> str:
     else:
         guide = _feature_guide(task)
 
-    return _format_guide(guide)
+    return guide
 
 
 def _feature_guide(task: str) -> dict:
