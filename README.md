@@ -1,5 +1,18 @@
 # Riven Codehammer
 
+<!--
+   __           
+  / /  ___  ___ _(_)_ __   ___  ___ _ __
+ / /__/ _ \/ _ | | '_ \ / _ \/ _ | '__|
+ \____/\___/\__,_|_| .__ /\___/\__,_|_|   
+                  |_|                    
+   
+   "It works on my machine." — Someone, probably
+   "This code was written at 3am. No further questions."
+   "Don't panic, but the AI is now sentient... just kidding. (maybe)"
+   "Built with love, caffeine, and questionable decisions."
+-->
+
 A modular agentic coding system built around **shards** — configurable personas with specific tool sets and behaviors.
 
 ## Overview
