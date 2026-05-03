@@ -174,24 +174,9 @@ async def search_files(pattern: str, path: str = ".") -> str:
     return await _file_editor.search_files(pattern, path)
 
 
-async def list_dir(path: str = ".") -> str:
-    """List directory contents."""
-    return await _file_editor.list_dir(path)
-
-
 async def file_info(path: str) -> str:
     """Get information about a file."""
     return await _file_editor.file_info(path)
-
-
-async def pwd() -> str:
-    """Get current working directory."""
-    return await _file_editor.pwd()
-
-
-async def chdir(path: str) -> str:
-    """Change current working directory."""
-    return await _file_editor.chdir(path)
 
 
 async def list_open_files() -> str:
@@ -568,17 +553,6 @@ def get_module() -> Module:
                 fn=search_files,
             ),
             CalledFn(
-                name="list_dir",
-                description="List directory contents.\n\nArgs:\n- path: Directory path (default: current directory)",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Directory path"}
-                    }
-                },
-                fn=list_dir,
-            ),
-            CalledFn(
                 name="file_info",
                 description="Get information about a file.\n\nArgs:\n- path: Path to the file",
                 parameters={
@@ -590,25 +564,6 @@ def get_module() -> Module:
                 },
                 fn=file_info,
             ),
-            CalledFn(
-                name="pwd",
-                description="Get current working directory.",
-                parameters={"type": "object", "properties": {}},
-                fn=pwd,
-            ),
-            CalledFn(
-                name="chdir",
-                description="Change current working directory.\n\nArgs:\n- path: Directory path",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Directory path"}
-                    },
-                    "required": ["path"]
-                },
-                fn=chdir,
-            ),
-
             # NOTE: read_file is intentionally not exposed as a tool.
             # Files should be opened via open_file() and their contents
             # will be automatically injected into the system prompt via file_context().
@@ -651,10 +606,7 @@ __all__ = [
     "preview_replace",
     "diff_text",
     "search_files",
-    "list_dir",
     "file_info",
-    "pwd",
-    "chdir",
     "list_open_files",
     "get_file_history",
     "file_context",

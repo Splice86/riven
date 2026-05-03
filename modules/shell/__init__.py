@@ -291,13 +291,43 @@ async def cd(path: str) -> str:
         return f"[ERROR] Changing directory: {e}"
 
 
-async def get_cwd() -> str:
+async def pwd() -> str:
     """Get the current working directory.
     
     Returns:
         Current working directory path
     """
     return os.getcwd()
+
+
+async def list_dir(path: str = ".") -> str:
+    """List directory contents (non-hidden entries only)."""
+    path = os.path.expanduser(path)
+    abs_path = os.path.abspath(path)
+    
+    if not os.path.exists(abs_path):
+        return f"Error: Directory {abs_path} not found"
+    
+    if not os.path.isdir(abs_path):
+        return f"Error: {abs_path} is not a directory"
+    
+    try:
+        entries = os.listdir(abs_path)
+        dirs = []
+        files = []
+        for entry in entries:
+            if not entry.startswith('.'):
+                full_path = os.path.join(abs_path, entry)
+                if os.path.isdir(full_path):
+                    dirs.append(f"📁 {entry}/")
+                else:
+                    files.append(f"📄 {entry}")
+        result = '\n'.join(sorted(dirs) + sorted(files))
+        if not result:
+            return "(empty directory — no visible files or folders)"
+        return result
+    except Exception as e:
+        return f"Error listing {abs_path}: {e}"
 
 
 
@@ -374,14 +404,21 @@ def get_module():
                 fn=cd,
             ),
             CalledFn(
-                name="get_cwd",
+                name="pwd",
                 description="Get the current working directory.",
+                parameters={"type": "object", "properties": {}},
+                fn=pwd,
+            ),
+            CalledFn(
+                name="list_dir",
+                description="List directory contents (non-hidden entries only).\n\nArgs:\n- path: Directory path (default: current directory)",
                 parameters={
                     "type": "object",
-                    "properties": {},
-                    "required": [],
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path"}
+                    }
                 },
-                fn=get_cwd,
+                fn=list_dir,
             ),
 
             CalledFn(
