@@ -22,7 +22,7 @@ from config import get_llm_config, get
 from logging_config import setup_logging, get_logger
 
 # Set up file + stdout logging ASAP so all subsequent imports log to ~/.riven/logs/
-setup_logging(level=logging.DEBUG)
+setup_logging(level=logging.INFO)
 logger = get_logger(__name__)
 
 DEBUG_HANG = False

@@ -10,7 +10,7 @@ from pathlib import Path
 
 def setup_logging(
     log_file: str | None = None,
-    level: int = logging.DEBUG,
+    level: int = logging.INFO,
     include_stdout: bool = True,
 ) -> logging.Logger:
     """Configure riven's root logger with a file handler.
@@ -20,7 +20,7 @@ def setup_logging(
 
     Args:
         log_file: Path to log file. Default: ~/.riven/logs/riven.log
-        level: Minimum log level. DEBUG captures everything.
+        level: Minimum log level. INFO is the default; use DEBUG for verbose output.
         include_stdout: Also print to stdout (useful for dev/debugging).
                        Set False in production to keep logs clean.
     """
