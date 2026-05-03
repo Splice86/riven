@@ -393,6 +393,59 @@ html, body {
   word-break: break-word;
 }
 
+/* Markdown in thinking */
+.thinking-content code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(121, 192, 255, 0.12);
+  color: var(--text-primary);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.thinking-content pre {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.thinking-content pre code {
+  background: none;
+  color: var(--text-primary);
+  padding: 0;
+}
+
+.thinking-content a {
+  color: var(--accent-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.thinking-content strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thinking-content em {
+  color: var(--accent-cyan);
+  font-style: italic;
+}
+
+.thinking-content h1,
+.thinking-content h2,
+.thinking-content h3 {
+  color: var(--text-primary);
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.thinking-content h1 { font-size: 14px; }
+.thinking-content h2 { font-size: 13px; }
+.thinking-content h3 { font-size: 12px; }
+
 /* ---- Error banner ---- */
 .error-banner {
   display: flex;

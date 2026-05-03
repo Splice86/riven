@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>Riven Chat</title>
-  <link rel="stylesheet" href="/ui/style.css?v=5">
+  <link rel="stylesheet" href="/ui/style.css?v=6">
 </head>
 <body>
 
@@ -553,7 +553,7 @@
             }
             pendingThinking.buffer += cleanToken(event.thinking);
             const contentEl = pendingThinking.element.querySelector('.thinking-content');
-            if (contentEl) contentEl.textContent = pendingThinking.buffer;
+            if (contentEl) contentEl.innerHTML = parseMarkdown(pendingThinking.buffer);
           }
           else if (event.tool_call !== undefined) {
             pendingThinking = null;  // End thinking block
