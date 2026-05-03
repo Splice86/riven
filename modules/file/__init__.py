@@ -184,6 +184,46 @@ async def list_open_files() -> str:
     return _file_editor.list_open_files()
 
 
+async def list_dir(path: str = ".") -> str:
+    """List directory contents."""
+    return await _file_editor.list_dir(path)
+
+
+async def pwd() -> str:
+    """Get current working directory."""
+    return await _file_editor.pwd()
+
+
+async def chdir(path: str) -> str:
+    """Change current working directory."""
+    return await _file_editor.chdir(path)
+
+
+def get_file_history(path: str = None) -> str:
+    """Get file change history for the current session."""
+    return _file_editor.get_file_history_formatted(path=path)
+
+
+def hash_content(content: str) -> str:
+    """Return an 8-char deterministic hash of string content."""
+    import hashlib
+    return hashlib.sha256(content.encode()).hexdigest()[:8]
+
+
+def track_file_change(
+    session_id: str,
+    path: str,
+    operation: str,
+    diff: str,
+) -> bool:
+    """Record a file change (non-blocking). Returns True on success, False on failure."""
+    try:
+        from modules.file.db import add_file_change
+        add_file_change(session_id, path, operation, diff)
+        return True
+    except Exception:
+        return False
+
 
 def _file_help() -> str:
     """Static tool documentation - does not change between calls."""
@@ -316,18 +356,24 @@ def file_context() -> str:
         lines.append("=" * 60)
         lines.append("")
 
-    # Check token limit and add warning if exceeded
-    token_limit = _get_token_limit()
-    if token_limit > 0 and total_tokens > token_limit:
-        over_by = total_tokens - token_limit
+    # File limit enforcement (independent hard cap — file content is NEVER trimmed)
+    file_limit = _get_token_limit()
+
+    if file_limit > 0 and total_tokens > file_limit:
+        over_by = total_tokens - file_limit
         lines.insert(3, f"")
-        lines.insert(4, f"[!!! HARD LIMIT EXCEEDED !!!] ~{total_tokens} tokens — limit is {token_limit} (over by ~{over_by}).")
+        lines.insert(4, f"[!!! FILE LIMIT EXCEEDED !!!] ~{total_tokens} tokens — limit is {file_limit} (over by ~{over_by}).")
         lines.insert(5, f"    open_file() and open_function() will REJECT new opens until you close files.")
         lines.insert(6, f"    Use close_file() or close_all_files() to free up budget, then retry.")
         lines.insert(7, f"")
 
-    # Add total token count at the top
-    lines.insert(3, f"[Token estimate] ~{total_tokens} tokens total (limit: {token_limit or 'disabled'})")
+    lines.insert(3, f"[Token estimate] ~{total_tokens} tokens total (file limit: {file_limit or 'disabled'})")
+
+    # Update shared stats (synchronous — core.py reads this immediately after
+    # build_context_from_modules returns, before async event handlers fire)
+    from events import set_file_context_stats
+    limited = file_limit > 0 and total_tokens > file_limit
+    set_file_context_stats(total_tokens, file_limit, total_files, limited)
 
     return "\n".join(lines)
 
@@ -624,4 +670,6 @@ __all__ = [
     "_git_status_summary",
     "_git_add",
     "track_in_git",
+    "hash_content",
+    "track_file_change",
 ]

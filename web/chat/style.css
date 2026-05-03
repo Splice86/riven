@@ -853,6 +853,47 @@ html, body {
   border-color: rgba(255, 166, 87, 0.4);
 }
 
+/* ── Context token budget bar ───────────────────────────────── */
+#context-budget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+#context-budget .bar-track {
+  width: 80px;
+  height: 5px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#context-budget .bar-fill {
+  height: 100%;
+  background: var(--accent-blue);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+#context-budget .bar-fill.warn {
+  background: var(--accent-orange);
+}
+
+#context-budget .bar-fill.crit {
+  background: #e53e3e;
+}
+
+#context-budget .bar-fill.trimmed {
+  background: #e53e3e;
+}
+
 /* Panel empty state */
 .panel-empty {
   padding: 20px 12px;

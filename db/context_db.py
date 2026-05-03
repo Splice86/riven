@@ -111,11 +111,11 @@ def get_history(session: str, limit: int = 200) -> list[dict]:
     return ContextDB().get_history(session, limit=limit)
 
 
-def _get_message_token_limit() -> int:
-    """Read message.token_limit from config (0 = no limit)."""
+def _get_context_limit() -> int:
+    """Read context.limit from config (0 = no limit)."""
     try:
         from config import get
-        raw = get("message.token_limit", 0)
+        raw = get("context.limit", 0)
         return int(raw) if raw else 0
     except Exception:
         return 0
@@ -123,7 +123,10 @@ def _get_message_token_limit() -> int:
 
 def get_history_by_tokens(session: str, limit: int = 200) -> tuple[list[dict], int, int, bool]:
     """Fetch messages oldest→newest, trimming from the start until total tokens
-    fit within the message.token_limit budget.
+    fit within the context.limit budget.
+    
+    This is the first-pass trim. A second pass after file context is added
+    handles the case where files are large and consume part of the budget.
     
     Args:
         session: session ID
@@ -136,8 +139,8 @@ def get_history_by_tokens(session: str, limit: int = 200) -> tuple[list[dict], i
         - total_messages: total messages in DB before trimming
         - was_trimmed: True if any messages were dropped
     """
-    db_limit = _get_message_token_limit()
-    if db_limit <= 0:
+    ctx_limit = _get_context_limit()
+    if ctx_limit <= 0:
         # No limit — behave like the old get_history
         msgs = ContextDB().get_history(session, limit=limit)
         total = sum(m.get("token_count", 0) for m in msgs)
@@ -157,7 +160,7 @@ def get_history_by_tokens(session: str, limit: int = 200) -> tuple[list[dict], i
     
     for i in range(len(all_msgs) - 1, -1, -1):
         tokens = all_msgs[i].get("token_count", 0)
-        if running_tokens + tokens <= db_limit:
+        if running_tokens + tokens <= ctx_limit:
             running_tokens += tokens
         else:
             kept_start = i + 1

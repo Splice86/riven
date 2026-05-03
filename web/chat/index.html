@@ -51,6 +51,14 @@
         <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
         Plan
       </button>
+
+      <div id="context-budget" title="Context token budget">
+        <span id="budget-label">ctx</span>
+        <div class="bar-track">
+          <div class="bar-fill" id="budget-fill"></div>
+        </div>
+        <span id="budget-count">—</span>
+      </div>
     </div>
   </header>
 
@@ -547,6 +555,7 @@
       const decoder = new TextDecoder();
       let buffer = '';
       let pendingToolCall = null;
+      let currentSSEEvent = null;  // current named SSE event type (from 'event:' line)
 
       while (true) {
         const { done, value } = await reader.read();
@@ -557,13 +566,29 @@
         buffer = lines.pop();
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
+          if (line.startsWith('event: ')) {
+            // Named SSE event type (e.g. 'event: context_stats\ndata: {...}')
+            currentSSEEvent = line.slice(7).trim();
+            continue;
+          }
+          if (!line.startsWith('data: ')) {
+            currentSSEEvent = null;  // Reset on non-data lines
+            continue;
+          }
           const raw = line.slice(6).trim();
           if (!raw) continue;
 
           let event;
-          try { event = JSON.parse(raw); } catch { continue; }
+          try { event = JSON.parse(raw); } catch { currentSSEEvent = null; continue; }
 
+          // Handle named SSE events first (they set currentSSEEvent)
+          if (currentSSEEvent === 'context_stats') {
+            handleContextStats(event);
+            currentSSEEvent = null;
+            continue;
+          }
+
+          // Default inline JSON events
           if (event.token !== undefined) {
             pendingThinking = null;  // End thinking block, next one gets new element
             streamToken(event.token);
@@ -611,6 +636,7 @@
               // Final render pass: ensure markdown is fully applied
               scheduleMarkdownRender(last);
             }
+            updateContextBudget();
           }
         }
       }
@@ -779,8 +805,96 @@
       if (messages.length > 0) {
         scrollToBottom();
       }
+      
+      updateContextBudget();
     } catch (e) {
       console.error('Failed to load history:', e);
+    }
+  }
+
+  // ── Context token budget ───────────────────────────────────
+  // Real-time stats received via SSE context_stats events (set by streaming loop)
+  let _ctxStats = { msg_tokens: 0, msg_limit: 0, file_tokens: 0, file_limit: 0, file_count: 0 };
+
+  function handleContextStats(stats) {
+    // Called from SSE loop when core.py emits the 'context_stats' event.
+    // Updates display in real-time as the LLM rebuilds context.
+    _ctxStats = { ..._ctxStats, ...stats };
+    _updateBudgetDisplay();
+  }
+
+  function _fmt(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function _updateBudgetDisplay() {
+    // Called both from SSE (real-time) and polling (initial/refresh).
+    const { msg_tokens, msg_limit, file_tokens, file_limit, file_count } = _ctxStats;
+    const fill = document.getElementById('budget-fill');
+    const count = document.getElementById('budget-count');
+    const budget = document.getElementById('context-budget');
+    if (!fill || !count || !budget) return;
+
+    const msgPct = msg_limit > 0 ? Math.min(100, (msg_tokens / msg_limit) * 100) : 0;
+    const filePct = file_limit > 0 ? Math.min(100, (file_tokens / file_limit) * 100) : 0;
+    const pct = Math.max(msgPct, filePct);
+    const trimmed = _ctxStats.trimmed;
+
+    fill.style.width = pct + '%';
+    fill.className = 'bar-fill' + (
+      trimmed ? ' trimmed' : pct > 90 ? ' crit' : pct > 70 ? ' warn' : ''
+    );
+
+    // Build count text: show msg tokens prominently, file tokens as secondary
+    const parts = [];
+    if (msg_limit > 0) {
+      parts.push(`${_fmt(msg_tokens)}/${_fmt(msg_limit)}`);
+    } else if (msg_tokens > 0) {
+      parts.push(`${_fmt(msg_tokens)}t`);
+    }
+    if (file_count > 0 && file_limit > 0) {
+      parts.push(`${_fmt(file_tokens)}/${_fmt(file_limit)}`);
+    } else if (file_count > 0) {
+      parts.push(`${_fmt(file_tokens)}t`);
+    }
+    count.textContent = parts.length > 0 ? parts.join(' · ') : '—';
+
+    // Tooltip shows detailed breakdown
+    const lines = [];
+    lines.push(`Messages: ${_fmt(msg_tokens)} / ${msg_limit > 0 ? _fmt(msg_limit) : 'no limit'}`);
+    if (file_count > 0) {
+      lines.push(`Files (${file_count}): ${_fmt(file_tokens)} / ${file_limit > 0 ? _fmt(file_limit) : 'no limit'}`);
+      if (file_limit > 0 && file_tokens > file_limit) {
+        lines.push('⚠ File context EXCEEDED — close files to recover');
+      }
+    } else {
+      lines.push('Files: none open');
+    }
+    budget.title = lines.join('\n');
+  }
+
+  async function updateContextBudget() {
+    try {
+      const resp = await fetch(`/api/v1/history?session_id=${encodeURIComponent(sessionId)}&_cb=${Date.now()}`, {
+        cache: 'reload', credentials: 'same-origin',
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      // Merge with any real-time SSE stats we have
+      _ctxStats = {
+        msg_tokens: data.total_tokens || 0,
+        msg_limit: data.token_limit || 0,
+        file_tokens: data.file_tokens || 0,
+        file_limit: data.file_limit || 0,
+        file_count: data.file_count || 0,
+        trimmed: data.was_trimmed,
+      };
+      _updateBudgetDisplay();
+    } catch (_) {
+      // Silently ignore — budget display is non-critical
     }
   }
 

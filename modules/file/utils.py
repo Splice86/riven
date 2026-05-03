@@ -21,11 +21,11 @@ def _count_tokens(text: str) -> int:
 
 
 def _get_token_limit() -> int:
-    """Return the file.token_limit config value (0 = no limit)."""
+    """Return the file.limit config value (0 = no limit)."""
     try:
         from config import get
 
-        raw = get("file.token_limit", 0)
+        raw = get("file.limit", 0)
         return int(raw) if raw else 0
     except Exception:
         return 0

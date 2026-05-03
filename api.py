@@ -178,6 +178,12 @@ async def send_message(req: MessageRequest):
                                 await generator.aclose()
                                 return
 
+                            # Core can yield pre-formatted SSE strings (named event lines like
+                            # 'event: context_stats\ndata: {...}\n\n'). Yield them verbatim.
+                            if isinstance(event, str):
+                                yield event
+                                continue
+
                             if "error" in event:
                                 yield f"data: {json.dumps({'error': event['error']})}\n\n"
                                 await generator.aclose()
@@ -222,6 +228,9 @@ async def send_message(req: MessageRequest):
         output = ""
         while True:
             async for event in core.run_stream(req.session_id):
+                # Skip any pre-formatted SSE strings (named events) — not applicable in non-streaming
+                if isinstance(event, str):
+                    continue
                 if "error" in event:
                     raise Exception(event["error"])
                 if "token" in event:
@@ -250,7 +259,8 @@ def get_history(session_id: str, response: Response):
     what the LLM actually sees. Also returns token stats for UI budget display.
     """
     from db import get_history_by_tokens as _get_history_by_tokens
-    from db.context_db import _get_message_token_limit
+    from db.context_db import _get_context_limit
+    from events import get_file_context_stats
 
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -258,7 +268,8 @@ def get_history(session_id: str, response: Response):
 
     try:
         messages, total_tokens, total_messages, was_trimmed = _get_history_by_tokens(session=session_id)
-        limit = _get_message_token_limit()
+        limit = _get_context_limit()
+        file_stats = get_file_context_stats()
         return {
             "messages": messages,
             "count": len(messages),
@@ -266,6 +277,11 @@ def get_history(session_id: str, response: Response):
             "total_tokens": total_tokens,
             "token_limit": limit,
             "was_trimmed": was_trimmed,
+            # File context stats (from events.py shared state, set by file_context())
+            "file_tokens": file_stats["file_tokens"],
+            "file_limit": file_stats["file_limit"],
+            "file_count": file_stats["file_count"],
+            "file_limited": file_stats["file_limited"],
         }
     except Exception as e:
         raise HTTPException(500, f"Context database error: {e}")

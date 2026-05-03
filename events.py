@@ -34,6 +34,51 @@ from typing import Any, Callable
 
 logger = logging.getLogger("events")
 
+# ─── Shared context stats (updated by file module, consumed by core) ──────────
+# Written synchronously by file_context() so core.py can read it immediately
+# after build_context_from_modules() returns — before the async event handler fires.
+_file_context_stats: dict = {
+    "file_tokens": 0,
+    "file_limit": 0,
+    "file_count": 0,
+    "file_limited": False,
+}
+
+# Message context stats — written by core.py right after get_history_by_tokens,
+# consumed when building context_stats SSE event.
+_msg_context_stats: dict = {
+    "msg_tokens": 0,
+    "msg_limit": 0,
+}
+
+
+def set_file_context_stats(tokens: int, limit: int, count: int, limited: bool) -> None:
+    """Called by file module to record file context token stats."""
+    global _file_context_stats
+    _file_context_stats = {
+        "file_tokens": tokens,
+        "file_limit": limit,
+        "file_count": count,
+        "file_limited": limited,
+    }
+
+
+def set_msg_context_stats(tokens: int, limit: int) -> None:
+    """Called by core.py to record message/history token stats."""
+    global _msg_context_stats
+    _msg_context_stats = {"msg_tokens": tokens, "msg_limit": limit}
+
+
+def get_file_context_stats() -> dict:
+    """Returns a copy of the current file context stats."""
+    return dict(_file_context_stats)
+
+
+def get_msg_context_stats() -> dict:
+    """Returns a copy of the current message context stats."""
+    return dict(_msg_context_stats)
+
+
 # ─── Lock Registry ─────────────────────────────────────────────────────────────
 
 # How long a lock lives before it expires (seconds).
