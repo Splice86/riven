@@ -5,6 +5,7 @@ from .context_db import (
     add,
     delete_session,
     get_history,
+    get_history_by_tokens,
 )
 
-__all__ = ["ContextDB", "add", "delete_session", "get_history"]
+__all__ = ["ContextDB", "add", "delete_session", "get_history", "get_history_by_tokens"]

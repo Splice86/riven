@@ -31,7 +31,7 @@ from typing import Callable, AsyncIterator
 from openai import AsyncOpenAI
 from context import ContextManager, _json_safe
 from config import get
-from db import ContextDB
+from db import ContextDB, get_history_by_tokens
 from modules import registry, Module, CalledFn, ContextFn, _session_id
 from logging_config import get_logger
 
@@ -541,8 +541,8 @@ class Core:
             _debug("run_stream: fetching history from context DB", session_id)
             _mem_fetch_start = time.time()
             try:
-                history = db.get_history(session=session_id)
-                _debug(f"run_stream: history received ({len(history)} msgs, took {time.time()-_mem_fetch_start:.3f}s)", session_id)
+                history, ctx_tokens, total_msgs, was_trimmed = get_history_by_tokens(session=session_id)
+                _debug(f"run_stream: history received ({len(history)}/{total_msgs} msgs, ~{ctx_tokens} tokens, trimmed={was_trimmed}, took {time.time()-_mem_fetch_start:.3f}s)", session_id)
             except Exception as e:
                 context_error = str(e)
                 history = []

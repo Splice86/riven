@@ -103,8 +103,69 @@ def add(
 
 
 def get_history(session: str, limit: int = 200) -> list[dict]:
-    """Fetch all messages for a session ordered by created_at."""
+    """Fetch all messages for a session ordered by created_at.
+    
+    Note: prefer get_history_by_tokens() for LLM context to enforce the
+    message.token_limit budget.
+    """
     return ContextDB().get_history(session, limit=limit)
+
+
+def _get_message_token_limit() -> int:
+    """Read message.token_limit from config (0 = no limit)."""
+    try:
+        from config import get
+        raw = get("message.token_limit", 0)
+        return int(raw) if raw else 0
+    except Exception:
+        return 0
+
+
+def get_history_by_tokens(session: str, limit: int = 200) -> tuple[list[dict], int, int, bool]:
+    """Fetch messages oldest→newest, trimming from the start until total tokens
+    fit within the message.token_limit budget.
+    
+    Args:
+        session: session ID
+        limit: hard cap on row count (safety valve, defaults to 200)
+    
+    Returns:
+        (messages, total_tokens, total_messages, was_trimmed)
+        - messages: trimmed message list oldest→newest
+        - total_tokens: sum of token_count for the returned messages
+        - total_messages: total messages in DB before trimming
+        - was_trimmed: True if any messages were dropped
+    """
+    db_limit = _get_message_token_limit()
+    if db_limit <= 0:
+        # No limit — behave like the old get_history
+        msgs = ContextDB().get_history(session, limit=limit)
+        total = sum(m.get("token_count", 0) for m in msgs)
+        return msgs, total, len(msgs), False
+    
+    # Fetch oldest-first (ASC) so we can drop from the front
+    all_msgs = ContextDB().get_history(session, limit=limit)
+    total_messages = len(all_msgs)
+    
+    if not all_msgs:
+        return [], 0, 0, False
+    
+    # Walk from newest to oldest, accumulating tokens until we hit the limit.
+    # Keep messages from that point onward.
+    running_tokens = 0
+    kept_start = len(all_msgs)  # index of first kept message (0 = keep all)
+    
+    for i in range(len(all_msgs) - 1, -1, -1):
+        tokens = all_msgs[i].get("token_count", 0)
+        if running_tokens + tokens <= db_limit:
+            running_tokens += tokens
+        else:
+            kept_start = i + 1
+            break
+    
+    kept = all_msgs[kept_start:]
+    was_trimmed = kept_start > 0
+    return kept, running_tokens, total_messages, was_trimmed
 
 
 def delete_session(session: str) -> int:

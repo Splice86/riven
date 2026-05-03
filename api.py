@@ -244,16 +244,29 @@ async def send_message(req: MessageRequest):
 
 @app.get("/api/v1/history")
 def get_history(session_id: str, response: Response):
-    """Get conversation history for a session from Context DB."""
-    from db import get_history as _get_history
+    """Get conversation history for a session from Context DB.
+    
+    Uses token-based trimming (message.token_limit) so the returned list matches
+    what the LLM actually sees. Also returns token stats for UI budget display.
+    """
+    from db import get_history_by_tokens as _get_history_by_tokens
+    from db.context_db import _get_message_token_limit
 
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
 
     try:
-        history = _get_history(session=session_id)
-        return {"messages": history, "count": len(history)}
+        messages, total_tokens, total_messages, was_trimmed = _get_history_by_tokens(session=session_id)
+        limit = _get_message_token_limit()
+        return {
+            "messages": messages,
+            "count": len(messages),
+            "total_messages": total_messages,
+            "total_tokens": total_tokens,
+            "token_limit": limit,
+            "was_trimmed": was_trimmed,
+        }
     except Exception as e:
         raise HTTPException(500, f"Context database error: {e}")
 
