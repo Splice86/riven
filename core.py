@@ -599,6 +599,12 @@ class Core:
                         issues.append(f"msg[{i}][{role}] content=None (key missing)")
                     elif content == '':
                         issues.append(f"msg[{i}][{role}] content='' {'(tool-call-only)' if has_tc else ''}")
+                    # Audit tool_call arguments for empty strings
+                    for tc in msg.get("tool_calls") or []:
+                        fn = tc.get("function", {})
+                        args = fn.get("arguments", "")
+                        if args == "":
+                            issues.append(f"msg[{i}][{role}] tool_call '{fn.get('name','?')}' has arguments=''")
                 except Exception as e:
                     _debug(f"run_stream: msg[{i}] AUDIT CRASH: {type(e).__name__}: {e}", session_id)
             
