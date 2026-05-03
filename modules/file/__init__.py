@@ -204,8 +204,13 @@ Every file open consumes context space. LLM context windows are finite.
 2. **When you open a file**: its content is immediately available in the {file} context block. Proceed to work with it — do not ask the user what to look at.
 3. **WHILE working**: if you switch to a new goal or task and the open files are no longer relevant,
    call close_file() on the old ones before opening new ones.
-4. **AFTER finishing**: when a file's work is done, close it immediately.
-   Do NOT leave files open "just in case." Open them again when needed.
+4. **WRITE OUTPUT FIRST, CLOSE LAST**: All edits and writes must be complete and saved before
+   closing any file. The sequence is:
+   a) open_file() as needed for reading/writing
+   b) replace_text() / batch_edit() / write_text() to make all changes
+   c) verify all changes are saved (replace_text and write_text auto-save)
+   d) THEN call close_file() — never before all work is done
+   **NEVER close a file while it still has pending changes.**
 5. **Large files**: files >1200 lines are truncated in context. Use open_function(path, name)
    to extract specific classes/functions via AST instead of opening the whole file.
 
@@ -219,7 +224,9 @@ Every file open consumes context space. LLM context windows are finite.
 3. If open_file() fails with a git-tracking warning, call create_project('.') first
 4. open_file() only files you will actively edit/read in the next few steps
 5. For large Python files, prefer open_function() over open_file() with wide line ranges
-6. As soon as you finish a task or switch goals, close_file() the now-irrelevant files
+6. Make ALL edits/writes first — write_text(), replace_text(), batch_edit() all auto-save
+7. ONLY after all changes are saved, call close_file() on files no longer needed
+8. close_all_files() is useful at the very end of a session, not mid-task
 
 """
 
