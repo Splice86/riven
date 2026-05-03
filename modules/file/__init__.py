@@ -51,6 +51,8 @@ from modules.file.git import (
     _git_status,
     _git_status_summary,
     _git_warning,
+    _git_add,
+    track_in_git,
 )
 
 from modules.file.db import (
@@ -350,6 +352,18 @@ def get_module() -> Module:
         name="file",
         called_fns=[
             CalledFn(
+                name="track_in_git",
+                description="Add a file to git and verify it's in the correct repository.\n\nUse this when open_file fails with 'not tracked by git' error.\nIt will:\n1. Find the git repo for the file\n2. Verify the file is in the same repo as the riven project\n3. Add the file to git if not already tracked\n\nArgs:\n- path: Path to the file to track in git\n\nReturns: (success, message) - success True if file is now tracked.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file to track in git"}
+                    },
+                    "required": ["path"]
+                },
+                fn=track_in_git,
+            ),
+            CalledFn(
                 name="open_file",
                 description="Open a file and add it to the file context.\n\nRange validation:\n- Opening a range that is a subset of an already-open range is REJECTED (read from context).\n- Opening a range that supersets or overlaps an existing range EXPANDS the existing entry.\n\nArgs:\n- path: Path to the file to open\n- line_start: Start line for partial opening (0-indexed)\n- line_end: End line for partial opening (default: None = to end)",
                 parameters={
@@ -618,4 +632,6 @@ __all__ = [
     "_git_status",
     "_git_warning",
     "_git_status_summary",
+    "_git_add",
+    "track_in_git",
 ]

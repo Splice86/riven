@@ -46,6 +46,11 @@
         <svg viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
         Editor
       </button>
+
+      <button class="btn" id="toggle-panel-btn" title="Toggle workflow panel" disabled>
+        <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+        Plan
+      </button>
     </div>
   </header>
 
@@ -67,6 +72,26 @@
             <line x1="22" y1="2" x2="11" y2="13"/>
             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Workflow panel -->
+    <div id="workflow-panel" class="hidden">
+      <div class="panel-header">
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
+          Workflow Plan
+        </div>
+        <button class="panel-close-btn" id="panel-close-btn" title="Close panel">×</button>
+      </div>
+      <div class="panel-body" id="panel-body">
+        <div class="panel-empty">No active workflow.<br>Start one with guide_workflow.</div>
+      </div>
+      <div class="panel-footer" id="panel-footer" style="display:none">
+        <button class="panel-advance-btn" id="advance-stage-btn" disabled>
+          Advance Stage
+          <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
       </div>
     </div>
@@ -559,6 +584,13 @@
             pendingThinking = null;  // End thinking block
             pendingToolCall = event.tool_call;
             appendMessage('tool-call', { name: event.tool_call.name, args: event.tool_call.args });
+            // Refresh workflow panel immediately after workflow tool calls
+            const wfTools = ['workflow_status', 'mark_step_done', 'mark_step_in_progress',
+                             'skip_step', 'expand_implement_steps', 'advance_stage', 'stop_workflow',
+                             'guide_workflow', 'build_workflow', 'start_workflow'];
+            if (wfTools.includes(event.tool_call.name)) {
+              loadWorkflowPanel();
+            }
           }
           else if (event.tool_result !== undefined) {
             if (pendingToolCall) {
@@ -772,9 +804,169 @@
     return div;
   }
 
+  // ── Workflow Panel ────────────────────────────────────────
+  let panelPollInterval = null;
+  let panelVisible = false;  // starts hidden, shown when workflow goes active
+  const PANEL_POLL_MS = 4000;
+
+  function loadWorkflowPanel() {
+    const panel = document.getElementById('workflow-panel');
+    if (panel.classList.contains('hidden') && !panelVisible) return;
+
+    fetch(`/api/v1/workflow/status?session_id=${encodeURIComponent(sessionId)}`)
+      .then(r => r.json())
+      .then(data => {
+        renderWorkflowPanel(data);
+        // Auto-show panel when a workflow becomes active
+        if (data.active && !panelVisible) {
+          panelVisible = true;
+          panel.classList.remove('hidden');
+          document.getElementById('toggle-panel-btn').classList.add('active');
+        }
+      })
+      .catch(err => console.warn('Workflow panel load failed:', err));
+  }
+
+  function startPanelPolling() {
+    if (panelPollInterval) return;
+    panelPollInterval = setInterval(loadWorkflowPanel, PANEL_POLL_MS);
+  }
+
+  function stopPanelPolling() {
+    if (panelPollInterval) {
+      clearInterval(panelPollInterval);
+      panelPollInterval = null;
+    }
+  }
+
+  function renderWorkflowPanel(data) {
+    const body = document.getElementById('panel-body');
+    const footer = document.getElementById('panel-footer');
+    const toggleBtn = document.getElementById('toggle-panel-btn');
+
+    if (!data.active) {
+      toggleBtn.disabled = true;
+      footer.style.display = 'none';
+      body.innerHTML = '<div class="panel-empty">No active workflow.<br>Start one with guide_workflow.</div>';
+      return;
+    }
+
+    toggleBtn.disabled = false;
+
+    let html = `<div class="panel-workflow-name">${escapeHtml(data.workflow_name || data.workflow_id || '')}</div>`;
+
+    for (const stage of (data.stages || [])) {
+      const isCurrent = stage.status === 'current';
+      const dotClass = stage.status;
+      const nameClass = stage.status;
+
+      html += `<div class="panel-stage">`;
+      html += `<div class="panel-stage-header">`;
+      html += `<div class="panel-stage-dot ${dotClass}"></div>`;
+      html += `<div class="panel-stage-name ${nameClass}">${escapeHtml(stage.name)}</div>`;
+      html += `</div>`;
+
+      if (stage.description) {
+        html += `<div class="panel-stage-desc">${escapeHtml(stage.description)}</div>`;
+      }
+      if (stage.gate_description) {
+        html += `<div class="panel-stage-gate">Gate: ${escapeHtml(stage.gate_description)}</div>`;
+      }
+
+      if (stage.steps && stage.steps.length > 0) {
+        html += `<div class="panel-steps">`;
+        for (const step of stage.steps) {
+          const iconClass = step.status === 'COMPLETE' ? 'complete' :
+                            step.status === 'SKIPPED' ? 'skipped' :
+                            step.status === 'IN_PROGRESS' ? 'in-progress' : 'pending';
+          const iconChar = step.status === 'COMPLETE' ? '✓' :
+                           step.status === 'SKIPPED' ? '⊘' :
+                           step.status === 'IN_PROGRESS' ? '→' : '○';
+          const descClass = step.status === 'COMPLETE' || step.status === 'SKIPPED' ? 'complete' : 'pending';
+          html += `<div class="panel-step ${isCurrent ? 'current-stage' : ''}">`;
+          html += `<span class="panel-step-icon ${iconClass}">${iconChar}</span>`;
+          html += `<span class="panel-step-desc ${descClass}">${escapeHtml(step.description)}</span>`;
+          html += `</div>`;
+        }
+        html += `</div>`;
+
+        if (isCurrent && data.stage_progress) {
+          html += `<div class="panel-progress">${data.stage_progress[0]}/${data.stage_progress[1]} steps</div>`;
+        }
+      }
+
+      html += `</div>`;
+    }
+
+    body.innerHTML = html;
+
+    // Advance button
+    if (data.can_advance) {
+      footer.style.display = '';
+      document.getElementById('advance-stage-btn').disabled = false;
+    } else {
+      footer.style.display = '';
+      document.getElementById('advance-stage-btn').disabled = true;
+    }
+  }
+
+  // Toggle panel visibility
+  function togglePanel() {
+    const panel = document.getElementById('workflow-panel');
+    panelVisible = !panelVisible;
+    if (panelVisible) {
+      panel.classList.remove('hidden');
+      document.getElementById('toggle-panel-btn').classList.add('active');
+      loadWorkflowPanel();
+      startPanelPolling();
+    } else {
+      panel.classList.add('hidden');
+      document.getElementById('toggle-panel-btn').classList.remove('active');
+      stopPanelPolling();
+    }
+  }
+
+  document.getElementById('toggle-panel-btn').addEventListener('click', togglePanel);
+  document.getElementById('panel-close-btn').addEventListener('click', togglePanel);
+
+  // Advance stage via API
+  document.getElementById('advance-stage-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('advance-stage-btn');
+    btn.disabled = true;
+    btn.textContent = 'Advancing...';
+    try {
+      await fetch('/api/v1/workflow/advance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      // Refresh panel after advancing
+      loadWorkflowPanel();
+    } catch (e) {
+      console.warn('Advance failed:', e);
+      btn.disabled = false;
+      btn.innerHTML = 'Advance Stage <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
+    }
+  });
+
   // ── Initialize ───────────────────────────────────────────
   setStatus(false, 'Ready');
-  loadShards().then(() => loadHistory());
+  loadShards().then(() => loadHistory()).then(() => {
+    // Check for active workflow on load and auto-show panel if found
+    loadWorkflowPanel();
+    // Start polling only if a workflow is already active
+    fetch(`/api/v1/workflow/status?session_id=${encodeURIComponent(sessionId)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.active) {
+          panelVisible = true;
+          document.getElementById('workflow-panel').classList.remove('hidden');
+          document.getElementById('toggle-panel-btn').classList.add('active');
+          startPanelPolling();
+        }
+      })
+      .catch(() => {});
+  });
   document.getElementById('message-input').focus();
 })();
 </script>

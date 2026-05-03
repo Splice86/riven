@@ -588,6 +588,254 @@ html, body {
 
 /* ---- Screen panel (dropdown) ---- */
 
+/* ---- Workflow Panel ---- */
+#workflow-panel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary);
+  overflow: hidden;
+  transition: width 0.25s ease, opacity 0.25s ease;
+}
+
+#workflow-panel.hidden {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(255, 166, 87, 0.08);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--accent-orange);
+}
+
+.panel-title svg {
+  width: 12px;
+  height: 12px;
+  stroke: var(--accent-orange);
+  flex-shrink: 0;
+}
+
+.panel-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.panel-close-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+}
+
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Workflow name */
+.panel-workflow-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Stage block */
+.panel-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-stage-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.panel-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.panel-stage-dot.past  { background: var(--accent-green); opacity: 0.6; }
+.panel-stage-dot.current { background: var(--accent-orange); box-shadow: 0 0 6px rgba(255, 166, 87, 0.5); }
+.panel-stage-dot.future { background: var(--text-muted); }
+
+.panel-stage-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.panel-stage-name.past  { color: var(--text-muted); }
+.panel-stage-name.current { color: var(--accent-orange); }
+.panel-stage-name.future { color: var(--text-muted); }
+
+.panel-stage-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-left: 14px;
+  line-height: 1.4;
+}
+
+.panel-stage-gate {
+  font-size: 10px;
+  color: var(--accent-purple);
+  padding-left: 14px;
+  font-style: italic;
+  margin-top: 1px;
+}
+
+/* Step list */
+.panel-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 14px;
+  margin-top: 2px;
+}
+
+.panel-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
+.panel-step.current-stage {
+  background: rgba(255, 166, 87, 0.04);
+}
+
+.panel-step-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-size: 10px;
+}
+
+.panel-step-icon.pending  { color: var(--text-muted); }
+.panel-step-icon.complete { color: var(--accent-green); }
+.panel-step-icon.in-progress { color: var(--accent-cyan); }
+.panel-step-icon.skipped  { color: var(--text-muted); text-decoration: line-through; }
+
+.panel-step-desc {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.panel-step-desc.complete { text-decoration: line-through; opacity: 0.6; }
+.panel-step-desc.pending  { opacity: 0.7; }
+
+/* Stage progress */
+.panel-progress {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 14px;
+}
+
+/* Advance button */
+.panel-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.panel-advance-btn {
+  width: 100%;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  color: var(--accent-orange);
+  background: rgba(255, 166, 87, 0.1);
+  border: 1px solid rgba(255, 166, 87, 0.3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.panel-advance-btn:hover {
+  background: rgba(255, 166, 87, 0.2);
+  border-color: rgba(255, 166, 87, 0.5);
+}
+
+.panel-advance-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.panel-advance-btn svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+
+/* Panel toggle in header */
+#toggle-panel-btn.active {
+  color: var(--accent-orange);
+  background: rgba(255, 166, 87, 0.12);
+  border-color: rgba(255, 166, 87, 0.4);
+}
+
+/* Panel empty state */
+.panel-empty {
+  padding: 20px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.6;
+}
+
 /* ---- Scrollbar ---- */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

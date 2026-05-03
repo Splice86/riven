@@ -15,7 +15,7 @@ file:
   # Maximum combined token count for all open files in file_context.
   # If open files exceed this, a warning is returned with the tool call.
   # Set to 0 to disable token checking.
-  token_limit: 8000
+  token_limit: 32000
 
 # Named LLM configs (URLs here are templates, secrets in secrets.yaml)
 # Shards reference these by name: llm_config: primary

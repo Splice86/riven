@@ -69,6 +69,95 @@ def _is_git_tracked(path: str) -> bool:
     return result.returncode == 0
 
 
+def _git_add(path: str) -> bool:
+    """Add a file to git tracking.
+
+    Uses git toplevel from the file's directory to find the actual git repo.
+    Runs `git add` on the relative path from repo root.
+
+    Returns True if file was added successfully or already tracked.
+    Returns False if git repo not found or add failed.
+    """
+    abs_path = os.path.abspath(path)
+
+    # Find the actual git repo root
+    root = _git_toplevel(abs_path)
+    if root is None:
+        return False
+
+    # git add needs the relative path from repo root
+    try:
+        relative = os.path.relpath(abs_path, root)
+    except ValueError:
+        # Cross-device path
+        return False
+
+    result = _run_git(['add', '--', relative], cwd=root)
+    return result.returncode == 0
+
+
+def track_in_git(path: str) -> tuple[bool, str]:
+    """Add a file to git and verify it's in the correct repository.
+
+    This is the primary tool for enrolling files in git. It:
+    1. Finds the git repo for the file
+    2. Verifies the file is in the same repo as the riven project
+    3. Adds the file to git if not already tracked
+
+    Returns:
+        (success, message) tuple where success is True if file is now tracked.
+
+    The message explains any issues or confirms enrollment.
+    """
+    import os
+    from config import find_project_root
+
+    abs_path = os.path.abspath(path)
+    filename = os.path.basename(path)
+
+    # Find the git repo for this file
+    file_git_root = _git_toplevel(abs_path)
+    if file_git_root is None:
+        return False, (
+            f"Cannot track {filename} — no git repository found.\n\n"
+            f"Initialize git first: git init && git add {filename} && git commit -m 'initial'"
+        )
+
+    # Find the project root (riven project)
+    project_root = find_project_root(abs_path)
+    if project_root is None:
+        return False, (
+            f"Cannot track {filename} — not inside a riven project.\n\n"
+            f"File is in git repo at {file_git_root}, but no .riven/ directory found."
+        )
+
+    # Find the git repo for the project
+    project_git_root = _git_toplevel(project_root)
+    if project_git_root is None:
+        return False, (
+            f"Cannot track {filename} — project is not inside a git repository."
+        )
+
+    # Cross-repo check: file's repo must match project's repo
+    if os.path.normpath(file_git_root) != os.path.normpath(project_git_root):
+        return False, (
+            f"Cannot track {filename} — cross-repo conflict.\n\n"
+            f"File is in git repo: {file_git_root}\n"
+            f"Project is in git repo: {project_git_root}\n\n"
+            f"Move {filename} into the project directory, or use allow_untracked=True to open anyway."
+        )
+
+    # Check if already tracked
+    if _is_git_tracked(abs_path):
+        return True, f"{filename} is already tracked in git."
+
+    # Try to add the file
+    if _git_add(abs_path):
+        return True, f"Added {filename} to git tracking."
+
+    return False, f"Failed to add {filename} to git. Check git status for errors."
+
+
 def _get_git_hash(path: str) -> str | None:
     """Get the content-based git hash (hash-object) of a file.
 

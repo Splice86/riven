@@ -302,7 +302,7 @@ for name in _registered_modules:
 
 
 # Register web modules (live in web/, not modules/)
-for web_mod in ["editor", "chat"]:
+for web_mod in ["editor", "chat", "workflow"]:
     try:
         mod = importlib.import_module(f"web.{web_mod}")
         if hasattr(mod, "register_routes"):
