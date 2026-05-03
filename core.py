@@ -29,11 +29,17 @@ from datetime import datetime, timezone
 from typing import Callable, AsyncIterator
 
 from openai import AsyncOpenAI
-from context import ContextManager, _json_safe
+from context import ContextManager, _json_safe, _msg_text
 from config import get
 from db import ContextDB, get_history_by_tokens
+from db.context_db import _count_tokens
 from modules import registry, Module, CalledFn, ContextFn, _session_id
 from logging_config import get_logger
+from events import (
+    get_file_context_stats,
+    get_msg_context_stats,
+    set_msg_context_stats,
+)
 
 logger = get_logger(__name__)
 
@@ -399,6 +405,9 @@ class Core:
         except asyncio.CancelledError:
             logger.info("[Tool] '%s' CANCELLED by user", call.name)
             raise  # propagate to run_stream tool loop
+        except asyncio.TimeoutError:
+            error = f"Function timed out after {timeout}s"
+            logger.warning("[Tool] '%s' TIMED OUT after %ss", call.name, timeout)
         except Exception as e:
             error = str(e)
             logger.error("[Tool] '%s' EXCEPTION after %.3fs: %s", call.name, time.time()-_exec_start, e, exc_info=True)
@@ -543,6 +552,9 @@ class Core:
             try:
                 history, ctx_tokens, total_msgs, was_trimmed = get_history_by_tokens(session=session_id)
                 _debug(f"run_stream: history received ({len(history)}/{total_msgs} msgs, ~{ctx_tokens} tokens, trimmed={was_trimmed}, took {time.time()-_mem_fetch_start:.3f}s)", session_id)
+                # Track message tokens for real-time budget display
+                ctx_limit = int(get("context.limit", 0) or 0)
+                set_msg_context_stats(ctx_tokens, ctx_limit)
             except Exception as e:
                 context_error = str(e)
                 history = []
@@ -570,6 +582,27 @@ class Core:
                     args = tc.get("function", {}).get("arguments", "")
                     if args == "":
                         tc["function"]["arguments"] = "{}"
+            
+            # --- Combined context trim (second pass) --------------------------------
+            # After file context is known, trim messages if combined total exceeds
+            # context.limit. Files are NEVER trimmed — messages are the flexible part.
+            # (First pass in get_history_by_tokens uses context.limit alone, so this
+            # catches the case where large file content consumes part of the budget.)
+            file_stats = get_file_context_stats()
+            ctx_limit = int(get("context.limit", 0) or 0)
+            if ctx_limit > 0 and file_stats.get("file_tokens", 0) > 0:
+                file_tokens = file_stats["file_tokens"]
+                remaining = ctx_limit - file_tokens
+                if remaining > 0:
+                    trimmed = self._ctx.trim_messages_to_fit(
+                        api_messages, remaining, count_tokens=_count_tokens
+                    )
+                    if len(trimmed) < len(api_messages):
+                        _debug(f"combined_trim: {len(api_messages)} -> {len(trimmed)} msgs (file={file_tokens}t, ctx={ctx_limit}t)", session_id)
+                        api_messages = trimmed
+                        # Update tracked msg tokens after second-pass trim
+                        new_tokens = sum(_count_tokens(_msg_text(m)) for m in api_messages)
+                        set_msg_context_stats(new_tokens, ctx_limit)
             
             # --- RAW PRINT: dump raw api_messages with repr (outside all try/except) ---
             # Using raw print() so it cannot be silenced by any exception handler
@@ -869,6 +902,15 @@ class Core:
             # --- Yield assistant message ---
             safe_assistant_msg = _json_safe(assistant_msg)
             yield {"assistant": safe_assistant_msg}
+
+            # --- Emit context stats for real-time budget display in web UI ---
+            # Read file context tokens (set synchronously by file_context()) and
+            # message tokens (set after get_history_by_tokens above).
+            import json
+            msg_stats = get_msg_context_stats()
+            file_stats = get_file_context_stats()
+            stats = {**msg_stats, **file_stats}
+            yield f"event: context_stats\ndata: {json.dumps(stats)}\n\n"
 
             # Signal that context was rebuilt and control returns to harness
             yield {"context_rebuilt": True}

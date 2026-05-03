@@ -14,7 +14,6 @@ from modules.shell import (
     _shell_context,
     _shell_help,
     cd,
-    get_cwd,
     kill,
     run,
     run_background,
@@ -295,20 +294,6 @@ class TestCd:
                     with patch("os.chdir"):
                         result = await cd("~")
                         assert "Changed directory" in result
-
-
-# =============================================================================
-# get_cwd()
-# =============================================================================
-
-class TestGetCwd:
-    """Test get_cwd() function."""
-
-    @pytest.mark.asyncio
-    async def test_get_cwd(self):
-        with patch("os.getcwd", return_value="/workspace"):
-            result = await get_cwd()
-            assert result == "/workspace"
 
 
 # =============================================================================

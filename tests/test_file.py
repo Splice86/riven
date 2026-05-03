@@ -3,11 +3,9 @@
 This test file verifies the integrity and correctness of all file module components:
 - modules/file/__init__.py
 - modules/file/editor.py
-- modules/file/memory.py
 - modules/file/code_parser.py
 
-Tests use actual file operations with temp files where appropriate,
-and mock memory functions where needed for session-specific behavior.
+Tests use actual file operations with temp files where appropriate.
 """
 
 import ast
@@ -42,7 +40,6 @@ from modules.file import (
     pwd,
     chdir,
     list_open_files,
-    get_file_history,
     file_context,
     get_module,
     _atomic_write,
@@ -54,11 +51,8 @@ from modules.file import (
     _extract_code_definitions,
     _find_definitions_by_name,
     _extract_definition_source,
-    format_file_history,
-    get_file_history,
     get_open_files,
     hash_content,
-    track_file_change,
 )
 from modules.file.code_parser import (
     DefinitionExtractor,
@@ -988,93 +982,6 @@ def foo():
 
 
 # =============================================================================
-# Memory Functions Tests
-# =============================================================================
-
-class TestMemoryFunctions:
-    """Tests for memory tracking functions."""
-
-    def test_hash_content(self):
-        """Test hash_content function."""
-        h1 = hash_content("test content")
-        h2 = hash_content("test content")
-        h3 = hash_content("different")
-        
-        assert len(h1) == 8
-        assert h1 == h2
-        assert h1 != h3
-
-    def test_track_file_change(self, mock_session_id):
-        """Test track_file_change function."""
-        # Patch where memory.py uses it (local binding from 'from .db import')
-        with patch('modules.file.memory.add_file_change') as mock_set:
-            mock_set.return_value = True
-
-            result = track_file_change(
-                mock_session_id,
-                "/path/to/file.py",
-                "replace_text",
-                "some diff"
-            )
-
-            assert result is True
-            assert mock_set.called
-
-    def test_track_file_change_failure(self, mock_session_id):
-        """Test track_file_change handles failures gracefully."""
-        with patch('modules.file.memory.add_file_change') as mock_set:
-            mock_set.side_effect = Exception("Memory error")
-
-            result = track_file_change(
-                mock_session_id,
-                "/path/to/file.py",
-                "replace_text",
-                "diff"
-            )
-
-            assert result is False  # Non-blocking
-
-    def test_format_file_history_empty(self):
-        """Test format_file_history with empty list."""
-        result = format_file_history([])
-        assert "No file changes" in result
-
-    def test_format_file_history_with_data(self):
-        """Test format_file_history with data."""
-        memories = [
-            {
-                "path": "/path/to/file1.py",
-                "change_type": "replace_text",
-                "success": True,
-            },
-            {
-                "path": "/path/to/file2.py",
-                "change_type": "batch_edit",
-                "success": False,
-            }
-        ]
-
-        result = format_file_history(memories)
-
-        assert "File Change History" in result
-        assert "file1.py" in result
-        assert "file2.py" in result
-        assert "✅" in result
-        assert "❌" in result
-
-    def test_get_file_history_with_path(self, mock_session_id):
-        """Test get_file_history with specific path filters correctly."""
-        # Test that path parameter creates the correct keyword
-        # Note: This test verifies the keyword generation without needing to mock
-        import modules.file.memory as memory_module
-        
-        # Check that path parameter generates correct keyword
-        path = "/some/path.py"
-        keyword = f"k:file_change:{path}"
-        assert keyword == "k:file_change:/some/path.py"
-
-
-# =============================================================================
 # Module Integration Tests
 # =============================================================================
 
@@ -1617,34 +1524,6 @@ def helper(): pass
         assert isinstance(result, str)
 
 
-class TestMemoryEdgeCases:
-    """Edge case tests for memory functions."""
-
-    def test_format_file_history_malformed_data(self):
-        """Test format_file_history with incomplete data."""
-        memories = [
-            {},  # Missing fields
-            {"path": "/test.py", "success": True},  # Partial
-        ]
-
-        result = format_file_history(memories)
-
-        assert "File Change History" in result
-        assert "test.py" in result
-
-    def test_get_open_files_with_files(self, mock_session_id):
-        """Test get_open_files returns records from the DB."""
-        with patch('modules.file.editor.get_open_files') as mock:
-            mock.return_value = [
-                {"id": 1, "session_id": mock_session_id, "keyword": "open_file:test.py",
-                 "path": "/test.py", "content": None,
-                 "line_start": "0", "line_end": "*", "created_at": "2026-01-01T00:00:00+00:00"}
-            ]
-            editor = FileEditor(session_id_func=lambda: mock_session_id)
-            result = editor.list_open_files()
-            assert "test.py" in result
-
-
 class TestFileEditorInstanceMethods:
     """Test FileEditor instance methods directly."""
 
@@ -1675,26 +1554,6 @@ class TestFileEditorInstanceMethods:
             result = editor.list_open_files()
             
             assert "No open files" in result
-
-    def test_get_file_history_formatted(self, mock_session_id):
-        """Test FileEditor.get_file_history_formatted() method."""
-        with patch('modules.file.editor.get_file_history') as mock_get:
-            mock_get.return_value = [
-                {
-                    "path": "/test.py",
-                    "change_type": "replace_text",
-                    "success": True,
-                    "created_at": "2026-01-01T00:00:00+00:00"
-                }
-            ]
-
-            editor = FileEditor(session_id_func=lambda: mock_session_id)
-
-            result = editor.get_file_history_formatted()
-
-            assert "test.py" in result
-            assert "change" in result.lower()
-
 
 # =============================================================================
 # Run Tests

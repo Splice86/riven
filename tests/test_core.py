@@ -336,7 +336,9 @@ class TestCoreExecute:
     async def test_execute_timeout(self, mock_wait_for):
         import asyncio
         mock_wait_for.side_effect = asyncio.TimeoutError()
-        core = Core(shard={"modules": [], "system": ""})
+        # Use a short timeout (0.3s) so polling loop exhausts quickly:
+        # 3 iterations × 0.1s chunks = natural timeout triggers on 4th TimeoutError
+        core = Core(shard={"modules": [], "system": "", "tool_timeout": 0.3})
         func_index = {"fn": MagicMock(fn=AsyncMock())}
         call = FunctionCall(id="c1", name="fn", arguments={})
 

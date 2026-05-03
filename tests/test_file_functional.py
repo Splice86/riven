@@ -36,7 +36,7 @@ from modules.file.db import (
     set_open_file,
     _get_db_path,
 )
-from modules.file.memory import get_file_history, track_file_change
+
 
 
 # =============================================================================
@@ -170,42 +170,6 @@ class TestEditorSelfContained:
 
 
 # =============================================================================
-# Test: Memory Functions
-# =============================================================================
-
-class TestMemoryFunctions:
-    """Verify track_file_change and get_file_history work end-to-end."""
-
-    def test_track_file_change_stores_record(self):
-        """track_file_change should store a file-change record in the DB."""
-        sid = f"track-test-{_unique_id()}"
-        result = track_file_change(
-            sid,
-            f"/tmp/test-file-{_unique_id()}.txt",
-            "replace_text",
-            "diff: x -> y",
-        )
-        assert result is True
-
-        history = get_file_history(sid)
-        assert len(history) >= 1
-
-    def test_track_file_change_and_get_file_history_session_isolation(self):
-        """File history for session A should not include session B records."""
-        sid_a = f"isol-a-{_unique_id()}"
-        sid_b = f"isol-b-{_unique_id()}"
-
-        track_file_change(sid_a, f"/tmp/isol-a-{_unique_id()}.py", "replace_text", "a")
-        # Do NOT record anything for sid_b
-
-        history_a = get_file_history(sid_a)
-        history_b = get_file_history(sid_b)
-
-        assert len(history_a) >= 1
-        assert len(history_b) == 0
-
-
-# =============================================================================
 # Test: File Operations Store and Retrieve Memories
 # =============================================================================
 
@@ -258,10 +222,6 @@ class TestFileOperationsWithMemory:
         # replace_text returns a string starting with ✅ or "Replaced"
         assert "replaced" in result.lower() or "\u2705" in result
         assert Path(file_path).read_text() == "new_value = 1\n"
-
-        # Verify change was stored
-        history = get_file_history(sid)
-        assert len(history) >= 1
 
     def test_close_file_removes_open_file_memory(self, editor, temp_dir, sid):
         """close_file should remove the open_file record from the DB."""

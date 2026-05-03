@@ -21,6 +21,17 @@ logger = get_logger(__name__)
 # High-level debug flag
 DEBUG_HANG = True  # Enable for lock-up debugging
 
+
+def _count_tokens(text: str) -> int:
+    """Estimate token count using character-length heuristic.
+
+    Same logic as db.context_db._count_tokens — char/4 + 2 padding.
+    """
+    if not text:
+        return 0
+    return (len(text) // 4) + 2
+
+
 def _debug(step: str, session_id: str = None) -> None:
     """Timestamped debug messages to log file."""
     if not DEBUG_HANG:
@@ -36,13 +47,13 @@ def _debug(step: str, session_id: str = None) -> None:
 
 def _json_safe(obj):
     """Convert an object to JSON-safe Python types.
-    
+
     Recursively converts pydantic models, dataclasses, etc. to plain dicts/lists.
     Handles Undefined and other non-serializable types.
     """
     if obj is None:
         return None
-    
+
     # Handle pydantic Undefined explicitly
     try:
         from pydantic import Undefined
@@ -50,7 +61,7 @@ def _json_safe(obj):
             return None
     except ImportError:
         pass
-    
+
     if isinstance(obj, (str, int, float, bool)):
         return obj
     if isinstance(obj, list):
@@ -87,18 +98,18 @@ class ContextManager:
     ):
         self._tool_max_lines = tool_result_max_lines
         self._tool_char_per_line = tool_result_char_per_line
-    
+
     # -------------------------------------------------------------------------
     # Context building (from modules)
     # -------------------------------------------------------------------------
-    
+
     def build_context_from_modules(self, registry) -> dict[str, str]:
         """Build context dict by calling all registered context functions."""
         _debug("ContextManager.build_context_from_modules: START")
         ctx = registry.build_context()
         _debug(f"ContextManager.build_context_from_modules: DONE, {len(ctx)} tags")
         return ctx
-    
+
     def build_system_prompt(
         self,
         template: str,
@@ -115,33 +126,33 @@ class ContextManager:
                 _debug(f"ContextManager.build_system_prompt: replaced {{{tag}}}")
                 replacements += 1
             system = system.replace(placeholder, content)
-        unreplaced = [m.group(1) for m in __import__('re').finditer(r'\{(\w+)\}', system)]
+        unreplaced = [m.group(1) for m in re.finditer(r'\{(\w+)\}', system)]
         if unreplaced:
             _debug(f"ContextManager.build_system_prompt: UNREPLACED placeholders: {unreplaced}")
         _debug(f"ContextManager.build_system_prompt: DONE ({replacements} replaced, system len={len(system)})")
         return system
-    
+
     # -------------------------------------------------------------------------
     # Message processing
     # -------------------------------------------------------------------------
-    
+
     @staticmethod
     def reorder_messages(messages: list[dict]) -> list[dict]:
         """Reorder messages so tool results follow their assistant message.
-        
+
         DEFENSIVE-ONLY: With proper storage ordering (assistant before tool result),
         this should rarely be needed. Kept as safety net for clock skew or edge cases.
         Also parses embedded [tool_calls]...[/tool_calls] in content back to proper field.
         """
         if not messages:
             return messages
-        
+
         result = []
         i = 0
         while i < len(messages):
             msg = messages[i]
             original_content = msg.get('content', '<KEY_MISSING>')
-            
+
             # Parse embedded tool_calls from content if present
             if msg.get('role') == 'assistant' and msg.get('content') and '[tool_calls]' in msg.get('content', ''):
                 content = msg['content']
@@ -160,7 +171,7 @@ class ContextManager:
                     except json.JSONDecodeError as e:
                         _debug(f"reorder: FAILED to parse [tool_calls] from msg[{i}]: {e}", None)
                         pass
-            
+
             # If this is a tool message, find its matching assistant and insert after it
             if msg.get('role') == 'tool':
                 tool_call_id = msg.get('tool_call_id', '')
@@ -187,20 +198,20 @@ class ContextManager:
             else:
                 result.append(msg)
             i += 1
-        
+
         _debug(f"reorder: DONE {len(messages)} -> {len(result)} msgs, final roles={[m.get('role') for m in result]}", None)
         return result
-    
+
     @staticmethod
     def truncate_tool_result(content: str, max_lines: int, char_per_line: int) -> str:
         """Truncate tool result content to a max number of lines.
-        
+
         If content has newlines, truncate at max_lines lines.
         If content has no newlines, treat every char_per_line chars as a "virtual line".
         """
         if not content:
             return content
-        
+
         if '\n' in content:
             lines = content.split('\n')
             if len(lines) <= max_lines:
@@ -214,7 +225,66 @@ class ContextManager:
             max_chars = max_lines * char_per_line
             truncated = content[:max_chars]
             return truncated + f'[TRUNCATED: original had {len(content)} chars]'
-    
+
+    @staticmethod
+    def _msg_text(msg: dict) -> str:
+        """Extract text content from a message dict for token counting.
+
+        Used by trim_messages_to_fit to budget message content.
+        """
+        content = msg.get("content") or ""
+        if content:
+            return content
+        # For assistant messages with tool_calls but no content,
+        # count the function names + arguments as the "text"
+        tool_calls = msg.get("tool_calls") or []
+        parts = []
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            name = fn.get("name", "")
+            args = fn.get("arguments", "")
+            if name:
+                parts.append(f"{name}({args})")
+        return " ".join(parts)
+
+    @staticmethod
+    def trim_messages_to_fit(
+        messages: list[dict],
+        max_tokens: int,
+        count_tokens: callable = None,
+    ) -> list[dict]:
+        """Trim messages oldest-first until total tokens fit within max_tokens.
+
+        This is the second-pass trim — used after file context is known to enforce
+        the total context budget (messages + file content combined).
+
+        Args:
+            messages: Message list (oldest first, as from DB)
+            max_tokens: Maximum total tokens allowed
+            count_tokens: Function(text: str) -> int. Defaults to _count_tokens.
+
+        Returns:
+            Trimmed message list (may be unchanged if already under limit).
+        """
+        if count_tokens is None:
+            count_tokens = _count_tokens
+
+        total = sum(count_tokens(_msg_text(m)) for m in messages)
+        if total <= max_tokens:
+            return messages
+
+        running = 0
+        kept_start = 0
+        for i, msg in enumerate(messages):
+            t = count_tokens(_msg_text(msg))
+            if running + t <= max_tokens:
+                running += t
+            else:
+                kept_start = i
+                break
+
+        return messages[kept_start:]
+
     def prepare_messages_for_llm(
         self,
         history: list[dict],
@@ -222,23 +292,23 @@ class ContextManager:
         registry,
     ) -> tuple[list[dict], str]:
         """Build messages for LLM from history, including system prompt.
-        
+
         Args:
             history: Message history from db.ContextDB
             system_template: System prompt template with {tag} placeholders
             registry: Module registry for building context
-        
+
         Returns (api_messages, system_prompt) where api_messages has system
         prompt prepended and messages are processed (reordered, truncated).
         """
         _debug("ContextManager.prepare_messages_for_llm: START")
-        
+
         # Build api_messages from history (filter internal fields)
         api_messages = []
         for msg in history:
             msg_copy = {k: v for k, v in msg.items() if k not in ('id', 'created_at', 'token_count', 'session_id')}
             api_messages.append(msg_copy)
-        
+
         _debug(f"ContextManager.prepare_messages_for_llm: {len(api_messages)} history messages:")
         for i, m in enumerate(api_messages):
             role = m.get('role', '?')
@@ -248,10 +318,10 @@ class ContextManager:
             func_name = m.get('function', '')
             _debug(f"  raw[{i}] role={role} has_content_key={'content' in m} content_len={len(content) if isinstance(content, str) else 'N/A'} has_tc={has_tc} tool_call_id={tc_id[:16] if tc_id else 'NONE'} function={func_name}", None)
             _debug(f"    content: {repr(content[:150]) if isinstance(content, str) else '<NOT_STRING>'}", None)
-        
+
         # Reorder: ensure tool results follow their assistant message
         api_messages = self.reorder_messages(api_messages)
-        
+
         # Truncate tool result content to prevent context overflow
         for msg in api_messages:
             if msg.get('role') == 'tool' and msg.get('content'):
@@ -260,7 +330,7 @@ class ContextManager:
                     self._tool_max_lines,
                     self._tool_char_per_line
                 )
-        
+
         # Add system prompt at the front
         _debug("ContextManager.prepare_messages_for_llm: building system prompt")
         system = self.build_system_prompt(system_template, registry)
@@ -269,10 +339,10 @@ class ContextManager:
             api_messages.insert(0, {"role": "system", "content": system})
         else:
             _debug("ContextManager.prepare_messages_for_llm: WARNING - system prompt is EMPTY, NOT inserting", None)
-        
+
         _debug(f"ContextManager.prepare_messages_for_llm: DONE ({len(api_messages)} total messages, system len={len(system)})")
         return api_messages, system
-    
+
     def sanitize_messages_for_llm(self, api_messages: list[dict]) -> list[dict]:
         """Sanitize messages for LLM API compatibility.
 
@@ -291,7 +361,7 @@ class ContextManager:
             role = msg.get('role', 'unknown')
             had_tool_calls = bool(msg.get('tool_calls'))
             original_content = msg.get('content', '<KEY_MISSING>')
-            
+
             if msg.get('role') == 'tool':
                 # Keep role as "tool" — standard OpenAI format for tool results
                 # Extract function name from stored 'function' property into 'name' field
@@ -312,7 +382,7 @@ class ContextManager:
                 _debug(f"sanitize[{i}]: [{role}] content='', fixing to '(no output)' (has_tc={had_tool_calls})", None)
                 msg['content'] = '(no output)'
             elif isinstance(content, str) and not content.strip():
-                _debug(f"sanitize[{i}]: [{role}] content is whitespace-only ({repr(content)}), fixing to '(no output)'", None)
+                _debug(f"sanitize[{i}]: [{role}] content is whitespace-only ({repr(content)}), fixing to '(no output')", None)
                 msg['content'] = '(no output)'
             elif not isinstance(content, str):
                 # Handle non-string content (list, dict, etc.) by converting to string
@@ -322,3 +392,8 @@ class ContextManager:
                 _debug(f"sanitize[{i}]: [{role}] content OK ({len(content)} chars)", None)
 
         return api_messages
+
+
+# Alias staticmethod for module-level import compatibility.
+# core.py uses: from context import _msg_text
+_msg_text = ContextManager._msg_text

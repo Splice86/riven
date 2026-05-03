@@ -39,14 +39,20 @@ class TestJsonSafe:
         result = _json_safe({"key": "value", "num": 123})
         assert result == {"key": "value", "num": 123}
 
-    def test_pydantic_undefined(self):
+    def test_pydantic_base_model(self):
+        """Test _json_safe with a real pydantic v2 BaseModel instance."""
         from context import _json_safe
+        from pydantic import BaseModel
 
-        try:
-            from pydantic import Undefined
-            assert _json_safe(Undefined) is None
-        except ImportError:
-            pytest.skip("pydantic not available")
+        class FakeModel(BaseModel):
+            name: str
+            count: int
+            active: bool = True
+
+        model = FakeModel(name="test", count=42)
+        result = _json_safe(model)
+
+        assert result == {"name": "test", "count": 42, "active": True}
 
     def test_pydantic_model_dump(self):
         from context import _json_safe
