@@ -16,8 +16,19 @@
 A modular agentic coding system built around **shards** — configurable personas with specific tool sets and behaviors.
 
 ## Overview
-
+hmmm
 Riven Core provides an LLM-powered coding assistant that runs as an API server. It uses a **shard-based architecture** where each shard defines a personality, available tools, and system behavior. This makes it easy to compose different agent behaviors for different tasks.
+
+### Web Interface
+
+A complete web UI is included for interactive use:
+
+| Interface | Purpose |
+|-----------|---------|
+| **Chat** | Real-time conversation with the agent (includes workflow tracking) |
+| **Editor** | Code editing with syntax highlighting (tracks files, follows riven edits) |
+
+Access via `GET /ui/` once the server is running.
 
 ## Architecture
 
@@ -91,13 +102,28 @@ Edit `config.yaml` to configure:
 
 ```
 riven_core/
-├── api.py          # FastAPI server and routes
-├── core.py         # Core agent loop
-├── context.py      # Message processing and truncation
-├── config.py       # Configuration loading
-├── db.py           # SQLite context storage
-├── modules/        # Tool modules (file, shell, time, web_tools)
-├── shards/         # Shard YAML configs
-├── web/            # Web UI (chat, editor)
-└── docs/           # Architecture documentation
+├── api.py              # FastAPI server and routes
+├── core.py             # Core agent loop
+├── context.py          # Message processing and truncation
+├── config.py           # Configuration loading
+├── events.py           # Event handling
+├── db/                 # SQLite context storage
+│   └── context_db.py   # Database operations
+├── modules/            # Tool modules
+│   ├── file/           # File operations (read, write, edit, search)
+│   ├── shell/          # Shell command execution
+│   ├── time/           # Time utilities
+│   ├── web_tools/      # Web fetch and search
+│   └── workflow/       # Task tracking
+├── shards/             # Shard YAML configs
+│   ├── codehammer.yaml
+│   ├── scribe.yaml
+│   └── testhammer.yaml
+├── web/                # Web UI
+│   ├── chat/           # Chat interface
+│   ├── editor/         # Code editor
+│   └── workflow/       # Workflow visualization
+├── tests/              # Test suite
+├── docs/               # Architecture documentation
+└── requirements.txt    # Dependencies
 ```
