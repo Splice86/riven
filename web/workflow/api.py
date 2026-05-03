@@ -43,7 +43,6 @@ class WorkflowStatusResponse(BaseModel):
     current_stage: Optional[StageInfo] = None
     stages: Optional[list[StageInfo]] = None
     stage_progress: Optional[tuple[int, int]] = None  # (done, total) for current stage
-    can_advance: Optional[bool] = None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -143,13 +142,6 @@ def workflow_status(session_id: str) -> WorkflowStatusResponse:
     else:
         stage_progress = None
 
-    # Can advance: all current steps done/skipped
-    can_advance = False
-    if current_stage_info:
-        pending = [s for s in current_stage_info.steps
-                   if s.status not in ("COMPLETE", "SKIPPED")]
-        can_advance = len(pending) == 0
-
     return WorkflowStatusResponse(
         active=True,
         workflow_id=workflow_id,
@@ -159,25 +151,7 @@ def workflow_status(session_id: str) -> WorkflowStatusResponse:
         current_stage=current_stage_info,
         stages=stages_info,
         stage_progress=stage_progress,
-        can_advance=can_advance,
     )
-
-
-class AdvanceRequest(BaseModel):
-    session_id: str
-
-
-@router.post("/advance")
-def advance_stage(req: AdvanceRequest) -> dict:
-    """Advance to the next stage if all steps in the current stage are done."""
-    from modules import _session_id
-    token = _session_id.set(req.session_id)
-    try:
-        from modules.workflow import advance_stage_cmd
-        result = advance_stage_cmd()
-        return {"ok": True, "result": result}
-    finally:
-        _session_id.reset(token)
 
 
 # ─── Route registration ───────────────────────────────────────────────────────

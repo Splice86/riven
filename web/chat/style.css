@@ -778,48 +778,6 @@ html, body {
   padding-left: 14px;
 }
 
-/* Advance button */
-.panel-footer {
-  padding: 10px 12px;
-  border-top: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
-.panel-advance-btn {
-  width: 100%;
-  padding: 7px 12px;
-  font-size: 12px;
-  font-family: var(--font-ui);
-  font-weight: 600;
-  color: var(--accent-orange);
-  background: rgba(255, 166, 87, 0.1);
-  border: 1px solid rgba(255, 166, 87, 0.3);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.panel-advance-btn:hover {
-  background: rgba(255, 166, 87, 0.2);
-  border-color: rgba(255, 166, 87, 0.5);
-}
-
-.panel-advance-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.panel-advance-btn svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  flex-shrink: 0;
-}
-
 /* Panel toggle in header */
 #toggle-panel-btn.active {
   color: var(--accent-orange);

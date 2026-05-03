@@ -88,12 +88,6 @@
       <div class="panel-body" id="panel-body">
         <div class="panel-empty">No active workflow.<br>Start one with guide_workflow.</div>
       </div>
-      <div class="panel-footer" id="panel-footer" style="display:none">
-        <button class="panel-advance-btn" id="advance-stage-btn" disabled>
-          Advance Stage
-          <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
-        </button>
-      </div>
     </div>
   </div>
 
@@ -841,12 +835,10 @@
 
   function renderWorkflowPanel(data) {
     const body = document.getElementById('panel-body');
-    const footer = document.getElementById('panel-footer');
     const toggleBtn = document.getElementById('toggle-panel-btn');
 
     if (!data.active) {
       toggleBtn.disabled = true;
-      footer.style.display = 'none';
       body.innerHTML = '<div class="panel-empty">No active workflow.<br>Start one with guide_workflow.</div>';
       return;
     }
@@ -899,15 +891,6 @@
     }
 
     body.innerHTML = html;
-
-    // Advance button
-    if (data.can_advance) {
-      footer.style.display = '';
-      document.getElementById('advance-stage-btn').disabled = false;
-    } else {
-      footer.style.display = '';
-      document.getElementById('advance-stage-btn').disabled = true;
-    }
   }
 
   // Toggle panel visibility
@@ -928,26 +911,6 @@
 
   document.getElementById('toggle-panel-btn').addEventListener('click', togglePanel);
   document.getElementById('panel-close-btn').addEventListener('click', togglePanel);
-
-  // Advance stage via API
-  document.getElementById('advance-stage-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('advance-stage-btn');
-    btn.disabled = true;
-    btn.textContent = 'Advancing...';
-    try {
-      await fetch('/api/v1/workflow/advance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
-      });
-      // Refresh panel after advancing
-      loadWorkflowPanel();
-    } catch (e) {
-      console.warn('Advance failed:', e);
-      btn.disabled = false;
-      btn.innerHTML = 'Advance Stage <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>';
-    }
-  });
 
   // ── Initialize ───────────────────────────────────────────
   setStatus(false, 'Ready');
