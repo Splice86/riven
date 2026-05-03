@@ -432,6 +432,9 @@ class FileEditor:
                     f"Range expanded to lines {merged_start}-{int(merged_end_inf)}."
                 )
 
+            # Case 3: non-overlapping — nothing to merge, check next record
+            continue
+
         return None
 
     def _check_file_open(self, abs_path: str) -> str | None:
