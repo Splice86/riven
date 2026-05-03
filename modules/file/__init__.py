@@ -10,7 +10,7 @@ Provides file operations including:
 Implementation split into:
 - editor.py: FileEditor class with all operations
 - code_parser.py: AST-based code extraction
-- memory.py: Memory tracking helpers
+- db.py: SQLite persistence and formatting helpers
 """
 
 import os
@@ -53,12 +53,9 @@ from modules.file.git import (
     _git_warning,
 )
 
-from modules.file.memory import (
-    _count_tokens,
+from modules.file.db import (
+    get_open_files,
     format_file_history,
-    get_file_history,
-    hash_content,
-    track_file_change,
 )
 
 from modules.file.db import get_open_files
@@ -183,17 +180,6 @@ async def list_open_files() -> str:
     """List all open files for current session."""
     return _file_editor.list_open_files()
 
-
-async def get_file_history(path: str = None) -> str:
-    """Get file change history.
-
-    Args:
-        path: Optional path to filter by (default: None = all files)
-    """
-    session_id = get_session_id()
-    from modules.file.memory import get_file_history as _get_file_history_impl
-    memories = _get_file_history_impl(session_id, path)
-    return format_file_history(memories)
 
 
 def _file_help() -> str:
@@ -537,7 +523,7 @@ def get_module() -> Module:
                         "path": {"type": "string", "description": "Optional path to filter by"}
                     }
                 },
-                fn=get_file_history,
+                fn=_file_editor.get_file_history_formatted,
             ),
             CalledFn(
                 name="search_files",
@@ -608,10 +594,12 @@ __all__ = [
     "search_files",
     "file_info",
     "list_open_files",
-    "get_file_history",
     "file_context",
     "get_module",
     "_file_editor",
+    # DB helpers
+    "get_open_files",
+    "format_file_history",
     # Helpers
     "_atomic_write",
     "_file_type",
@@ -622,11 +610,6 @@ __all__ = [
     "_extract_code_definitions",
     "_find_definitions_by_name",
     "_extract_definition_source",
-    "format_file_history",
-    "get_file_history",
-    "get_open_files",
-    "hash_content",
-    "track_file_change",
     # Git helpers
     "_run_git",
     "_is_git_repo",

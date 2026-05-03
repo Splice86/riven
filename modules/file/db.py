@@ -296,3 +296,29 @@ def _row(row: sqlite3.Row) -> dict:
         "success": bool(row["success"]) if "success" in row.keys() else True,
         "created_at": row["created_at"],
     }
+
+
+def format_file_history(memories: list[dict]) -> str:
+    """Format file change records into human-readable string."""
+    if not memories:
+        return "No file changes recorded in this session."
+
+    lines = ["📝 File Change History:", ""]
+
+    for mem in memories:
+        path = mem.get("path", "unknown")
+        change_type = mem.get("change_type", "unknown")
+        success = mem.get("success", True)
+        diff = mem.get("diff", "")
+        filename = path.split("/")[-1] if "/" in path else path
+
+        status = "✅" if success else "❌"
+        lines.append(f"  {status} {filename} ({change_type})")
+        if diff:
+            diff_preview = diff[:100].replace("\n", " ")
+            lines.append(f"      {diff_preview}")
+
+    lines.append("")
+    lines.append(f"Total: {len(memories)} change(s)")
+
+    return "\n".join(lines)

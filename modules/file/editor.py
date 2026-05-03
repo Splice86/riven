@@ -48,12 +48,15 @@ from .db import (
     delete_all_open_files,
     get_open_file_by_keyword,
 )
-from .memory import (
+from .db import (
+    add_file_change,
+    get_file_changes,
+    get_open_file_by_keyword,
+    set_open_file,
+    delete_open_file,
+    delete_open_file_by_path,
+    delete_all_open_files,
     format_file_history,
-    get_file_history,
-    hash_content,
-    track_file_change,
-    _count_tokens,
 )
 from config import RIVEN_DIR, find_project_root
 
@@ -545,7 +548,6 @@ class FileEditor:
         if len(content_lines) > MAX_LINES:
             ranged_content = '\n'.join(content_lines[:MAX_LINES])
         
-        token_count = _count_tokens(ranged_content)
         
         file_type_str = _file_type(abs_path)
         line_info = ""
@@ -699,7 +701,7 @@ class FileEditor:
 
         diff = _generate_diff(abs_path, lines, new_content.splitlines(keepends=True))
         session_id = self._get_session_id()
-        track_file_change(session_id, abs_path, "replace_text", diff)
+        add_file_change(session_id, abs_path, "replace_text", diff)
 
         return f"✅ Replaced text at lines {start+1}-{end} ({score:.0%} match)\n{diff}", start + 1, end, new_content
 
@@ -783,7 +785,7 @@ class FileEditor:
         except Exception as e:
             return f"Error writing {abs_path}: {e}"
         diff = _generate_diff(abs_path, lines, new_content.splitlines(keepends=True))
-        track_file_change(session_id, abs_path, "replace_text", diff)
+        add_file_change(session_id, abs_path, "replace_text", diff)
 
         _events_publish(
             "file_changed",
@@ -894,7 +896,7 @@ class FileEditor:
                 _atomic_write(abs_path, final_content)
             except Exception as e:
                 return EditResult(False, abs_path, f"Failed to write: {e}")
-            track_file_change(session_id, abs_path, f"batch_edit({len(replacements)})", diff)
+            add_file_change(session_id, abs_path, f"batch_edit({len(replacements)})", diff)
 
         if changes:
             _events_publish("file_changed", path=_rel_path(abs_path), content=final_content,
@@ -969,7 +971,7 @@ class FileEditor:
                 _atomic_write(abs_path, modified)
             except Exception as e:
                 return EditResult(False, abs_path, f"Failed to write: {e}")
-            track_file_change(session_id, abs_path, "delete_snippet", diff)
+            add_file_change(session_id, abs_path, "delete_snippet", diff)
 
         _events_publish("file_changed", path=rel_path, content=modified,
                         who=session_id)
@@ -1306,7 +1308,7 @@ class FileEditor:
     def get_file_history_formatted(self) -> str:
         """Get formatted file change history."""
         session_id = self._get_session_id()
-        memories = get_file_history(session_id)
+        memories = get_file_changes(session_id, limit=50)
         return format_file_history(memories)
     
     async def pwd(self) -> str:
