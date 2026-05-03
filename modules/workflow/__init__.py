@@ -14,27 +14,130 @@ from . import storage
 
 def _workflow_help() -> str:
     """Static help text describing the workflow module."""
-    return """## Workflow Module
+    return """## Workflow Module — Use This for Every Task
 
-Workflows provide stage-gated task management with structured progress tracking.
-Useful for complex, multi-step tasks that need clear checkpoints.
+**IMPORTANT: You should use the workflow module for almost every coding task.**
 
-Available Workflows: `coding`, `quick`, `review`, `exploratory`
+Structured workflows prevent you from losing track of what you're doing mid-task,
+forgetting steps, skipping verification, or forgetting to commit. They turn a messy
+multi-step task into a clean, tracked, accountable process.
 
-Tools:
-- **list_workflows()** — List all available workflow templates
-- **show_workflow(workflow_id)** — Show the structure/stages of a specific workflow
-- **start_workflow(workflow_id)** — Begin a workflow (coding, quick, review, exploratory)
-- **workflow_status()** — Get current stage, step progress, and next actions
-- **advance_stage()** — Move to the next stage (only when all steps complete)
-- **mark_step_done(step_id, ?notes)** — Mark a step complete
-- **mark_step_in_progress(step_id)** — Mark a step as in-progress
-- **skip_step(step_id, reason)** — Skip a step with a reason
-- **guide_workflow(task)** — Analyze a task and generate a structured workflow guide
-- **build_workflow(guide)** — Build and start a custom workflow from a guide
-- **expand_implement_steps(steps)** — Add custom steps to the current stage (template workflows)
-- **add_step_note(step_id, note)** — Add a note to any step
-- **stop_workflow()** — Stop and reset the active workflow
+### Quick Decision Tree
+
+1. Does the user have a specific workflow in mind?
+   → `start_workflow(coding)` or `start_workflow(quick)` or another named workflow
+
+2. Is it a one-off task (new feature, bug fix, refactor, investigation)?
+   → `guide_workflow(\"<task description\")` → `build_workflow(guide)`
+
+3. Is it a code review or PR review?
+   → `start_workflow(review)` or `guide_workflow(\"review\")`
+
+4. Just exploring/understanding something?
+   → `guide_workflow(\"explore/investigate\")`
+
+### The Core Principle
+
+**Never just start coding blindly.** Run `guide_workflow` on any non-trivial task,
+read the guide, then `build_workflow` and use `workflow_status` + `mark_step_done`
+as you go. It's not overhead — it's the difference between \"I think I'm done\" and \"I
+know every step is complete.\"
+
+### Complete Function Reference
+
+**Discovery:**
+- `list_workflows()` — See all available named workflows with their stage structures
+- `show_workflow(workflow_id)` — Drill into one workflow to see its stages, steps, and gates
+
+**Starting:**
+- `start_workflow(workflow_id)` — Start a named template workflow directly (coding, quick, review, exploratory)
+- `guide_workflow(task)` — For any task, analyze it and generate a tailored workflow guide. Returns a human-readable guide — print it for the user, then pass the same guide to build_workflow(). Task types:
+  - Feature/feature request → feature guide (understand → plan → implement → verify → commit)
+  - Bug/bug fix/error/crash → bugfix guide (reproduce → fix → verify → commit)
+  - Refactor/clean up/optimize → refactor guide (assess → plan → refactor → verify → commit)
+  - Review/audit/check → review guide (identify → analyze → fix → verify)
+  - Explore/investigate/understand → exploratory guide (explore → iterate → conclude)
+- `build_workflow(guide)` — Take a guide dict (from guide_workflow) and start tracking it.
+  The guide must have: id, name, description, and stages [{name, description, gate_description?, steps: [{id, description}]}].
+
+**Tracking:**
+- `workflow_status()` — Full status snapshot: current stage, steps done/total, stage map, next hint
+- `mark_step_done(step_id, notes?)` — Mark a step complete. If it finishes the stage, says "Stage complete! Ready to advance."
+- `mark_step_in_progress(step_id)` — Mark a step as actively being worked on (→). Signals intent without claiming done.
+- `skip_step(step_id, reason)` — Skip a step with a reason. Useful when a step is N/A for the task.
+- `expand_implement_steps(steps)` — Template workflows only: replace the implement stage's steps with a custom list from your plan. Steps format: [{id, description}, ...]
+- `add_step_note(step_id, note)` — Attach a note to any step. Great for decisions, links, or findings.
+
+**Navigation:**
+- `advance_stage()` — Move to the next stage. Only succeeds when ALL steps (done or skipped) are complete. Tells you how many remain if blocked.
+
+**Cleanup:**
+- `stop_workflow()` — Abandon the current workflow. Clears all state.
+
+### Gates
+
+Some stages have a \"gate\" — a condition that must be met before advancing.
+Gates are described via `gate_description` and are shown when you enter the stage.
+Common gates:
+- \"Must be able to reliably reproduce\" (bugfix: reproduce stage)
+- \"Tests pass and no regressions\" (verify stage)
+- \"Plan must identify files and steps\" (plan stage)
+
+Gates are enforced by `advance_stage()` — you cannot skip them.
+
+### Example: Feature Request
+
+User: \"add OAuth login to the backend\"
+
+You respond:
+```
+guide_workflow("add OAuth login to the backend")
+  → prints a structured guide
+
+build_workflow(guide)
+  → workflow is now active and tracking
+
+workflow_status()
+  → Stage: UNDERSTAND (0/3 steps)
+
+mark_step_done("und_1", "Found auth.py and middleware/")
+mark_step_done("und_2", "Need to use oauthlib + flask-oauthlib")
+mark_step_done("und_3", "Will add /auth/oauth/ route")
+
+advance_stage()
+  → Advanced to: plan
+
+expand_implement_steps([
+  {"id": "plan_1", "description": "Add flask-oauthlib dependency"},
+  {"id": "plan_2", "description": "Create OAuth client in auth.py"},
+  {"id": "plan_3", "description": "Add /auth/oauth/ route"},
+  {"id": "plan_4", "description": "Add session management"},
+])
+
+# ...implement each step...
+
+advance_stage()
+  → Advanced to: implement
+
+mark_step_done("impl_1")
+mark_step_done("impl_2")
+mark_step_done("impl_3")
+mark_step_done("impl_4")
+
+advance_stage()
+  → Advanced to: verify
+
+# ...run tests, verify manually...
+
+advance_stage()
+  → Advanced to: commit
+
+mark_step_done("com_1")
+mark_step_done("com_2")
+
+advance_stage()
+  → Workflow complete!
+```
 """
 
 
